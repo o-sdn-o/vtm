@@ -123,20 +123,34 @@ ESC _ i n p u t ; f o c u s ; FocusState ESC \
 
 Field        | Description
 -------------|------------
-`FocusState` | Terminal window focus state.
+`FocusState` | Terminal window focus state. 1 - Focused, 0 - Unfocused.
 
 The reason for not using the existing focus tracking mode is the convenient enabling/disabling of this mode - all tracking modes in one sequence.
 
 ### Clipboard Paste
 
 ```
-ESC _ i n p u t ; p a s t e ; ClipFormat ; Data ESC \
+ESC _ i n p u t ; p a s t e ; ClipFormat ; SecLevel ; Data ESC \
 ```
 
 Field        | Description
 -------------|------------
 `ClipFormat` | Clipboard data format.
-`Data`       | Base64 encoded data.
+`SecLevel`   | Security level.
+`Data`       | Base64 encoded string.
+
+Data format | Description
+------------|------------
+`t e x t`   | Plain text.
+`r i c h`   | Rich text format.
+`h t m l`   | HTML format.
+`a n s i`   | ANSI/VT format.
+
+Security level bit | Description
+-------------------|------------
+`0x01`             | Exclude clipboard content from monitor processing.
+`0x02`             | Can include in clipboard history.
+`0x04`             | Can upload to cloud clipboard.
 
 The reason for not using bracketed paste mode is that there is no support for transferring binary data and data containing sequences of the bracketed paste mode itself.
 
