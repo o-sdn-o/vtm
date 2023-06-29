@@ -27,8 +27,8 @@ Anyone who want to:
 ## Initialization
 
 ```
-Set:   ESC _ i n p u t ; s e t u p ; Type1 ; ... ; TypeN ST
-Reset: ESC _ i n p u t ; s e t u p ST
+Set:   ESC _ i n p u t ; s e t u p ; Type1 ; ... ; TypeN ESC \
+Reset: ESC _ i n p u t ; s e t u p ESC \
 ```
 
 Type    | Events to track
@@ -48,33 +48,33 @@ Note: By enabling `vt-input-mode`, all current terminal modes are automatically 
 
 - Keyboard
   ```
-  ESC _ i n p u t ; k e y b d ; KeyId ; KeyDown ; CtrlState ; ScanCode ; C0 ; … ; Cn ST
+  ESC _ i n p u t ; k e y b d ; KeyId ; KeyDown ; CtrlState ; ScanCode ; C0 ; … ; Cn ESC \
   ```
 - Mouse
   ```
-  ESC _ i n p u t ; m o u s e ; MouseX ; MouseY ; ButtonState ; VtWheelDt ; HzWheelDt ; CtrlState ST
+  ESC _ i n p u t ; m o u s e ; MouseX ; MouseY ; ButtonState ; VtWheelDt ; HzWheelDt ; CtrlState ESC \
   ```
 - Focus
   ```
-  ESC _ i n p u t ; f o c u s ; FocusState ST
+  ESC _ i n p u t ; f o c u s ; FocusState ESC \
   ```
 - Clipboard paste
   ```
-  ESC _ i n p u t ; p a s t e ; ClipFormat ; Data ST
+  ESC _ i n p u t ; p a s t e ; ClipFormat ; Data ESC \
   ```
 - Window size
   ```
-  ESC _ i n p u t ; w i n s z ; WinSizeX ; WinSizeY ; CtrlState ; CaretX ; CaretY ; ScrollTop ; ScrollBottom ; ScrollLeft ; ScrollRight ; SelStartX ; SelStartY ; SelEndX ; SelEndY ; SelMode ST
+  ESC _ i n p u t ; w i n s z ; WinSizeX ; WinSizeY ; CtrlState ; CaretX ; CaretY ; ScrollTop ; ScrollBottom ; ScrollLeft ; ScrollRight ; SelStartX ; SelStartY ; SelEndX ; SelEndY ; SelMode ESC \
   ```
 - Application break
   ```
-  ESC _ i n p u t ; b r e a k ; Reason ST
+  ESC _ i n p u t ; b r e a k ; Reason ESC \
   ```
 
 ### Keyboard
 
 ```
-ESC _ i n p u t ; k e y b d ; KeyId ; KeyDown ; CtrlState ; ScanCode ; C0 ; … ; Cn ST
+ESC _ i n p u t ; k e y b d ; KeyId ; KeyDown ; CtrlState ; ScanCode ; C0 ; … ; Cn ESC \
 ```
 
 Field            | Description
@@ -90,7 +90,7 @@ This sequence fired after every key press and key release. Event data can contai
 ### Mouse
 
 ```
-ESC _ i n p u t ; m o u s e ; MouseX ; MouseY ; ButtonState ; VtWheelDt ; HzWheelDt ; CtrlState ST
+ESC _ i n p u t ; m o u s e ; MouseX ; MouseY ; ButtonState ; VtWheelDt ; HzWheelDt ; CtrlState ESC \
 ```
 
 Field          | Description
@@ -118,7 +118,7 @@ The reason for not using the existing mouse tracking modes is the lack of suppor
 ### Focus
 
 ```
-ESC _ i n p u t ; f o c u s ; FocusState ST
+ESC _ i n p u t ; f o c u s ; FocusState ESC \
 ```
 
 Field        | Description
@@ -130,7 +130,7 @@ The reason for not using the existing focus tracking mode is the convenient enab
 ### Clipboard Paste
 
 ```
-ESC _ i n p u t ; p a s t e ; ClipFormat ; Data ST
+ESC _ i n p u t ; p a s t e ; ClipFormat ; Data ESC \
 ```
 
 Field        | Description
@@ -143,7 +143,7 @@ The reason for not using bracketed paste mode is that there is no support for tr
 ### Window Size
 
 ```
-ESC _ i n p u t ; w i n s z ; WinSizeX ; WinSizeY ; CtrlState ; CaretX ; CaretY ; ScrollTop ; ScrollBottom ; ScrollLeft ; ScrollRight ; SelStartX ; SelStartY ; SelEndX ; SelEndY ; SelMode ST
+ESC _ i n p u t ; w i n s z ; WinSizeX ; WinSizeY ; CtrlState ; CaretX ; CaretY ; ScrollTop ; ScrollBottom ; ScrollLeft ; ScrollRight ; SelStartX ; SelStartY ; SelEndX ; SelEndY ; SelMode ESC \
 ```
 
 Field                                        | Description
@@ -169,7 +169,7 @@ Handshake steps:
 ```
 Terminal:    ESC _ i n p u t ; w i n s z ; WinSizeX ; WinSizeY _
 Application: ESC _ i n p u t ; w i n s z ; WinSizeX ; WinSizeY _
-Terminal:    ESC _ i n p u t ; w i n s z ; WinSizeX ; WinSizeY ; CtrlState ; CaretX ; CaretY ; ScrollTop ; ScrollBottom ; ScrollLeft ; ScrollRight ; SelStartX ; SelStartY ; SelEndX ; SelEndY ; SelMode ST
+Terminal:    ESC _ i n p u t ; w i n s z ; WinSizeX ; WinSizeY ; CtrlState ; CaretX ; CaretY ; ScrollTop ; ScrollBottom ; ScrollLeft ; ScrollRight ; SelStartX ; SelStartY ; SelEndX ; SelEndY ; SelMode ESC \
 ```
 
 Note that the terminal window resizing always reflows the scrollback, so the window size, cursor position, scrolling regions, and selection coordinates are subject to change during step 3. In case the aplication's output is anchored to the current cursor position or uses scrolling regions, the application should wait after step 2 for the updated values before continuing to output.
@@ -183,7 +183,7 @@ Note that selected text in the scrollback above the top index row will produce n
 ### Application Break
 
 ```
-ESC _ i n p u t ; b r e a k ; Reason ST
+ESC _ i n p u t ; b r e a k ; Reason ESC \
 ```
 
 Reason | Description
