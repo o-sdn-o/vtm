@@ -111,6 +111,8 @@ Bit | Active button
 3   | 4th
 4   | 5th
 
+Note: Mouse tracking will continue outside the terminal window as long as the mouse button pressed inside the window is active. In this case, coordinates with negative values are possible.
+
 The reason for not using the existing mouse tracking modes is the lack of support for negative coordinates and the limited set of buttons.
 
 ### Focus
