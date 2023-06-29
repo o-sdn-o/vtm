@@ -81,7 +81,7 @@ Field            | Description
 -----------------|------------
 `KeyId`          | Physical key ID.
 `KeyDown`        | Key state: 1 - Pressed, 0 - Released.
-`CtrlState`      | Keyboard modifiers state.
+`CtrlState`      | Keyboard modifiers.
 `ScanCode`       | Scan code.
 `C0`, …, `Cn`    | Codepoints of the generated string.
 
@@ -99,7 +99,7 @@ Field          | Description
 `ButtonState`  | Mouse button state.
 `VtWheelDt`    | Vertical wheel delta.
 `HzWheelDt`    | Horizontal wheel delta.
-`CtrlState`    | Keyboard modifiers state.
+`CtrlState`    | Keyboard modifiers.
 
 #### Mouse button state
 
@@ -167,7 +167,7 @@ Field                                        | Description
 `ScrollTop`/`Bottom`<br>`ScrollLeft`/`Right` | Scrolling region margins.
 `SelStartX`/`Y`<br>`SelEndX`/`Y`             | Coordinates of the text selection start/end (half-open interval).
 `SelMode`                                    | Text selection mode: 0 - line-based, 1 - rect-based.
-`CtrlState`                                  | Keyboard modifiers state.
+`CtrlState`                                  | Keyboard modifiers.
 
 This sequence is the first one received by the application right after `vt-input-mode` is activated (input redirection detection).
 
