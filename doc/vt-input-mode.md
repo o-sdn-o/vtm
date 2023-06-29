@@ -120,7 +120,7 @@ The state `CtrlState` of keyboard modifiers is the binary OR of all currently pr
 
 #### Scan codes
 
-`ScanCode`s are usually useful for applications that need to know which key is pressed, regardless of the current keyboard layout. For example, the WASD (Up, Left, Down, Right) keys for games, which ensure a consistent key formation across QWERTY, AZERTY or Dvorak keyboard layouts.
+Scan codes are usually useful for applications that need to know which key is pressed, regardless of the current keyboard layout. For example, the WASD (Up, Left, Down, Right) keys for games, which ensure a consistent key formation across QWERTY, AZERTY or Dvorak keyboard layouts.
 
 ```
 QWERTY: "W" = 11  "A" = 1E  "S" = 1F  "D" = 20
