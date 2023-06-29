@@ -137,7 +137,7 @@ Field        | Description
 -------------|------------
 `ClipFormat` | Clipboard data format.
 `SecLevel`   | Security level.
-`Data`       | Base64 encoded string.
+`Data`       | Base64 encoded data.
 
 Data format | Description
 ------------|------------
@@ -167,7 +167,7 @@ Field                                        | Description
 `ScrollTop`/`Bottom`<br>`ScrollLeft`/`Right` | Scrolling region margins.
 `SelStartX`/`Y`<br>`SelEndX`/`Y`             | Coordinates of the text selection start/end (half-open interval).
 `SelMode`                                    | Text selection mode: 0 - line-based, 1 - rect-based.
-`CtrlState`                                   | Keyboard modifiers state.
+`CtrlState`                                  | Keyboard modifiers state.
 
 This sequence is the first one received by the application right after `vt-input-mode` is activated (input redirection detection).
 
