@@ -222,24 +222,24 @@ Scan codes for the keys on a standard 104-key keyboard:
 
 The state `CtrlState` of keyboard modifiers is the binary OR of all currently pressed modifiers and enabled modes.
 
- Bit | Modifier Key                             | CtrlState
- ----|------------------------------------------|----------
- 0   | <kbd>Left Alt</kbd>                      | `0x0001`
- 1   | <kbd>Right Alt</kbd> or <kbd>AltGr</kbd> | `0x0002`
- 2   | <kbd>Left Ctrl</kbd>                     | `0x0004`
- 3   | <kbd>Right Ctrl</kbd>                    | `0x0008`
- 4   | <kbd>Left Shift</kbd>                    | `0x0010`
- 5   | <kbd>Right Shift</kbd>                   | `0x0020`
- 6   | <kbd>Left Win</kbd>                      | `0x0040`
- 7   | <kbd>Right Win</kbd>                     | `0x0080`
- 8   | <kbd>reserved</kbd>                      | `0x0100`
- 9   | <kbd>reserved</kbd>                      | `0x0200`
- 10  | <kbd>reserved</kbd>                      | `0x0400`
- 11  | <kbd>reserved</kbd>                      | `0x0800`
- 12  | <kbd>NumLock Mode</kbd>                  | `0x1000`
- 13  | <kbd>CapsLock Mode</kbd>                 | `0x2000`
- 14  | <kbd>ScrollLock Mode</kbd>               | `0x4000`
- 15  | <kbd>reserved Mode</kbd>                 | `0x8000`
+ Bit | Side   | Modifier Key                 | CtrlState
+ ----|--------|------------------------------|----------
+ 0   | Left   | <kbd>⎇ Alt</kbd><br><kbd>⌥ Option</kbd>                       | `0x0001`
+ 1   | Right  | <kbd>⎇ Alt</kbd><br><kbd>⌥ Option</kbd><br><kbd>⇮ AltGr</kbd> | `0x0002`
+ 2   | Left   | <kbd>⌃ Ctrl</kbd>            | `0x0004`
+ 3   | Right  | <kbd>⌃ Ctrl</kbd>            | `0x0008`
+ 4   | Left   | <kbd>⇧ Shift</kbd>           | `0x0010`
+ 5   | Right  | <kbd>⇧ Shift</kbd>           | `0x0020`
+ 6   | Left   | <kbd>⊞ Win</kbd><br><kbd>⌘ Command</kbd><br><kbd>◆ Meta</kbd><br><kbd>❖ Super</kbd> | `0x0040`
+ 7   | Right  | <kbd>⊞ Win</kbd><br><kbd>⌘ Command</kbd><br><kbd>◆ Meta</kbd><br><kbd>❖ Super</kbd> | `0x0080`
+ 8   |        | <kbd>reserved</kbd>          | `0x0100`
+ 9   |        | <kbd>reserved</kbd>          | `0x0200`
+ 10  |        | <kbd>reserved</kbd>          | `0x0400`
+ 11  |        | <kbd>reserved</kbd>          | `0x0800`
+ 12  |        | <kbd>⇭ NumLock Mode</kbd>    | `0x1000`
+ 13  |        | <kbd>⇪ CapsLock Mode</kbd>   | `0x2000`
+ 14  |        | <kbd>⇳ ScrollLock Mode</kbd> | `0x4000`
+ 15  |        | <kbd>reserved Mode</kbd>     | `0x8000`
 
 ### Physical Keys
 
