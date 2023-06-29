@@ -24,21 +24,9 @@ Anyone who want to:
 - Auto restore all terminal modes on exit.
 - Be independent of operating system and third party libraries.
 
-## Motivation
-
-...keybd press/release/left/right/scancode tracking...
-
-...window size tracking...
-
-...window resize synchronization...
-
-...preventing console window from closing...
-
-The reason for not using the existing mouse tracking modes is the lack of support for negative coordinates and the limited set of buttons.
-
-The reason for not using bracketed paste mode is that there is no support for transferring binary data and data containing sequences of the bracketed paste mode itself.
-
-The reason for not using the existing focus tracking mode is the convenient enabling/disabling of this mode - all tracking modes in one sequence.
+Note:
+- Existing mouse tracking modes lack support for negative coordinates and have a limited set of buttons.
+- Bracketed paste mode does not support the transfer of binary data and data containing sequences of bracketed paste mode itself.
 
 ## Conventions
 
