@@ -14,18 +14,17 @@ Anyone who want to:
 - Share an application on LAN (using inetd, netcat, etc).
 - Track every key press and key release.
 - Track position dependent keys such as WASD.
-- Simplify functional key parsing.
 - Distinguish between Left and Right physical keys.
-- Track the terminal window size.
 - Get consistent output regardless of terminal window resize.
 - Track mouse outside the terminal window (getting negative coordinates).
 - Track scrollback text selection.
 - Track application closing and system shutdown.
-- Auto restore all terminal modes on exit.
 - Be independent of operating system and third party libraries.
 
-Note:
-- Existing mouse tracking modes lack support for negative coordinates and have a limited set of buttons.
+Existing approaches have the following drawbacks:
+- There is no uniform way to receive keyboard events.
+- Window size tracking requires platform-specific calls with no way to synchronize the output.
+- Mouse tracking modes lack support for negative coordinates and have a limited set of buttons.
 - Bracketed paste mode does not support the transfer of binary data and data containing sequences of bracketed paste mode itself.
 
 ## Conventions
