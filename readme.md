@@ -26,12 +26,12 @@ Text-baased desktop inside your console.
 
 Build-time dependencies
  - 64-bit system host
- - `git`, `cmake`,  `C++20 compiler` ([`GCC 11`](https://gcc.gnu.org/projects/cxx-status.html), [`Clang 13`](https://clang.llvm.org/cxx_status.html), [`MSVC 2019`](https://visualstudio.microsoft.com/downloads/))
- - Minimum RAM requirements for compilation:
+ - `git`, `cmake`,  `C++20 compiler` ([GCC 11](https://gcc.gnu.org/projects/cxx-status.html), [Clang 13](https://clang.llvm.org/cxx_status.html), [MSVC](https://visualstudio.microsoft.com/downloads/))
+ - RAM requirements for compilation:
    - Compiling with GCC — 4GB of RAM
    - Compiling with Clang — 9GB of RAM
 
-Note: A 32-bit binary executable can only be built using cross-compilation on a 64-bit system, since building directly on a 32-bit environment is not possible due to compile time RAM requirements.
+Note: A 32-bit binary executable can only be built using cross-compilation on a 64-bit system.
 
 Use any terminal as a build environment
 ```
@@ -45,9 +45,9 @@ vtm
 ### Windows
 
 Build-time dependencies
- - [`git`](https://git-scm.com/download/win), [`cmake`](https://learn.microsoft.com/en-us/cpp/build/cmake-projects-in-visual-studio?view=msvc-170#installation), [`MSVC 2019 (Desktop Development with C++)`](https://visualstudio.microsoft.com/downloads/)
+ - [git](https://git-scm.com/download/win), [cmake](https://learn.microsoft.com/en-us/cpp/build/cmake-projects-in-visual-studio?view=msvc-170#installation), [MSVC (Desktop Development with C++)](https://visualstudio.microsoft.com/downloads/)
 
-Use `Developer Command Prompt` as a build environment
+Use Developer Command Prompt as a build environment
 
 ```
 git clone https://github.com/netxs-group/vtm.git
@@ -58,9 +58,9 @@ Release\vtm.exe
 
 # Binary Downloads
 
-![](.resources/status/macos.svg)   [![](.resources/status/arch_any.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_macos_any.tar.gz)  
-![](.resources/status/linux.svg)   [![](.resources/status/arch_x86_64.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_linux_x86_64.tar.gz) [![](.resources/status/arch_x86.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_linux_x86.tar.gz)   [![](.resources/status/arch_arm64.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_linux_arm64.tar.gz)   [![](.resources/status/arch_arm32.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_linux_arm32.tar.gz)  
-![](.resources/status/windows.svg) [![](.resources/status/arch_x86_64.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_windows_x86_64.zip)  [![](.resources/status/arch_x86.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_windows_x86.zip) [![](.resources/status/arch_arm64.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_windows_arm64.zip) [![](.resources/status/arch_arm32.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_windows_arm32.zip)  
+![macOS](.resources/status/macos.svg)     [![Universal](.resources/status/arch_any.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_macos_any.tar.gz)  
+![Linux](.resources/status/linux.svg)     [![Intel 64-bit](.resources/status/arch_x86_64.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_linux_x86_64.tar.gz) [![Intel 32-bit](.resources/status/arch_x86.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_linux_x86.tar.gz) [![ARM 64-bit](.resources/status/arch_arm64.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_linux_arm64.tar.gz) [![ARM 32-bit](.resources/status/arch_arm32.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_linux_arm32.tar.gz)  
+![Windows](.resources/status/windows.svg) [![Intel 64-bit](.resources/status/arch_x86_64.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_windows_x86_64.zip)  [![Intel 32-bit](.resources/status/arch_x86.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_windows_x86.zip)  [![ARM 64-bit](.resources/status/arch_arm64.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_windows_arm64.zip)  [![ARM 32-bit](.resources/status/arch_arm32.svg)](https://github.com/netxs-group/vtm/releases/latest/download/vtm_windows_arm32.zip)  
 
 ---
 
