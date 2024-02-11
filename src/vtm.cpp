@@ -8,14 +8,14 @@
 
 using namespace netxs;
 
-enum class type { client, server, daemon, logger, runapp, config };
-enum class code { noaccess, noserver, nodaemon, nologger, interfer, errormsg };
+enum class type { client, server, daemon, logmon, runapp, config };
+enum class code { noaccess, noserver, nodaemon, nosrvlog, interfer, errormsg };
 
 int main(int argc, char* argv[])
 {
-    auto defaults = 
-    #include "vtm.xml"
-
+    auto defaults = utf::replace_all(
+        #include "vtm.xml"
+        , "\n\n", "\n");
     auto whoami = type::client;
     auto params = text{};
     auto cfpath = text{};
@@ -23,7 +23,7 @@ int main(int argc, char* argv[])
     auto vtpipe = text{};
     auto script = text{};
     auto getopt = os::process::args{ argc, argv };
-    if (getopt.starts(app::ssh::id))
+    if (getopt.starts("ssh"))//app::ssh::id))
     {
         whoami = type::runapp;
         params = getopt.rest();
@@ -35,10 +35,10 @@ int main(int argc, char* argv[])
             auto ok = os::process::dispatch();
             return ok ? 0 : 1;
         }
-        else if (getopt.match("-r", "--runapp"))
+        else if (getopt.match("-r", "--", "--run", /*UD*/"--runapp"))
         {
             whoami = type::runapp;
-            params = getopt ? getopt.rest() : text{ app::term::id };
+            params = getopt.rest();
         }
         else if (getopt.match("-s", "--server"))
         {
@@ -50,9 +50,9 @@ int main(int argc, char* argv[])
         }
         else if (getopt.match("-m", "--monitor"))
         {
-            whoami = type::logger;
+            whoami = type::logmon;
         }
-        else if (getopt.match("-p", "--pipe"))
+        else if (getopt.match("-p", "--pin", /*UD*/"--pipe"))
         {
             vtpipe = getopt.next();
             if (vtpipe.empty())
@@ -98,8 +98,88 @@ int main(int argc, char* argv[])
         }
         else if (getopt.match("-?", "-h", "--help"))
         {
-            errmsg = ansi::nil().add("Print command-line options");
-            break;
+            os::dtvt::initialize();
+            netxs::logger::wipe();
+            auto syslog = os::tty::logger();
+            auto vtm = os::process::binary<true>();
+            auto pad = text(os::process::binary<true>().size(), ' ');
+            log("\nText-based Desktop Environment " + text{ app::shared::version } +
+                "\n"
+                "\n  Syntax:"
+                "\n"
+                "\n    " + vtm + " [ -c <file> ][ -q ][ -p <id> ][ -s | -d | -m ][ -x <cmds> ]"
+                "\n    " + vtm + " [ -c <file> ][ -q ][ -r [ <type> ]][ <args...> ]"
+                "\n    " + vtm + " [ -c <file> ]  -l"
+                "\n    " + vtm + " -i | -u | -v | -?"
+                "\n"
+                "\n    <script relay via piped redirection> | " + vtm + " [ -p <id> ]"
+                "\n"
+                "\n  Options:"
+                "\n"
+                "\n    By default, " + vtm + " runs Desktop Client, running an additional instance"
+                "\n    with Desktop Server in background if it is not found."
+                "\n"
+                "\n    -h, -?, --help       Print command-line options."
+                "\n    -v, --version        Print version."
+                "\n    -l, --listconfig     Print configuration."
+                "\n    -i, --install        Perform system-wide installation."
+                "\n    -u, --uninstall      Perform system-wide deinstallation."
+                "\n    -q, --quiet          Disable logging."
+                "\n    -x, --script <cmds>  Specifies script commands to be run by the desktop when ready."
+                "\n    -c, --config <file>  Specifies the settings file to load."
+                "\n    -p, --pin <id>       Specifies the desktop id it is pinned to."
+                "\n    -s, --server         Run Desktop Server."
+                "\n    -d, --daemon         Run Desktop Server in background."
+                "\n    -m, --monitor        Run Desktop Monitor."
+                "\n    -r, --, --run        Run desktop applet standalone."
+                "\n    <type>               Desktop applet type to run."
+                "\n    <args...>            Desktop applet arguments."
+                "\n"
+                "\n    Desktop applet             │ Type │ Arguments"
+                "\n    ───────────────────────────┼──────┼─────────────────────────────────────────────────"
+                "\n    Teletype Console (default) │ vtty │ CUI application with arguments to run."
+                "\n    Terminal Emulator          │ term │ CUI application with arguments to run."
+                "\n    DirectVT Gateway           │ dtvt │ DirectVT-aware application to run."
+                "\n    DirectVT Gateway with TTY  │ dtty │ CUI application to run, forwarding DirectVT I/O."
+                "\n"
+                "\n    The following commands have a short form:"
+                "\n"
+                "\n      'vtm -r vtty <cui_app...>' can be shortened to 'vtm <cui_app...>'."
+                "\n      'vtm -r dtty ssh <user@host dtvt_app...>' can be shortened to 'vtm ssh <user@host dtvt_app...>'."
+                "\n"
+                "\n  Settings loading order:"
+                "\n"
+                "\n    - Initialize hardcoded settings."
+                "\n    - In case of using the '--config <file>' option and the <file> can be loaded:"
+                "\n        - Merge settings from the <file>."
+                "\n      otherwise:"
+                "\n        - Merge with system-wide settings from " + os::path::expand(app::shared::sys_config).second + "."
+                "\n        - Merge with user-wise settings from "   + os::path::expand(app::shared::usr_config).second + "."
+                "\n    - Merge with DirectVT packet received from the hosting DirectVT Gateway."
+                "\n"
+                "\n  Script commands:"
+                "\n"
+                "\n    Syntax: \"<command>([<args...>])[; <command>([<args...>]); ... <command>([<args...>])]\""
+                "\n"
+                "\n    Command                       │ Description"
+                "\n    ──────────────────────────────┼───────────────────────────────────────────────────────"
+                "\n    vtm.run([<attrs...>])         │ Create and run a menu item constructed using"
+                "\n                                  │ a space-separated list of <attr>=<val>."
+                "\n                                  │ Run a temporary menu item constructed using"
+                "\n                                  │ default attributes if no arguments specified."
+                "\n    vtm.set(id=<id> [<attrs...>]) │ Create or override a menu item using a space-separated"
+                "\n                                  │ list of <attr>=<val>."
+                "\n    vtm.del([<id>])               │ Delete the taskbar menu item by <id>."
+                "\n                                  │ Delete all menu items if no <id> specified."
+                "\n    vtm.dtvt(<dtvt_app...>)       │ Create a temporary menu item and run DirectVT Gateway"
+                "\n                                  │ to host specified <dtvt_app...>."
+                "\n    vtm.selected(<id>)            │ Set selected menu item using specified <id>."
+                "\n    vtm.shutdown()                │ Terminate the running desktop session."
+                "\n"
+                "\n    The following characters in script commands will be de-escaped: \\e \\t \\r \\n \\a \\\" \\' \\\\"
+                "\n"
+                );
+            return 0;
         }
         else if (getopt.match("-v", "--version"))
         {
@@ -109,32 +189,24 @@ int main(int argc, char* argv[])
             log(app::shared::version);
             return 0;
         }
-        else if (getopt.match("--onlylog"))
-        {
-            os::dtvt::vtmode |= ui::console::onlylog;
-        }
-        else if (getopt.match("--script"))
+        else if (getopt.match("-x", "--script"))
         {
             script = xml::unescape(getopt.next());
         }
-        else if (getopt.match("--"))
-        {
-            break;
-        }
         else
         {
-            errmsg = utf::concat("Unknown option '", getopt.next(), "'");
-            break;
+            params = getopt.rest(); // params can't be empty at this point (see utf::quote()).
+            if (params.front() == '-') errmsg = utf::concat("Unknown option '", params, "'");
+            else                       whoami = type::runapp;
         }
     }
 
     os::dtvt::initialize();
     os::dtvt::checkpoint();
 
-    if (os::dtvt::vtmode & ui::console::redirio
-     && (whoami == type::runapp || whoami == type::client))
+    if (os::dtvt::vtmode & ui::console::redirio && (whoami == type::runapp || whoami == type::client))
     {
-        whoami = type::logger;
+        whoami = type::logmon;
     }
     auto denied = faux;
     auto syslog = os::tty::logger();
@@ -146,7 +218,7 @@ int main(int argc, char* argv[])
         os::fail(cause == code::noaccess ? "Access denied"
                : cause == code::interfer ? "Server already running"
                : cause == code::noserver ? "Failed to start server"
-               : cause == code::nologger ? "Failed to start logger"
+               : cause == code::nosrvlog ? "Failed to start session monitor"
                : cause == code::nodaemon ? "Failed to daemonize"
                : cause == code::errormsg ? errmsg.c_str()
                                          : "");
@@ -157,58 +229,13 @@ int main(int argc, char* argv[])
     log(getopt.show());
     if (errmsg.size())
     {
-        failed(code::errormsg);
-        log("\nText-based desktop environment " + text{ app::shared::version } +
-            "\n"
-            "\n  Syntax:"
-            "\n"
-            "\n    " + os::process::binary<true>() + " [ -c <file> ] [ -p <pipe> ] [ -i | -u ] [ -q ] [ -l | -m | -d | -s | -r [<app> [<args...>]] ]"
-            "\n"
-            "\n  Options:"
-            "\n"
-            "\n    No arguments         Connect to the desktop (autostart new if not running)."
-            "\n    -c, --config <file>  Load the specified settings file."
-            "\n    -p, --pipe <name>    Specify the desktop session connection point."
-            "\n    -q, --quiet          Disable logging."
-            "\n    -l, --listconfig     Print configuration."
-            "\n    -m, --monitor        Desktop session log."
-            "\n    -d, --daemon         Run desktop server in background."
-            "\n    -s, --server         Run desktop server in interactive mode."
-            "\n    -r, --runapp <args>  Run the specified application in standalone mode."
-            "\n    -i, --install        System-wide installation."
-            "\n    -u, --uninstall      System-wide deinstallation."
-            "\n    -v, --version        Print version."
-            "\n    -?, -h, --help       Print command-line options."
-            "\n    --onlylog            Disable interactive user input for desktop server."
-            "\n    --script <body>      Run the specified script on ready."
-            "\n"
-            "\n  Settings loading order:"
-            "\n"
-            "\n    - Initialize hardcoded settings"
-            "\n    - Merge with explicitly specified settings from --config <file>"
-            "\n    - If the --config option is not used or <file> cannot be loaded:"
-            "\n        - Merge with system-wide settings from " + os::path::expand(app::shared::sys_config).second +
-            "\n        - Merge with user-wise settings from "   + os::path::expand(app::shared::usr_config).second +
-            "\n        - Merge with DirectVT packet received from the parent process (dtvt-mode)"
-            "\n"
-            "\n  Built-in applications:"
-            "\n"
-            "\n    Term      Terminal emulator to run cli applications.       'vtm -r term [cli_application]'"
-            "\n    Headless  Terminal emulator without UI.                    'vtm -r headless [cli_application]'"
-            "\n    DTVT      DirectVT proxy to run dtvt-apps in text console. 'vtm -r dtvt [dtvt_application]'"
-            "\n    XLVT      DTVT with controlling terminal.                  'vtm -r xlvt ssh [user@host dtvt_application]'"
-            "\n"
-            "\n  The following commands have a short form:"
-            "\n    'vtm -r xlvt ssh [user@host dtvt_application]' can be shortened to 'vtm ssh [user@host dtvt_application]'."
-            "\n    'vtm -r term [cli_application]' can be shortened to 'vtm -r [cli_application]'."
-            "\n"
-            );
+        return failed(code::errormsg);
     }
     else if (whoami == type::config)
     {
         log(prompt::resultant_settings, "\n", app::shared::load::settings<true>(defaults, cfpath, os::dtvt::config));
     }
-    else if (whoami == type::logger)
+    else if (whoami == type::logmon)
     {
         log("%%Waiting for server...", prompt::main);
         auto result = std::atomic<int>{};
@@ -216,7 +243,7 @@ int main(int argc, char* argv[])
         {
             if (reply.size() && os::dtvt::vtmode & ui::console::redirio)
             {
-                os::io::send(utf::concat(reply, "\n"));
+                os::io::send(reply);
             }
             --result;
         }};
@@ -224,7 +251,7 @@ int main(int argc, char* argv[])
         auto active = flag{ faux };
         auto locker = std::mutex{};
         auto syncio = std::unique_lock{ locker };
-        auto buffer = utf::split<true, std::list<text>>(utf::dequote(script), '\n');
+        auto buffer = std::list{ script };
         auto stream = sptr<os::ipc::socket>{};
         auto readln = os::tty::readline([&](auto line)
         {
@@ -288,37 +315,39 @@ int main(int argc, char* argv[])
         auto config = app::shared::load::settings(defaults, cfpath, os::dtvt::config);
         auto shadow = params;
         auto apname = view{};
-        auto aclass = text{};
+        auto aptype = text{};
         utf::to_low(shadow);
-             if (shadow.starts_with(app::term::id))      { aclass = app::term::id;      apname = app::term::desc;      }
-        else if (shadow.starts_with(app::dtvt::id))      { aclass = app::dtvt::id;      apname = app::dtvt::desc;      }
-        else if (shadow.starts_with(app::xlvt::id))      { aclass = app::xlvt::id;      apname = app::xlvt::desc;      }
-        else if (shadow.starts_with(app::xlinkvt::id))   { aclass = app::xlinkvt::id;   apname = app::xlinkvt::desc;   }
-        else if (shadow.starts_with(app::directvt::id))  { aclass = app::directvt::id;  apname = app::directvt::desc;  }
-        else if (shadow.starts_with(app::headless::id))  { aclass = app::headless::id;  apname = app::headless::desc;  }
+             if (shadow.starts_with(app::vtty::id))      { aptype = app::teletype::id;  apname = app::teletype::name;  }
+        else if (shadow.starts_with(app::term::id))      { aptype = app::terminal::id;  apname = app::terminal::name;  }
+        else if (shadow.starts_with(app::dtvt::id))      { aptype = app::dtvt::id;      apname = app::dtvt::name;      }
+        else if (shadow.starts_with(app::dtty::id))      { aptype = app::dtty::id;      apname = app::dtty::name;      }
+        //todo undocumented
+        else if (shadow.starts_with(/*UD*/"xlvt"))       { aptype = app::dtty::id; apname = app::dtty::name; }
+        else if (shadow.starts_with(/*UD*/"headless"))   { aptype = app::teletype::id; apname = app::teletype::name; }
+        else if (shadow.starts_with(/*UD*/"noui"))       { aptype = app::teletype::id; apname = app::teletype::name; }
         #if defined(DEBUG)
-        else if (shadow.starts_with(app::calc::id))      { aclass = app::calc::id;      apname = app::calc::desc;      }
-        else if (shadow.starts_with(app::shop::id))      { aclass = app::shop::id;      apname = app::shop::desc;      }
-        else if (shadow.starts_with(app::test::id))      { aclass = app::test::id;      apname = app::test::desc;      }
-        else if (shadow.starts_with(app::textancy::id))  { aclass = app::textancy::id;  apname = app::textancy::desc;  }
-        else if (shadow.starts_with(app::settings::id))  { aclass = app::settings::id;  apname = app::settings::desc;  }
-        else if (shadow.starts_with(app::truecolor::id)) { aclass = app::truecolor::id; apname = app::truecolor::desc; }
+        else if (shadow.starts_with(app::calc::id))      { aptype = app::calc::id;      apname = app::calc::name;      }
+        else if (shadow.starts_with(app::shop::id))      { aptype = app::shop::id;      apname = app::shop::name;      }
+        else if (shadow.starts_with(app::test::id))      { aptype = app::test::id;      apname = app::test::name;      }
+        else if (shadow.starts_with(app::textancy::id))  { aptype = app::textancy::id;  apname = app::textancy::name;  }
+        else if (shadow.starts_with(app::settings::id))  { aptype = app::settings::id;  apname = app::settings::name;  }
+        else if (shadow.starts_with(app::truecolor::id)) { aptype = app::truecolor::id; apname = app::truecolor::name; }
         #endif
-        else if (shadow.starts_with(app::ssh::id))
+        else if (shadow.starts_with("ssh"))//app::ssh::id))
         {
             params = " "s + params;
-            aclass = app::xlvt::id;
-            apname = app::xlvt::desc;
+            aptype = app::dtty::id;
+            apname = app::dtty::name;
         }
         else
         {
             params = " "s + params;
-            aclass = app::term::id;
-            apname = app::term::desc;
+            aptype = app::vtty::id;
+            apname = app::vtty::name;
         }
         log("%appname% %version%", apname, app::shared::version);
         params = utf::remain(params, ' ');
-        app::shared::start(params, aclass, os::dtvt::vtmode, os::dtvt::win_sz, config);
+        app::shared::start(params, aptype, os::dtvt::vtmode, os::dtvt::win_sz, config);
     }
     else
     {
@@ -334,7 +363,6 @@ int main(int argc, char* argv[])
             auto [success, successor] = os::process::fork(prefix, config.utf8());
             if (successor)
             {
-                os::dtvt::vtmode |= ui::console::onlylog;
                 whoami = type::server;
                 script = {};
             }
@@ -368,7 +396,6 @@ int main(int argc, char* argv[])
             auto [success, successor] = os::process::fork(prefix, config.utf8(), script);
             if (successor)
             {
-                os::dtvt::vtmode |= ui::console::onlylog;
                 whoami = type::server;
             }
             else 
@@ -389,11 +416,11 @@ int main(int argc, char* argv[])
             if (denied) failed(code::noaccess);
             return      failed(code::noserver);
         }
-        auto logger = os::ipc::socket::open<os::role::server>(prefix_log, denied);
-        if (!logger)
+        auto srvlog = os::ipc::socket::open<os::role::server>(prefix_log, denied);
+        if (!srvlog)
         {
             if (denied) failed(code::noaccess);
-            return      failed(code::nologger);
+            return      failed(code::nosrvlog);
         }
 
         signal->bell(); // Signal we are started and ready for connections.
@@ -401,7 +428,7 @@ int main(int argc, char* argv[])
 
         using e2 = netxs::ui::e2;
         config.cd("/config/appearance/defaults/");
-        auto domain = ui::base::create<app::vtm::hall>(server, config, app::shell::id);
+        auto domain = ui::base::create<app::vtm::hall>(server, config);
         domain->plugin<scripting::host>();
         domain->autorun();
 
@@ -411,7 +438,7 @@ int main(int argc, char* argv[])
 
         auto stdlog = std::thread{ [&]
         {
-            while (auto monitor = logger->meet())
+            while (auto monitor = srvlog->meet())
             {
                 domain->run([&, monitor](auto /*task_id*/)
                 {
@@ -456,7 +483,7 @@ int main(int argc, char* argv[])
         auto settings = config.utf8();
         auto execline = [&](qiew line){ domain->SIGNAL(tier::release, scripting::events::invoke, onecmd, ({ .cmd = line })); };
         auto shutdown = [&]{ domain->SIGNAL(tier::general, e2::shutdown, msg, (utf::concat(prompt::main, "Shutdown on signal"))); };
-        utf::split<true>(utf::dequote(script), '\n', execline);
+        execline(script);
         auto readline = os::tty::readline(execline, shutdown);
         while (auto user = server->meet())
         {
@@ -479,7 +506,7 @@ int main(int argc, char* argv[])
             }
         }
         readline.stop();
-        logger->stop(); // Monitor listener endpoint must be closed first to prevent reconnections.
+        srvlog->stop(); // Monitor listener endpoint must be closed first to prevent reconnections.
         stdlog.join();
         domain->stop();
     }

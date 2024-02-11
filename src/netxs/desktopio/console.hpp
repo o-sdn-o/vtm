@@ -12,8 +12,7 @@ namespace netxs::ui
         static auto id = std::pair<ui32, time>{};
         static constexpr auto mouse   = 1 << 0;
         static constexpr auto nt      = 1 << 5; // Use win32 console api for input.
-        static constexpr auto onlylog = 1 << 6;
-        static constexpr auto redirio = 1 << 7;
+        static constexpr auto redirio = 1 << 6;
         //todo make 3-bit field for color mode
         static constexpr auto vtrgb   = 0;
         static constexpr auto nt16    = 1 << 1;
@@ -32,7 +31,6 @@ namespace netxs::ui
                 if (mode & vt16   ) result += "vt16 ";
                 if (mode & vt256  ) result += "vt256 ";
                 if (mode & direct ) result += "direct ";
-                if (mode & onlylog) result += "onlylog ";
                 if (result.size()) result.pop_back();
             }
             else result = "vtrgb";
@@ -773,13 +771,14 @@ namespace netxs::ui
 
                     if (k.cluster.length())
                     {
-                        auto t = k.cluster;
-                        for (auto i = 0; i < 0x20; i++)
+                        auto t = text{};
+                        for (byte c : k.cluster)
                         {
-                            utf::change(t, text{ (char)i }, "^" + utf::to_utf_from_code(i + 0x40));
+                                 if (c <  0x20) t += "^" + utf::to_utf_from_code(c + 0x40);
+                            else if (c == 0x7F) t += "\\x7F";
+                            else if (c == 0x20) t += "\\x20";
+                            else                t.push_back(c);
                         }
-                        utf::change(t, text{ (char)0x7f }, "\\x7F");
-                        utf::change(t, text{ (char)0x20 }, "\\x20");
                         status[prop::key_character].set(stress) = t;
                     }
                 };
@@ -1031,7 +1030,7 @@ namespace netxs::ui
               local{ true },
               yield{ faux }
         {
-            auto simple = config.take("/config/simple", faux); // DTVT proxy console case.
+            auto simple = config.take("/config/simple", faux); // DirectVT Gateway console case.
             config.set("/config/simple", faux);
 
             base::root(true);
