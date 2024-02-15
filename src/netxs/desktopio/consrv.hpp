@@ -227,9 +227,9 @@ struct impl : consrv
         auto done(para& line)
         {
             auto& new_data = line.content();
-            auto trimmed = utf::trim(new_data.utf8(), whitespaces);
-
-            if (trimmed.size() && (data.empty() || data.back() != new_data))
+            if (new_data.size().x  // Don't save space prefixed commands in history.
+            && !new_data.peek(dot_00).isspc()
+            && (data.empty() || data.back() != new_data))
             {
                 data.push_back(new_data);
                 seek = data.size() - 1;
@@ -636,6 +636,28 @@ struct impl : consrv
                 }
             }
             return crop;
+        }
+        void map_cd_shim(text& exe, text& line)
+        {
+            static constexpr auto cd_prefix = "cd "sv;
+            static constexpr auto cd_forced = "cd/d ";
+            auto shadow = qiew{ line };
+            utf::trim_front(shadow);
+            if (exe.starts_with("cmd")
+             && shadow.size() > cd_prefix.size()
+             && shadow.back() != '\t')
+            {
+                auto prefix = shadow.substr(0, 3).str();
+                utf::to_low(prefix);
+                if (prefix != cd_prefix) return;
+                auto crop = shadow.substr(cd_prefix.size());
+                auto path = crop;
+                utf::trim_front(path, " \t\r\n");
+                if (path && path.front() != '/')
+                {
+                    line = cd_forced + crop.str();
+                }
+            }
         }
         void map_aliases(text& exe, text& line)
         {
@@ -1332,6 +1354,7 @@ struct impl : consrv
                 if (EOFpos != text::npos) cooked.ustr.resize(EOFpos);
             }
             map_aliases(nameview, cooked.ustr);
+            map_cd_shim(nameview, cooked.ustr);
             cooked.save(utf16);
             if (stream.empty()) ondata.flush();
 

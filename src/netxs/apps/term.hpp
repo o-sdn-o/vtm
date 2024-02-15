@@ -23,6 +23,7 @@ namespace netxs::events::userland
                 EVENT_XS( align    , si32 ),
                 EVENT_XS( wrapln   , si32 ),
                 EVENT_XS( io_log   , bool ),
+                EVENT_XS( cwdsync  , bool ),
                 GROUP_XS( selection, si32 ),
                 GROUP_XS( colors   , rgba ),
 
@@ -42,6 +43,7 @@ namespace netxs::events::userland
                 EVENT_XS( align    , si32 ),
                 EVENT_XS( wrapln   , si32 ),
                 EVENT_XS( io_log   , bool ),
+                EVENT_XS( cwdsync  , bool ),
                 GROUP_XS( selection, si32 ),
                 GROUP_XS( colors   , rgba ),
 
@@ -85,6 +87,11 @@ namespace netxs::app::terminal
 {
     static constexpr auto id = "terminal";
     static constexpr auto name = "Terminal Console";
+
+    namespace attr
+    {
+        static constexpr auto cwdsync = "cwdsync";
+    }
 
     using events = netxs::events::userland::terminal;
 
@@ -174,7 +181,7 @@ namespace netxs::app::terminal
                     {
                         if (item.brand == menu::item::Option) _update_gear(boss, item, gear);
                     }
-                    gear.dismiss(true);
+                    gear.nodbl = true;
                 };
             }
         };
@@ -195,6 +202,7 @@ namespace netxs::app::terminal
             #define proc_list \
                 X(Noop                      ) /* */ \
                 X(TerminalQuit              ) /* */ \
+                X(TerminalCwdSync           ) /* */ \
                 X(TerminalFullscreen        ) /* */ \
                 X(TerminalRestart           ) /* */ \
                 X(TerminalSendKey           ) /* */ \
@@ -499,6 +507,18 @@ namespace netxs::app::terminal
                         boss.SIGNAL(tier::anycast, preview::io_log, item.views[item.taken].value);
                     });
                     boss.LISTEN(tier::anycast, release::io_log, state)
+                    {
+                        _update_to(boss, item, state);
+                    };
+                }
+                static void TerminalCwdSync(ui::item& boss, menu::item& item)
+                {
+                    item.reindex([](auto& utf8){ return xml::take<bool>(utf8).value(); });
+                    _submit(boss, item, [](auto& boss, auto& item, auto& /*gear*/)
+                    {
+                        boss.SIGNAL(tier::anycast, preview::cwdsync, item.views[item.taken].value);
+                    });
+                    boss.LISTEN(tier::anycast, release::cwdsync, state)
                     {
                         _update_to(boss, item, state);
                     };
@@ -810,7 +830,52 @@ namespace netxs::app::terminal
 
         if (appcfg.cmd.empty()) appcfg.cmd = os::env::shell();//todo revise + " -i";
         auto inst = scroll->attach(ui::term::ctor(config))
-                          ->plugin<pro::focus>(pro::focus::mode::focused);
+            ->plugin<pro::focus>(pro::focus::mode::focused)
+            ->invoke([&](auto& boss)
+            {
+                auto cwd_commands = config.take(attr::cwdsync, ""s);
+                auto cwd_sync_ptr = ptr::shared<bool>();
+                auto cwd_path_ptr = ptr::shared<os::fs::path>();
+                auto& cwd_sync = *cwd_sync_ptr;
+                auto& cwd_path = *cwd_path_ptr;
+                boss.LISTEN(tier::anycast, terminal::events::preview::cwdsync, state, -, (cwd_commands))
+                {
+                    if (cwd_sync != state)
+                    {
+                        cwd_sync = state;
+                        boss.SIGNAL(tier::anycast, terminal::events::release::cwdsync, state);
+                        if (cwd_sync)
+                        {
+                            auto cmd = cwd_commands;
+                            utf::replace_all(cmd, "$P", ".");
+                            boss.data_out(cmd); // Trigger command prompt reprint.
+                        }
+                    }
+                };
+                boss.LISTEN(tier::preview, e2::form::prop::cwd, path, -, (cwd_sync_ptr, cwd_path_ptr))
+                {
+                    if (cwd_sync)
+                    {
+                        boss.template expire<tier::preview>(true);
+                        cwd_path = path;
+                    }
+                };
+                if (cwd_commands.size())
+                {
+                    boss.LISTEN(tier::anycast, e2::form::prop::cwd, path, -, (cwd_commands))
+                    {
+                        if (cwd_sync && path.size() && cwd_path != path)
+                        {
+                            cwd_path = path;
+                            auto cwd = cwd_path.string();
+                            if (cwd.find(' ') != text::npos) cwd = '\"' + cwd + '\"';
+                            auto cmd = cwd_commands;
+                            utf::replace_all(cmd, "$P", cwd);
+                            boss.data_out(cmd);
+                        }
+                    };
+                }
+            });
         auto sb = layers->attach(ui::fork::ctor());
         auto vt = sb->attach(slot::_2, ui::grip<axis::Y>::ctor(scroll));
         static constexpr auto drawfx = [](auto& boss, auto& canvas, auto handle, auto /*object_len*/, auto handle_len, auto region_len, auto wide)

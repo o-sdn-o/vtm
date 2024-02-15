@@ -297,6 +297,13 @@ namespace netxs::app::tile
                         {
                             pro::focus::set(boss.This(), gear.id, pro::focus::solo::on, pro::focus::flip::off);
                         };
+                        boss.LISTEN(tier::release, e2::form::upon::vtree::attached, parent)
+                        {
+                            parent->LISTEN(tier::anycast, e2::form::prop::cwd, path, boss.relyon)
+                            {
+                                boss.SIGNAL(tier::anycast, e2::form::prop::cwd, path);
+                            };
+                        };
                     })
                     ->branch(slot::_1, ui::postfx<cell::shaders::contrast>::ctor()
                         ->upload(what.header)
@@ -383,7 +390,7 @@ namespace netxs::app::tile
                     boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                     {
                         boss.RISEUP(tier::request, e2::form::proceed::createby, gear);
-                        gear.dismiss(true);
+                        gear.nodbl = true;
                     };
                 }},
                 { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "│", .notes = " Split horizontally " }}},
@@ -392,7 +399,7 @@ namespace netxs::app::tile
                     boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                     {
                         boss.RISEUP(tier::release, app::tile::events::ui::split::hz, gear);
-                        gear.dismiss(true);
+                        gear.nodbl = true;
                     };
                 }},
                 { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "──", .notes = " Split vertically " }}},
@@ -401,7 +408,7 @@ namespace netxs::app::tile
                     boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                     {
                         boss.RISEUP(tier::release, app::tile::events::ui::split::vt, gear);
-                        gear.dismiss(true);
+                        gear.nodbl = true;
                     };
                 }},
                 { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "×", .notes = " Delete pane ", .hover = c1 }}},
@@ -411,7 +418,7 @@ namespace netxs::app::tile
                     {
                         auto backup = boss.This();
                         boss.RISEUP(tier::release, e2::form::proceed::quit::one, true);
-                        gear.dismiss(true);
+                        gear.nodbl = true;
                     };
                 }},
             });
@@ -822,6 +829,10 @@ namespace netxs::app::tile
                         }
                         oneoff.reset();
                     };
+                    boss.LISTEN(tier::preview, e2::form::prop::cwd, path)
+                    {
+                        boss.SIGNAL(tier::anycast, e2::form::prop::cwd, path);
+                    };
                 });
 
             config.cd("/config/tile/", "/config/defapp/");
@@ -834,16 +845,6 @@ namespace netxs::app::tile
                         // ┌────┐  ┌────┐  ┌─┬──┐  ┌────┐  ┌─┬──┐  ┌─┬──┐  ┌────┐  // ┌─┐  ┌─┬─┐  ┌─┬─┐  ┌─┬─┐  
                         // │Exec│  ├─┐  │  │ H  │  ├ V ─┤  │Swap│  │Fair│  │Shut│  // ├─┤  └─┴─┘  └<┴>┘  └>┴<┘  
                         // └────┘  └─┴──┘  └─┴──┘  └────┘  └─┴──┘  └─┴──┘  └────┘  // └─┘                       
-                        //{ menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = " ┐└ ", .notes = " Maximize/restore active pane " }}},
-                        //[](auto& boss, auto& item)
-                        //{
-                        //    boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
-                        //    {
-                        //        gear.countdown = 1;
-                        //        boss.SIGNAL(tier::anycast, app::tile::events::ui::toggle, gear);
-                        //        gear.dismiss(true);
-                        //    };
-                        //}},
                         { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = " + ", .notes = " Launch application instances in active empty slots.     \n"
                                                                                                                                    " The app to run can be set by RightClick on the taskbar. " }}},
                         [](auto& boss, auto& /*item*/)
@@ -851,7 +852,7 @@ namespace netxs::app::tile
                             boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                             {
                                 boss.SIGNAL(tier::anycast, app::tile::events::ui::create, gear);
-                                gear.dismiss(true);
+                                gear.nodbl = true;
                             };
                         }},
                         { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = ":::", .notes = " Select all panes " }}},
@@ -860,7 +861,7 @@ namespace netxs::app::tile
                             boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                             {
                                 boss.SIGNAL(tier::anycast, app::tile::events::ui::select, gear);
-                                gear.dismiss(true);
+                                gear.nodbl = true;
                             };
                         }},
                         { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = " │ ", .notes = " Split active panes horizontally " }}},
@@ -869,7 +870,7 @@ namespace netxs::app::tile
                             boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                             {
                                 boss.SIGNAL(tier::anycast, app::tile::events::ui::split::hz, gear);
-                                gear.dismiss(true);
+                                gear.nodbl = true;
                             };
                         }},
                         { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "──", .notes = " Split active panes vertically " }}},
@@ -878,7 +879,7 @@ namespace netxs::app::tile
                             boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                             {
                                 boss.SIGNAL(tier::anycast, app::tile::events::ui::split::vt, gear);
-                                gear.dismiss(true);
+                                gear.nodbl = true;
                             };
                         }},
                         { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "┌┘", .notes = " Change split orientation " }}},
@@ -887,7 +888,7 @@ namespace netxs::app::tile
                             boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                             {
                                 boss.SIGNAL(tier::anycast, app::tile::events::ui::rotate, gear);
-                                gear.dismiss(true);
+                                gear.nodbl = true;
                             };
                         }},
                         { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "<->", .notes = " Swap two or more panes " }}},
@@ -896,7 +897,7 @@ namespace netxs::app::tile
                             boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                             {
                                 boss.SIGNAL(tier::anycast, app::tile::events::ui::swap, gear);
-                                gear.dismiss(true);
+                                gear.nodbl = true;
                             };
                         }},
                         { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = ">|<", .notes = " Equalize split ratio " }}},
@@ -905,7 +906,7 @@ namespace netxs::app::tile
                             boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                             {
                                 boss.SIGNAL(tier::anycast, app::tile::events::ui::equalize, gear);
-                                gear.dismiss(true);
+                                gear.nodbl = true;
                             };
                         }},
                         { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "\"…\"", .notes = " Set tiling manager window title using clipboard data " }}},
@@ -914,6 +915,7 @@ namespace netxs::app::tile
                             boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                             {
                                 app::shared::set_title(boss, gear);
+                                gear.nodbl = true;
                             };
                         }},
                         { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "×", .notes = " Close active app ", .hover = c1 }}},
@@ -922,7 +924,7 @@ namespace netxs::app::tile
                             boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                             {
                                 boss.SIGNAL(tier::anycast, app::tile::events::ui::close, gear);
-                                gear.dismiss(true);
+                                gear.nodbl = true;
                             };
                         }},
                     });
