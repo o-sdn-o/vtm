@@ -1044,9 +1044,10 @@ namespace netxs::ui
         { }
         virtual ~para() = default;
 
-        para              (auto utf8) {              ansi::parse(utf8, this);               }
-        auto& operator  = (auto utf8) { wipe(brush); ansi::parse(utf8, this); return *this; }
-        auto& operator += (auto utf8) {              ansi::parse(utf8, this); return *this; }
+        para(id_t id, auto utf8)      { brush.link(id); ansi::parse(utf8, this);               }
+        para(auto utf8)               {                 ansi::parse(utf8, this);               }
+        auto& operator  = (auto utf8) { wipe(brush);    ansi::parse(utf8, this); return *this; }
+        auto& operator += (auto utf8) {                 ansi::parse(utf8, this); return *this; }
 
         operator writ const& () const { return locus; }
 
@@ -2065,6 +2066,7 @@ namespace netxs::ui
             auto blk(bool ) { }
         };
 
+        template<bool UseSGR = true>
         auto to_utf8() const
         {
             auto dest = utf8_dest_t{};
@@ -2081,7 +2083,7 @@ namespace netxs::ui
                 curln.lyric->each([&](cell c)
                 {
                     if (c.isspc()) c.txt(whitespace);
-                    if (c.wdt() != 3) c.scan(dest.base, dest);
+                    if (c.wdt() != 3) c.scan<svga::vtrgb, UseSGR>(dest.base, dest);
                 });
             }
             return dest.data;

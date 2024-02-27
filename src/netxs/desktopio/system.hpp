@@ -106,8 +106,10 @@ namespace netxs::os
     static constexpr auto unexpected = " returns unexpected result"sv;
     static auto autosync = true; // Auto sync viewport with cursor position (win7/8 console).
     static auto finalized = flag{ faux }; // Ready flag for clean exit.
-    void release()
+    static auto logbuffer = text{};
+    void release(bool clear_log = true)
     {
+        if (clear_log) os::logbuffer.clear(); // Graceful exit w/o errors.
         os::finalized.exchange(true);
         os::finalized.notify_all();
     }
@@ -3347,6 +3349,8 @@ namespace netxs::os
         static auto backup = tios{}; // dtvt: Saved console state to restore at exit.
         static auto win_sz = twod{}; // dtvt: Initial window size.
         static auto client = xipc{}; // dtvt: Internal IO link.
+        static auto uifont = text{}; // dtvt: Font name for gui console.
+        static auto fontsz = twod{}; // dtvt: Font size for gui console.
 
         auto consize()
         {
@@ -3377,7 +3381,7 @@ namespace netxs::os
             }
             return winsz;
         }
-        auto initialize()
+        auto initialize(bool trygui = faux)
         {
             #if defined(_WIN32)
                 os::stdin_fd  = fd_t{ ptr::test(::GetStdHandle(STD_INPUT_HANDLE ), os::invalid_fd) };
@@ -3489,6 +3493,40 @@ namespace netxs::os
             else
             {
                 dtvt::win_sz = dtvt::consize();
+                trygui = faux; //todo Not implemented.
+                if (trygui)
+                {
+                    #if defined(_WIN32)
+
+                        auto processpid = DWORD{};
+                        auto proc_count = ::GetConsoleProcessList(&processpid, 1);
+                        if (1 == proc_count) // Run gui console.
+                        {
+                            auto modeflags = DWORD{};
+                            ::GetConsoleDisplayMode(&modeflags);
+                            auto maximized = modeflags == CONSOLE_FULLSCREEN;
+                            auto font_info = CONSOLE_FONT_INFOEX{ sizeof(CONSOLE_FONT_INFOEX) };
+                            if (::GetCurrentConsoleFontEx(os::stdout_fd, maximized, &font_info))
+                            {
+                                dtvt::uifont = utf::to_utf(font_info.FaceName);
+                                dtvt::fontsz = { font_info.dwFontSize.X, font_info.dwFontSize.Y };
+                            }
+                            ::FreeConsole();
+                            os::stdin_fd  = os::invalid_fd;
+                            os::stdout_fd = os::invalid_fd;
+                            os::stderr_fd = os::invalid_fd;
+                            dtvt::vtmode |= ui::console::gui;
+                            if (dtvt::fontsz == dot_00) dtvt::fontsz = { 8, 16 };
+                            if (dtvt::uifont == text{}) dtvt::uifont = "Consolas";
+                            auto term = "Native GUI console";
+                            log("%%Terminal type: %term%, %font% %w%×%h%", prompt::os, term, dtvt::uifont, dtvt::fontsz.x, dtvt::fontsz.y);
+                            return;
+                        }
+                        // We are hosted by a shell.
+                    #else
+                    #endif
+                }
+
                 #if defined(_WIN32)
                 {
                     //todo revise
@@ -3563,7 +3601,8 @@ namespace netxs::os
         }
         auto checkpoint()
         {
-            if (dtvt::active || dtvt::vtmode & ui::console::redirio) return;
+            if (dtvt::active || dtvt::vtmode & ui::console::redirio
+                             || dtvt::vtmode & ui::console::gui) return;
             #if defined(_WIN32)
 
                 ok(::GetConsoleMode(os::stdout_fd, &dtvt::backup.omode), "::GetConsoleMode(os::stdout_fd)", os::unexpected);
@@ -3589,6 +3628,10 @@ namespace netxs::os
                 ok(::GetConsoleTitleW(wstr.data(), size), "::GetConsoleTitleW(vtmode)", os::unexpected);
                 dtvt::backup.title = wstr.data();
                 ok(::GetConsoleCursorInfo(os::stdout_fd, &dtvt::backup.caret), "::GetConsoleCursorInfo()", os::unexpected);
+                if (auto cmd_prompt = os::env::get("PROMPT"); cmd_prompt.empty() || cmd_prompt == "$P$G")
+                {
+                    os::env::set("PROMPT", "$e]133;A$e\\$e]9;9;$P$e\\$e[#{$e[97m$P$G$e[#}$e]133;B$e\\"); // Enable OSC 9;9 notifications for cmd.exe by default.
+                }
 
             #else
 
@@ -4395,18 +4438,38 @@ namespace netxs::os
                 void direct(s11n::xs::bitmap_vtrgb   /*lock*/, view& data) { io::send(data); }
                 void direct(s11n::xs::bitmap_dtvt      lock,   view& data) // Decode for nt16 mode.
                 {
-                    #if defined(_WIN32)
-                        auto update = [](auto size, auto head, auto iter, auto tail)
-                        {
-                            auto offset = (si32)(iter - head);
-                            auto coor = twod{ offset % size.x, offset / size.x };
-                            nt::console::print<svga::vt16>(size, coor, iter, tail);
-                        };
-                    #else
-                        auto update = noop{};
-                    #endif
                     auto& bitmap = lock.thing;
-                    bitmap.get(data, update);
+                    if (os::dtvt::vtmode & ui::console::gui)
+                    {
+                        //todo gui-bridge
+                        //auto update = [](auto size, auto head, auto iter, auto tail)
+                        //{
+                        //    #if defined(_WIN32)
+                        //        auto offset = (si32)(iter - head);
+                        //        auto coor = twod{ offset % size.x, offset / size.x };
+                        //        //todo update client area
+                        //    #else
+                        //        auto offset = (si32)(iter - head);
+                        //        auto coor = twod{ offset % size.x, offset / size.x };
+                        //        //todo update client area
+                        //    #endif
+                        //};
+                        //bitmap.get(data, update);
+                    }
+                    else
+                    {
+                        #if defined(_WIN32)
+                            auto update = [](auto size, auto head, auto iter, auto tail)
+                            {
+                                auto offset = (si32)(iter - head);
+                                auto coor = twod{ offset % size.x, offset / size.x };
+                                nt::console::print<svga::vt16>(size, coor, iter, tail);
+                            };
+                        #else
+                            auto update = noop{};
+                        #endif
+                        bitmap.get(data, update);
+                    }
                 }
                 void handle(s11n::xs::header_request /*lock*/)
                 {
@@ -4486,8 +4549,30 @@ namespace netxs::os
         auto logger()
         {
             static auto dtvt_output = [](auto& data){ io::send(os::stdout_fd, data); };
+            if (dtvt::vtmode & ui::console::gui)
+            {
+                auto errmsg = []
+                {
+                    if (os::logbuffer.size())
+                    {
+                        #if defined(_WIN32)
+                        auto utf8log = ui::page{ utf::trunc(os::logbuffer, 32) }.to_utf8<faux>();
+                        auto message = utf::to_utf(utf::trim_front(view{ utf8log }, '\n'));
+                        auto caption = utf::to_utf(os::process::binary());
+                        ::MessageBoxW(NULL, message.data(), caption.data(), MB_OK);
+                        #else
+                        #endif
+                    }
+                };
+                std::atexit(errmsg);
+            }
             return netxs::logger::attach([](qiew utf8)
             {
+                if (dtvt::vtmode & ui::console::gui) // Deferred logs in gui mode.
+                {
+                    os::logbuffer += utf8;
+                    utf8 = os::logbuffer;
+                }
                 if (utf8.empty()) return;
                 if (dtvt::active || dtvt::client)
                 {
@@ -4495,6 +4580,7 @@ namespace netxs::os
                     logs.set(os::process::id.first, os::process::id.second, utf8);
                     dtvt::active ? logs.sendfx(dtvt_output)   // Send logs to the dtvt-app hoster.
                                  : logs.sendby(dtvt::client); // Send logs to the dtvt-app.
+                    os::logbuffer.clear();
                 }
                 else if (os::stdout_fd != os::invalid_fd)
                 {
@@ -5641,11 +5727,19 @@ namespace netxs::os
             os::sleep(200ms); // Wait for delayed input events (e.g. mouse reports lagging over remote ssh).
             io::drop(); // Discard delayed events to avoid garbage in the shell's readline.
         }
+        auto native()
+        {
+            #if defined(_WIN32)
+                ::MessageBoxW(NULL, L"Welcome to GUI Console", L"caption.data()", MB_OK);
+            #else
+            #endif
+        }
         auto splice(xipc client)
         {
             os::dtvt::client = client;
-            os::dtvt::active ? tty::direct()
-                             : tty::legacy();
+            os::dtvt::active ? tty::direct() :
+            os::dtvt::vtmode & ui::console::gui ? tty::native()
+                                                : tty::legacy();
         }
 
         struct readline

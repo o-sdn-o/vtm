@@ -1106,7 +1106,7 @@ struct impl : consrv
             auto mode = testy<bool>{ !!(server.inpmod & nt::console::inmode::insert) };
             auto buff = text{};
             auto nums = utfx{};
-            auto line = para{ cooked.ustr };
+            auto line = para{ 'C', cooked.ustr }; // Set semantic marker OSC 133;C.
             auto done = faux;
             auto crlf = 0;
             auto burn = [&]
@@ -1215,7 +1215,11 @@ struct impl : consrv
                             default:
                             {
                                 n--;
-                                if (c < ' ')
+                                if (c == '\0' && v >= VK_OEM_1 && v <= VK_OEM_8) // Dead key detection.
+                                {
+                                    break;
+                                }
+                                else if (c < ' ')
                                 {
                                     auto cook = [&](auto c, auto crlf_value)
                                     {
@@ -4447,7 +4451,7 @@ struct impl : consrv
     }
     auto api_window_font_get                 ()
     {
-        log(prompt, "GetCurrentConsoleFont");
+        log(prompt, "GetCurrentConsoleFontEx");
         struct payload : drvpacket<payload>
         {
             struct
