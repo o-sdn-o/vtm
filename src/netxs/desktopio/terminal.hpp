@@ -137,12 +137,13 @@ namespace netxs::ui
             si32 def_lucent;
             si32 def_margin;
             si32 def_atexit;
+            cell def_curclr;
             rgba def_fcolor;
             rgba def_bcolor;
             rgba def_filler;
             si32 def_selmod;
+            si32 def_cursor;
             bool def_selalt;
-            bool def_cursor;
             bool def_cur_on;
             bool resetonkey;
             bool resetonout;
@@ -200,7 +201,8 @@ namespace netxs::ui
                 def_selmod =             config.take("selection/mode",       mime::textonly, xml::options::format);
                 def_selalt =             config.take("selection/rect",       faux);
                 def_cur_on =             config.take("cursor/show",          true);
-                def_cursor =             config.take("cursor/style",         true, xml::options::cursor);
+                def_cursor =             config.take("cursor/style",         text_cursor::underline, xml::options::cursor);
+                def_curclr =             config.take("cursor/color",         cell{});
                 def_period =             config.take("cursor/blink",         span{ skin::globals().blink_period });
                 def_io_log =             config.take("logs",                 faux);
                 allow_logs =             true; // Disallowed for dtty.
@@ -674,6 +676,18 @@ namespace netxs::ui
                     }
                     else notsupported(ansi::osc_set_bgcolor, data);
                 };
+                procs[ansi::osc_caret_color] = [&](view data) // ESC ] 12 ;rgb:00/00/00
+                {
+                    if (auto r = record(data))
+                    {
+                        owner.cursor.bgc(r.value());
+                    }
+                    else notsupported(ansi::osc_caret_color, data);
+                };
+                procs[ansi::osc_reset_crclr] = [&](view /*data*/)
+                {
+                    owner.cursor.color(owner.config.def_curclr);
+                };
                 procs[ansi::osc_reset_fgclr] = [&](view /*data*/)
                 {
                     owner.target->brush.sfg(0);
@@ -716,7 +730,7 @@ namespace netxs::ui
                 #define V []([[maybe_unused]] auto& q, [[maybe_unused]] auto& p)
                 vt.csier.table_space[csi_spc_src] = V{ p->na("CSI n SP A  Shift right n columns(s)."); }; // CSI n SP A  Shift right n columns(s).
                 vt.csier.table_space[csi_spc_slc] = V{ p->na("CSI n SP @  Shift left  n columns(s)."); }; // CSI n SP @  Shift left n columns(s).
-                vt.csier.table_space[csi_spc_cst] = V{ p->owner.cursor.style(q(1)); }; // CSI n SP q  Set cursor style (DECSCUSR).
+                vt.csier.table_space[csi_spc_cst] = V{ p->owner.cursor.decscusr(q(1)); }; // CSI n SP q  Set cursor style (DECSCUSR).
                 vt.csier.table_hash [csi_hsh_scp] = V{ p->na("CSI n # P  Push current palette colors onto stack. n default is 0."); }; // CSI n # P  Push current palette colors onto stack. n default is 0.
                 vt.csier.table_hash [csi_hsh_rcp] = V{ p->na("CSI n # Q  Pop  current palette colors onto stack. n default is 0."); }; // CSI n # Q  Pop  current palette colors onto stack. n default is 0.
                 vt.csier.table_hash [csi_hsh_psh] = V{ p->pushsgr(); }; // CSI # {  Push current SGR attributes onto stack.
@@ -763,8 +777,8 @@ namespace netxs::ui
                 vt.csier.table[csi_cuf] = V{ p->cuf(q(1)); }; // CSI n C  (CUF)  Negative values can wrap to the prev line.
                 vt.csier.table[csi_cub] = V{ p->cub(q(1)); }; // CSI n D  (CUB)  Negative values can wrap to the next line.
 
-                vt.csier.table[csi_cht]           = V{ p->tab( q(1)); }; // CSI n I  Caret forward  n tabs, default n=1.
-                vt.csier.table[csi_cbt]           = V{ p->tab(-q(1)); }; // CSI n Z  Caret backward n tabs, default n=1.
+                vt.csier.table[csi_cht]           = V{ p->tab( q(1)); }; // CSI n I  Cursor forward  n tabs, default n=1.
+                vt.csier.table[csi_cbt]           = V{ p->tab(-q(1)); }; // CSI n Z  Cursor backward n tabs, default n=1.
                 vt.csier.table[csi_tbc]           = V{ p->tbc( q(0)); }; // CSI n g  Clear tabstops, default n=0.
                 vt.csier.table[csi_rep]           = V{ p->rep( q(1)); }; // CSI n b  Repeat the preceding character n times, default n=1.
                 vt.csier.table_quest[csi_qst_rtb] = V{ p->rtb(     ); }; // CSI ? W  Reset tabstops to the 8 column defaults.
@@ -805,7 +819,7 @@ namespace netxs::ui
                 vt.csier.table[csi_ccc][ccc_sel] = V{ p->owner.selection_selmod(q(0)); }; // CCC_SEL: Set selection mode.
                 vt.csier.table[csi_ccc][ccc_pad] = V{ p->setpad(q(-1)); };                // CCC_PAD: Set left/right padding for scrollback.
 
-                vt.intro[ctrl::esc][esc_ind   ] = V{ p->lf(1); };          // ESC D  Index. Caret down and scroll if needed (IND).
+                vt.intro[ctrl::esc][esc_ind   ] = V{ p->lf(1); };          // ESC D  Index. Cursor down and scroll if needed (IND).
                 vt.intro[ctrl::esc][esc_ir    ] = V{ p->ri();  };          // ESC M  Reverse index (RI).
                 vt.intro[ctrl::esc][esc_sc    ] = V{ p->scp(); };          // ESC 7  (same as CSI s) Save cursor position.
                 vt.intro[ctrl::esc][esc_rc    ] = V{ p->rcp(); };          // ESC 8  (same as CSI u) Restore cursor position.
@@ -839,8 +853,10 @@ namespace netxs::ui
                 vt.oscer[osc_set_fgcolor] = V{ p->owner.ctrack.set(osc_set_fgcolor, q); };
                 vt.oscer[osc_set_bgcolor] = V{ p->owner.ctrack.set(osc_set_bgcolor, q); };
                 vt.oscer[osc_reset_color] = V{ p->owner.ctrack.set(osc_reset_color, q); };
+                vt.oscer[osc_caret_color] = V{ p->owner.ctrack.set(osc_caret_color, q); };
                 vt.oscer[osc_reset_fgclr] = V{ p->owner.ctrack.set(osc_reset_fgclr, q); };
                 vt.oscer[osc_reset_bgclr] = V{ p->owner.ctrack.set(osc_reset_bgclr, q); };
+                vt.oscer[osc_reset_crclr] = V{ p->owner.ctrack.set(osc_reset_crclr, q); };
                 vt.oscer[osc_clipboard  ] = V{ p->owner.forward_clipboard(q);           };
                 vt.oscer[osc_term_notify] = V{ p->owner.osc_notify(q);                  };
                 vt.oscer[osc_semantic_fx] = V{ p->owner.osc_marker(q);                  };
@@ -1832,19 +1848,19 @@ namespace netxs::ui
                 if (decom) coord.y = std::clamp(p.y + y_top, y_top, y_end);
                 else       coord.y = std::clamp(p.y, 0, panel.y - 1);
             }
-            // bufferbase: CSI y; x H/F  Caret position (1-based).
+            // bufferbase: CSI y; x H/F  Cursor position (1-based).
     virtual void cup(twod p)
             {
                 parser::flush_data();
                 _cup(p - dot_11);
             }
-            // bufferbase: Caret position (0-based).
+            // bufferbase: Cursor position (0-based).
     virtual void cup0(twod p)
             {
                 parser::flush_data();
                 _cup(p);
             }
-            // bufferbase: CSI y; x H/F  Caret position (1-based).
+            // bufferbase: CSI y; x H/F  Cursor position (1-based).
     virtual void cup(fifo& queue)
             {
                 auto y = queue(1);
@@ -1994,12 +2010,12 @@ namespace netxs::ui
                             auto east = rect{{ b, curtop.y     }, { panel.x - b, size_0.y }}.normalize();
                             west.coor.x += clip.coor.x; // Compensate scrollback's hz movement.
                             east.coor.x += clip.coor.x; //
-                            west = west.clip(clip);
-                            east = east.clip(clip);
+                            west.trimby(clip);
+                            east.trimby(clip);
                             dest.fill(west, fill);
                             dest.fill(east, fill);
                         }
-                        square = square.clip(clip);
+                        square.trimby(clip);
                         dest.fill(square, fill);
                     };
                     _shade_selection(mode, work);
@@ -2369,7 +2385,7 @@ namespace netxs::ui
             void do_viewport_copy(face& dest) override
             {
                 auto full = dest.full();
-                auto clip = dest.clip().clip(full);
+                auto clip = dest.clip().trim(full);
                 dest.clip(clip);
                 dest.plot(canvas, cell::shaders::full);
             }
@@ -2609,7 +2625,7 @@ namespace netxs::ui
                 using type = line::type;
                 using maps = std::map<si32, si32>[type::count];
 
-                si32 caret{}; // buff: Current line caret horizontal position.
+                si32 caret{}; // buff: Current line cursor horizontal position.
                 si32 vsize{}; // buff: Scrollback vertical size (height).
                 si32 width{}; // buff: Viewport width.
                 si32 basis{}; // buff: Working area basis. Vertical position of O(0, 0) in the scrollback.
@@ -4501,7 +4517,7 @@ namespace netxs::ui
                 auto find = selection_active() && match.length() && owner.selmod == mime::textonly;
                 auto fill = [&](auto& area, auto chr)
                 {
-                    if (auto r = clip.clip(area))
+                    if (auto r = clip.trim(area))
                     {
                         dest.fill(r, [&](auto& c){ c.txt(chr).fgc(tint::greenlt); });
                     }
@@ -5673,7 +5689,7 @@ namespace netxs::ui
             void do_viewport_copy(face& dest) override
             {
                 auto full = dest.full();
-                auto clip = dest.clip().clip(full);
+                auto clip = dest.clip().trim(full);
                 dest.clip(clip);
                 auto vpos = clip.coor.y - y_top;
                 if (vpos >= 0 && vpos < arena)
@@ -5852,7 +5868,7 @@ namespace netxs::ui
                     }
                     if (upmid.role == grip::idle) return;
                     auto scrolling_region = rect{{ -dot_mx.x / 2, batch.slide + y_top }, { dot_mx.x, arena }};
-                    clip = clip.clip(scrolling_region);
+                    clip.trimby(scrolling_region);
                     //todo Clang 15 don't get it
                     //auto [curtop, curend] = selection_take_grips();
                     auto tempvr = selection_take_grips();
@@ -5865,7 +5881,7 @@ namespace netxs::ui
                         auto area = grip_1 | grip_2;
                         auto proc = [&](auto fx)
                         {
-                            dest.fill(area.clip(clip), fx);
+                            dest.fill(area.trim(clip), fx);
                         };
                         _shade_selection(mode, proc);
                     }
@@ -5895,15 +5911,16 @@ namespace netxs::ui
                                         auto width = curtop.y == curend.y ? curend.x - curtop.x + 1
                                                                           : dot_mx.x;
                                         auto bound = rect{ curtop, { width, 1 }}.normalize();
-                                        block = block.clip(bound);
+                                        block.trimby(bound);
                                     }
                                     else if (coord.y == curend.y)
                                     {
                                         auto bound = rect{ curend, { -dot_mx.x, 1 }}.normalize();
                                         bound.size.x += 1;
-                                        block = block.clip(bound);
+                                        block.trimby(bound);
                                     }
-                                    dest.fill(block.clip(clip), fill);
+                                    block.trimby(clip);
+                                    dest.fill(block, fill);
                                 }
                             };
                             while (head != tail && coor.y < stop)
@@ -6464,7 +6481,7 @@ namespace netxs::ui
                 case 12:   // Enable cursor blinking.
                     cursor.blink_period();
                     break;
-                case 25:   // Caret on.
+                case 25:   // Cursor on.
                     cursor.show();
                     break;
                 case 9:    // Enable X10 mouse reporting protocol.
@@ -6575,7 +6592,7 @@ namespace netxs::ui
                 case 12:   // Disable cursor blinking.
                     cursor.blink_period(span::zero());
                     break;
-                case 25:   // Caret off.
+                case 25:   // Cursor off.
                     cursor.hide();
                     break;
                 case 9:    // Disable X10 mouse reporting protocol.
@@ -7389,7 +7406,7 @@ namespace netxs::ui
               normal{ *this },
               altbuf{ *this },
               target{&normal},
-              cursor{ *this, config.def_cur_on, config.def_cursor, dot_00, config.def_period },
+              cursor{ *this, config.def_cur_on, config.def_cursor, dot_00, config.def_period, config.def_curclr },
               worker{ *this },
               dynamo{ *this },
               mtrack{ *this },
@@ -7505,7 +7522,7 @@ namespace netxs::ui
                     bottom_oversize.coor.y += console.get_basis() + console.panel.y - console.scend;
                     bottom_oversize.size.y  = oversz.b;
                     bottom_oversize.size.x += oversz.l + oversz.r;
-                    bottom_oversize = bottom_oversize.clip(clip);
+                    bottom_oversize = bottom_oversize.trim(clip);
                     parent_canvas.fill(bottom_oversize, cell::shaders::xlight);
                 }
 
@@ -7592,10 +7609,13 @@ namespace netxs::ui
             }
             void handle(s11n::xs::jgc_list            lock)
             {
-                for (auto& jgc : lock.thing)
                 {
-                    cell::gc_set_data(jgc.token, jgc.cluster);
-                    if constexpr (debugmode) log(prompt::dtvt, "New gc token: ", jgc.token, " cluster size ", jgc.cluster.size(), " data: ", jgc.cluster);
+                    auto jumbos = cell::glyf::jumbos();
+                    for (auto& jgc : lock.thing)
+                    {
+                        jumbos.set(jgc.token, jgc.cluster);
+                        if constexpr (debugmode) log(prompt::dtvt, "New gc token: ", jgc.token, " cluster size ", jgc.cluster.size(), " data: ", jgc.cluster);
+                    }
                 }
                 netxs::events::enqueue(master.This(), [&](auto& /*boss*/) mutable
                 {

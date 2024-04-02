@@ -2330,7 +2330,7 @@ struct impl : consrv
         auto size = block.size();
         auto clip = block.clip();
         auto dest = rect{ coor, clip.size };
-        trim = dest.clip(trim);
+        trim.trimby(dest);
         clip -= dest - trim;
         coor = trim.coor;
         auto head = block.begin() + clip.coor.y * size.x;
@@ -4008,7 +4008,8 @@ struct impl : consrv
         {
             if constexpr (isreal())
             {
-                uiterm.cursor.style(packet.input.style > 50);
+                // Ignore legacy cursor style.
+                //uiterm.cursor.style(packet.input.style > 50 ? text_cursor::block : text_cursor::underline);
                 packet.input.alive ? uiterm.cursor.show()
                                    : uiterm.cursor.hide();
             }

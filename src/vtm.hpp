@@ -402,7 +402,7 @@ namespace netxs::app::vtm
             void convey(twod delta, rect boundary)//, bool notify = true)
             {
                 auto& r0 = boss.base::area();
-                if (delta && r0.clip(boundary))
+                if (delta && r0.trim(boundary))
                 {
                     auto r1 = r0;
                     auto r2 = boundary;
@@ -417,7 +417,7 @@ namespace netxs::app::vtm
                         auto new_coor = c.normalize().coor + r2.coor;
                         boss.moveto(new_coor);
                     }
-                    else if (!r2.clip(r0))
+                    else if (!r2.trim(r0))
                     {
                         boss.moveby(delta);
                     }
@@ -582,7 +582,7 @@ namespace netxs::app::vtm
                     {
                         auto slot = data.slot;
                         slot.coor -= canvas.coor();
-                        if (auto area = canvas.area().clip<true>(slot))
+                        if (auto area = canvas.area().trim<true>(slot))
                         {
                             if (data.ctrl)
                             {
@@ -866,7 +866,7 @@ namespace netxs::app::vtm
                     if (canvas.cmode != svga::vt16 && canvas.cmode != svga::nt16) // Don't show shadow in poor color environment.
                     {
                         //todo revise
-                        auto mark = skin::color(tone::shadow);
+                        auto mark = skin::color(tone::shadower);
                         mark.bga(mark.bga() / 2);
                         canvas.fill(gate_area, [&](cell& c){ c.fuse(mark); });
                     }
@@ -914,7 +914,7 @@ namespace netxs::app::vtm
         {
             SIGNAL(tier::request, e2::form::prop::viewport, viewport, ());
             window.SIGNAL(tier::request, e2::form::prop::window::fullsize, object_area, ());
-            auto outside = viewport.unite(object_area);
+            auto outside = viewport | object_area;
             if (outside != viewport)
             {
                 auto coor = outside.coor.equals(object_area.coor, object_area.coor, outside.coor + outside.size - viewport.size);
@@ -1133,13 +1133,13 @@ namespace netxs::app::vtm
                 if (item != head && item != tail)
                 {
                     auto area = (**item).object->region;
-                    if (!area.clip((**std::prev(item)).object->region))
+                    if (!area.trim((**std::prev(item)).object->region))
                     {
                         auto shadow = *item;
                         items.erase(std::next(item).base());
 
                         while (--item != head
-                            && !area.clip((**std::prev(item)).object->region))
+                            && !area.trim((**std::prev(item)).object->region))
                         { }
 
                         items.insert(item.base(), shadow);
@@ -1248,7 +1248,7 @@ namespace netxs::app::vtm
         {
             return ui::cake::ctor()
                 ->plugin<pro::d_n_d>()
-                ->plugin<pro::ghost>(2)
+                ->plugin<pro::ghost>()
                 ->plugin<pro::title>(what.header, what.footer)
                 ->plugin<pro::notes>(what.header, dent{ 2,2,1,1 })
                 ->plugin<pro::sizer>()
