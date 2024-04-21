@@ -522,7 +522,7 @@ namespace netxs::app::desk
                 auto cE = active_color;
                 //auto c3 = highlight_color;
                 auto user = ui::item::ctor(escx(" &").nil().add(" ").wrp(wrap::off)
-                        .fgx(data_src->id == my_id ? cE.fgc() : rgba{}).add(utf8).nil())
+                        .fgx(data_src->id == my_id ? cE.fgc() : argb{}).add(utf8).nil())
                     ->flexible()
                     ->setpad({ 1, 0, tall, tall }, { 0, 0, -tall, 0 })
                     ->active()
@@ -675,7 +675,8 @@ namespace netxs::app::desk
                     {
                         if (auto taskbar_grips = boss.base::parent())
                         {
-                            taskbar_grips->base::min_sz.x = std::max(1, taskbar_grips->base::min_sz.x + gear.delta.get().x);
+                            auto delta = twod{ gear.delta.get() };
+                            taskbar_grips->base::min_sz.x = std::max(1, taskbar_grips->base::min_sz.x + delta.x);
                             taskbar_grips->base::max_sz.x = taskbar_grips->base::min_sz.x;
                             active ? menu_max_size = taskbar_grips->base::min_sz.x
                                    : menu_min_size = taskbar_grips->base::min_sz.x;

@@ -14,7 +14,7 @@ namespace netxs::events::userland
             EVENT_XS( io_log, bool ),
             EVENT_XS( selmod, si32 ),
             EVENT_XS( selalt, si32 ),
-            GROUP_XS( colors, rgba ),
+            GROUP_XS( colors, argb ),
             GROUP_XS( layout, si32 ),
             GROUP_XS( search, input::hids ),
 
@@ -31,8 +31,8 @@ namespace netxs::events::userland
             };
             SUBSET_XS( colors )
             {
-                EVENT_XS( bg, rgba ),
-                EVENT_XS( fg, rgba ),
+                EVENT_XS( bg, argb ),
+                EVENT_XS( fg, argb ),
             };
         };
     };
@@ -126,7 +126,7 @@ namespace netxs::ui
         // term: Terminal configuration.
         struct termconfig
         {
-            using pals = std::remove_const_t<decltype(rgba::vt256)>;
+            using pals = std::remove_const_t<decltype(argb::vt256)>;
 
             si32 def_mxline;
             si32 def_length;
@@ -136,11 +136,12 @@ namespace netxs::ui
             si32 def_tablen;
             si32 def_lucent;
             si32 def_margin;
+            si32 def_border;
             si32 def_atexit;
             cell def_curclr;
-            rgba def_fcolor;
-            rgba def_bcolor;
-            rgba def_filler;
+            argb def_fcolor;
+            argb def_bcolor;
+            argb def_filler;
             si32 def_selmod;
             si32 def_cursor;
             bool def_selalt;
@@ -196,8 +197,9 @@ namespace netxs::ui
                 def_altscr = std::max(1, config.take("scrollback/altscroll/step", si32{ 1 }));
                 def_alt_on =             config.take("scrollback/altscroll/enabled", true);
                 def_tablen = std::max(1, config.take("tablen",               si32{ 8 }    ));
-                def_lucent = std::max(0, config.take("fields/lucent",        si32{ 0xC0 } ));
-                def_margin = std::max(0, config.take("fields/size",          si32{ 0 }    ));
+                def_lucent = std::max(0, config.take("layout/oversize/opacity", si32{ 0xC0 } ));
+                def_margin = std::max(0, config.take("layout/oversize",         si32{ 0 }    ));
+                def_border = std::max(0, config.take("layout/border",           si32{ 0 }    ));
                 def_selmod =             config.take("selection/mode",       mime::textonly, xml::options::format);
                 def_selalt =             config.take("selection/rect",       faux);
                 def_cur_on =             config.take("cursor/show",          true);
@@ -207,9 +209,9 @@ namespace netxs::ui
                 def_io_log =             config.take("logs",                 faux);
                 allow_logs =             true; // Disallowed for dtty.
                 def_atexit =             config.take("atexit",               commands::atexit::smart, atexit_options);
-                def_fcolor =             config.take("color/default/fgc",    rgba{ whitelt });
-                def_bcolor =             config.take("color/default/bgc",    rgba{ blackdk });
-                def_filler =             config.take("color/bground",        rgba{ 0x00'00'00'00 });
+                def_fcolor =             config.take("color/default/fgc",    argb{ whitelt });
+                def_bcolor =             config.take("color/default/bgc",    argb{ blackdk });
+                def_filler =             config.take("color/bground",        argb{ 0x00'ff'ff'ff });
 
                 def_safe_c =             config.take("color/selection/protected", cell{}.bgc(bluelt)    .fgc(whitelt));
                 def_ansi_c =             config.take("color/selection/ansi",      cell{}.bgc(bluelt)    .fgc(whitelt));
@@ -227,7 +229,7 @@ namespace netxs::ui
                 def_none_f =             config.take("color/selection/none/fx",      commands::fx::color,  fx_options);
                 def_find_f =             config.take("color/match/fx",               commands::fx::color,  fx_options);
 
-                std::copy(std::begin(rgba::vt256), std::end(rgba::vt256), std::begin(def_colors));
+                std::copy(std::begin(argb::vt256), std::end(argb::vt256), std::begin(def_colors));
                 for (auto i = 0; i < 16; i++)
                 {
                     def_colors[i] = config.take("color/color" + std::to_string(i), def_colors[i]);
@@ -350,7 +352,7 @@ namespace netxs::ui
                             }
                             else if (gear.m_sys.buttons) gear.capture(owner.id);
                             auto& console = *owner.target;
-                            auto c = gear.m_sys.coordxy;
+                            auto c = twod{ gear.m_sys.coordxy };
                             c.y -= console.get_basis();
                             auto moved = coord((state & mode::over) ? c
                                                                     : std::clamp(c, dot_00, console.panel - dot_11));
@@ -550,7 +552,7 @@ namespace netxs::ui
         // term: Terminal 16/256 color palette tracking functionality.
         struct c_tracking
         {
-            using pals = std::remove_const_t<decltype(rgba::vt256)>;
+            using pals = std::remove_const_t<decltype(argb::vt256)>;
             using func = std::unordered_map<text, std::function<void(view)>>;
 
             term& owner; // c_tracking: Terminal object reference.
@@ -581,9 +583,9 @@ namespace netxs::ui
                     auto b1 = to_byte(data[10]);
                     auto b2 = to_byte(data[11]);
                     data.remove_prefix(12); // rgb:00/00/00
-                    return { (r1 << 4 ) + (r2      )
+                    return { (b1 << 4 ) + (b2      )
                            + (g1 << 12) + (g2 << 8 )
-                           + (b1 << 20) + (b2 << 16)
+                           + (r1 << 20) + (r2 << 16)
                            + 0xFF000000 };
                 }
                 return {};
@@ -608,9 +610,9 @@ namespace netxs::ui
                         auto g2 = to_byte(data[4]);
                         auto b1 = to_byte(data[5]);
                         auto b2 = to_byte(data[6]);
-                        color[n] = (r1 << 4 ) + (r2      )
+                        color[n] = (b1 << 4 ) + (b2      )
                                  + (g1 << 12) + (g2 << 8 )
-                                 + (b1 << 20) + (b2 << 16)
+                                 + (r1 << 20) + (r2 << 16)
                                  + 0xFF000000;
                     }
                 };
@@ -623,7 +625,7 @@ namespace netxs::ui
                         if (auto v = utf::to_int(data))
                         {
                             auto n = std::clamp(v.value(), 0, 255);
-                            color[n] = rgba::vt256[n];
+                            color[n] = argb::vt256[n];
                             empty = faux;
                         }
                     }
@@ -1257,7 +1259,7 @@ namespace netxs::ui
                         params.push_back(delim);
                     }
                 }
-                log("%%CSI %params% %char%, (%val%) is not implemented", prompt::term, params, (unsigned char)i, i);
+                log("%%CSI %params% %char%, (%val%) is not implemented", prompt::term, params, (byte)i, i);
             }
             void not_implemented_ESC(si32 c, qiew& q)
             {
@@ -2933,7 +2935,9 @@ namespace netxs::ui
                 auto c = batch.caret;
                 #endif
                 sync_coord();
+                #if defined(DEBUG)
                 assert(c == batch.caret);
+                #endif
                 return true;
             }
             auto test_height()
@@ -6814,11 +6818,6 @@ namespace netxs::ui
             selmod = newmod;
             SIGNAL(tier::release, e2::form::draggable::left, selection_passed());
             SIGNAL(tier::release, ui::term::events::selmod, selmod);
-            if (mtrack && selmod == mime::disabled)
-            {
-                follow[axis::Y] = true; // Reset viewport.
-                ondata<true>();
-            }
         }
         // term: Set selection form.
         void selection_selalt(bool boxed)
@@ -6826,11 +6825,6 @@ namespace netxs::ui
             selalt = boxed;
             SIGNAL(tier::release, e2::form::draggable::left, selection_passed());
             SIGNAL(tier::release, ui::term::events::selalt, selalt);
-            if (mtrack && selmod == mime::disabled)
-            {
-                follow[axis::Y] = true; // Reset viewport.
-                ondata<true>();
-            }
         }
         // term: Set the next selection mode.
         void selection_selmod()
@@ -7170,7 +7164,7 @@ namespace netxs::ui
             brush.link(console.brush.link());
             console.brush.reset(brush);
         }
-        void set_bg_color(rgba bg)
+        void set_bg_color(argb bg)
         {
             auto& console = *target;
             auto brush = defclr;
@@ -7185,7 +7179,7 @@ namespace netxs::ui
             console.brush.reset(brush);
             SIGNAL(tier::release, ui::term::events::colors::bg, bg);
         }
-        void set_fg_color(rgba fg)
+        void set_fg_color(argb fg)
         {
             auto& console = *target;
             auto brush = defclr;
@@ -7221,14 +7215,10 @@ namespace netxs::ui
         void set_selmod(si32 mode)
         {
             selection_selmod(mode);
-            if (faux == target->selection_active()) follow[axis::Y] = true; // Reset viewport.
-            ondata<true>();
         }
         void set_selalt(bool boxed)
         {
             selection_selalt(boxed);
-            if (faux == target->selection_active()) follow[axis::Y] = true; // Reset viewport.
-            ondata<true>();
         }
         void set_log(bool state)
         {
@@ -7255,7 +7245,7 @@ namespace netxs::ui
                 case commands::ui::look_rev:  console.selection_search(feed::rev); break;
                 default: break;
             }
-            if (!console.selection_active())
+            if (cmd != commands::ui::togglesel && !console.selection_active())
             {
                 follow[axis::Y] = true; // Reset viewport.
             }
@@ -7282,7 +7272,7 @@ namespace netxs::ui
                 {
                     auto byemsg = escx{};
                     if (target != &normal) byemsg.locate({ 0, target->panel.y - 1 });
-                    byemsg.bgc(code ? rgba{ reddk } : rgba{}).fgc(whitelt).add(msg)
+                    byemsg.bgc(code ? argb{ reddk } : argb{}).fgc(whitelt).add(msg)
                           .add("\r\nProcess exited with code ", os::exitcode(code)).nil()
                           .add("\r\n\n");
                     return byemsg;
@@ -7535,8 +7525,8 @@ namespace netxs::ui
                 //    auto pads = console.getpad();
                 //    west.coor.x -= oversz.l - pads + dot_mx.x;
                 //    east.coor.x += oversz.r - pads + console.panel.x;
-                //    west = west.clip(clip);
-                //    east = east.clip(clip);
+                //    west = west.trim(clip);
+                //    east = east.trim(clip);
                 //    parent_canvas.fill(west, cell::shaders::xlucent(config.def_lucent));
                 //    parent_canvas.fill(east, cell::shaders::xlucent(config.def_lucent));
                 //}
@@ -8071,7 +8061,7 @@ namespace netxs::ui
                         auto tmpbuf = vrgb{};
                         splash.zoom(canvas, cell::shaders::onlyid(parent_id));
                         splash.output(errmsg);
-                        splash.blur(2, tmpbuf, [](cell& c){ c.fgc(rgba::transit(c.bgc(), c.fgc(), 127)); });
+                        splash.blur(2, tmpbuf, [](cell& c){ c.fgc(argb::transit(c.bgc(), c.fgc(), 127)); });
                         splash.output(errmsg);
                     }
                     else

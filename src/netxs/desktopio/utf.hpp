@@ -39,50 +39,45 @@ namespace netxs::utf
 {
     using ctrl = unidata::cntrls::type;
 
-    static constexpr auto replacement            = "\xEF\xBF\xBD"sv; // \uFFFD = 0xEF 0xBF 0xBD (efbfbd) "�"
-    static constexpr auto replacement_code       = utfx{ 0x0000FFFD };
-    static constexpr auto grapheme_cluster_limit = 31; // Limits the number of code points in a grapheme cluster to a number sufficient for any possible linguistic situation.
-    static constexpr auto cluster_field_size     = 5;
-    static constexpr auto wcwidth_field_size     = 2;
+    static constexpr auto replacement      = "\xEF\xBF\xBD"sv; // \uFFFD = 0xEF 0xBF 0xBD (efbfbd) "�"
+    static constexpr auto replacement_code = utfx{ 0x0000FFFD };
 
-    // utf: Grapheme cluster decoded from UTF-8.
+    // utf: Grapheme cluster properties.
     struct prop : public unidata::unidata
     {
         size_t utf8len;
-        bool   correct;
         size_t cpcount;
+        bool   correct;
         utfx   cdpoint;
 
-        constexpr
-        prop(size_t size)
-            : unidata(),
+        constexpr prop(size_t size)
+            : unidata{      },
               utf8len{ size },
-              correct{ faux },
               cpcount{ 0    },
+              correct{ faux },
               cdpoint{ 0    }
         { }
         prop(utfx code, size_t size)
-            : unidata( code ),
+            : unidata{ code },
               utf8len{ size },
-              correct{ true },
               cpcount{ 0    },
+              correct{ true },
               cdpoint{ code }
         { }
-        constexpr
-        prop(prop const& attr)
-            : unidata(attr),
-              utf8len{attr.utf8len},
-              correct{attr.correct},
-              cpcount{attr.cpcount},
-              cdpoint{attr.cdpoint}
+        constexpr prop(prop const& attr)
+            : unidata{ attr         },
+              utf8len{ attr.utf8len },
+              cpcount{ attr.cpcount },
+              correct{ attr.correct },
+              cdpoint{ attr.cdpoint }
         { }
         constexpr prop& operator = (prop const&) = default;
 
         auto combine(prop const& next)
         {
-            if (next.utf8len && cpcount < grapheme_cluster_limit && next.allied(brgroup))
+            if (next.utf8len && next.allied(brgroup))
             {
-                ucwidth  = std::max(ucwidth, next.ucwidth);
+                ucwidth = std::max(ucwidth, next.ucwidth);
                 utf8len += next.utf8len;
                 cpcount += 1;
                 return 0_sz;
@@ -96,7 +91,7 @@ namespace netxs::utf
 
     // utf: First byte based UTF-8 codepoint lengths.
     static constexpr auto utf8lengths = std::to_array(
-    {	//      0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
+    {   //      0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
         /* 0 */ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         /* 1 */ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         /* 2 */ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -157,7 +152,7 @@ namespace netxs::utf
 
             if (balance)
             {
-                auto data = reinterpret_cast<unsigned char const*>(textptr);
+                auto data = reinterpret_cast<byte const*>(textptr);
                 cp = *data;
                 switch (utf8lengths[cp])
                 {
@@ -231,7 +226,7 @@ namespace netxs::utf
                             }
                             else return prop(utf8len = 1);
                         }
-                        else return	prop(utf8len = balance);
+                        else return prop(utf8len = balance);
                         break;
                 }
             }
@@ -377,7 +372,7 @@ namespace netxs::utf
                     {
                         if (next.correct)
                         {
-                            auto crop = frag{ view(code.textptr,next.utf8len), next };
+                            auto crop = frag{ view(code.textptr, next.utf8len), next };
                             yield(crop);
                         }
                         else
@@ -433,7 +428,7 @@ namespace netxs::utf
         // qiew: Convert to text.
         auto str() const { return operator text(); }
         // qiew: Peek front char.
-        si32 front() const { return static_cast<unsigned char>(view::front()); }
+        si32 front() const { return (byte)view::front(); }
         // qiew: Pop front.
         auto pop_front()
         {
@@ -488,7 +483,7 @@ namespace netxs::utf
         }
     };
 
-    template<class A = si32, si32 Base = 10, class View, class = std::enable_if_t<std::is_base_of<view, View>::value == true, View>>
+    template<class A = si32, si32 Base = 10, class View, class = std::enable_if_t<std::is_base_of_v<view, View>>>
     std::optional<A> to_int(View& ascii)
     {
         auto num = A{};
@@ -527,7 +522,7 @@ namespace netxs::utf
         }
         return std::nullopt;
     }
-    template<class A = si32, si32 Base = 10, class T, class = std::enable_if_t<std::is_base_of<view, T>::value == faux, T>>
+    template<class A = si32, si32 Base = 10, class T, class = std::enable_if_t<std::is_base_of_v<view, T>>>
     auto to_int(T&& utf8)
     {
         auto shadow = view{ std::forward<T>(utf8) };
@@ -557,7 +552,7 @@ namespace netxs::utf
         auto tail = utf8 + size;
         while (utf8 < tail)
         {
-            auto c = static_cast<unsigned char>(*utf8++);
+            auto c = (byte)*utf8++;
 
                  if (c < 0x80) code = c;
             else if (c < 0xc0) code =(c & 0x3f) | code << 6;
@@ -571,12 +566,12 @@ namespace netxs::utf
                 {
                     if (code < 0xd800 || (code >= 0xe000 && code <= 0xffff) || sizeof(wchr) > 2) // single | wchr == char32_t
                     {
-                        wide_text.push_back(static_cast<wchr>(code));
+                        wide_text.push_back((wchr)code);
                     }
                     else if (code > 0xffff) // surrogate pair
                     {
-                        wide_text.append({ static_cast<wchr>(0xd800 + ((code - 0x10000) >> 10)),
-                                           static_cast<wchr>(0xdc00 + (code & 0x03ff)) });
+                        wide_text.append({ (wchr)(0xd800 + ((code - 0x10000) >> 10)),
+                                           (wchr)(0xdc00 + (code & 0x03ff)) });
                     }
                 }
             }
@@ -990,7 +985,7 @@ namespace netxs::utf
     {
         return std::bitset<L>(n).to_string();
     }
-    template<bool UpperCase = faux, class V, class = typename std::enable_if<std::is_integral<V>::value>::type>
+    template<bool UpperCase = faux, class V, class = std::enable_if_t<std::is_integral_v<V>>>
     auto to_hex(V number, size_t width = sizeof(V) * 2, char filler = '0')
     {
         static constexpr auto nums = UpperCase ? "0123456789ABCDEF"
@@ -1012,7 +1007,7 @@ namespace netxs::utf
         return to_hex(reinterpret_cast<std::uintptr_t>(ptr), std::forward<Args>(args)...);
     }
     // utf: to_hex without allocations (the crop should has a reserved capacity).
-    template<bool UpperCase = faux, class T, class = typename std::enable_if<std::is_integral<T>::value>::type>
+    template<bool UpperCase = faux, class T, class = std::enable_if_t<std::is_integral_v<T>>>
     auto to_hex(T number, text& crop, size_t width = sizeof(T) * 2)
     {
         static constexpr auto nums = UpperCase ? "0123456789ABCDEF"
@@ -1189,10 +1184,10 @@ namespace netxs::utf
             auto dest = data.begin();
             do
             {
-                auto crop = (unsigned char)*iter++ << 16;
+                auto crop = (byte)*iter++ << 16;
                 if (iter != tail) //todo move ifs to the outside of loop (optimization)
                 {
-                    crop += (unsigned char)*iter++ << 8;
+                    crop += (byte)*iter++ << 8;
                 }
                 else
                 {
@@ -1204,7 +1199,7 @@ namespace netxs::utf
                 }
                 if (iter != tail)
                 {
-                    crop += (unsigned char)*iter++;
+                    crop += (byte)*iter++;
                 }
                 else
                 {
