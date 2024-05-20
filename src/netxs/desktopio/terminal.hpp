@@ -13,6 +13,7 @@ namespace netxs::events::userland
         {
             EVENT_XS( io_log, bool ),
             EVENT_XS( selmod, si32 ),
+            EVENT_XS( onesht, si32 ),
             EVENT_XS( selalt, si32 ),
             GROUP_XS( colors, argb ),
             GROUP_XS( layout, si32 ),
@@ -1652,10 +1653,10 @@ namespace netxs::ui
                 if (n)
                 {
                     auto c = cell{ parser::brush };
-                    if (c.wdt() != 1)
-                    {
-                        c.wdt(2);
-                    }
+                    //if (c.wdt() != 1)
+                    //{
+                    //    c.wdt(2);
+                    //}
                     parser::assign(n, c);
                 }
             }
@@ -1678,9 +1679,10 @@ namespace netxs::ui
                 auto sym = utf::to_utf_from_code(c);
                 auto tmp = parser::brush;
                 parser::brush.txt(sym);
-                if (parser::brush.wdt() != 1)
+                auto [w, h, x, y] = parser::brush.whxy();
+                if (w != 1)
                 {
-                    area.size.x /= 2;
+                    area.size.x /= w;
                 }
                 if (area)
                 {
@@ -6387,6 +6389,7 @@ namespace netxs::ui
         flag       resume; // term: Restart scheduled.
         flag       forced; // term: Forced shutdown.
         si32       selmod; // term: Selection mode.
+        si32       onesht; // term: Selection one-shot mode.
         si32       altscr; // term: Alternate scroll mode.
         prot       kbmode; // term: Keyboard input mode.
         escx       w32key; // term: win32-input-mode forward buffer.
@@ -6819,6 +6822,13 @@ namespace netxs::ui
             SIGNAL(tier::release, e2::form::draggable::left, selection_passed());
             SIGNAL(tier::release, ui::term::events::selmod, selmod);
         }
+        // term: Run one-shot selection.
+        void selection_oneshot(si32 newmod)
+        {
+            onesht = newmod;
+            SIGNAL(tier::release, ui::term::events::onesht, onesht);
+            selection_selmod(newmod);
+        }
         // term: Set selection form.
         void selection_selalt(bool boxed)
         {
@@ -6909,7 +6919,9 @@ namespace netxs::ui
             {
                 _copy(gear, data);
             }
-            if (gear.meta(hids::anyCtrl) || selection_cancel()) // Keep selection if Ctrl is pressed.
+            auto ctrl_pressed = gear.meta(hids::anyCtrl);
+            if (onesht != mime::disabled && !ctrl_pressed) selection_oneshot(mime::disabled);
+            if (ctrl_pressed || selection_cancel()) // Keep selection if Ctrl is pressed.
             {
                 base::expire<tier::release>();
                 return true;
@@ -7039,7 +7051,7 @@ namespace netxs::ui
             // Check bounds and scroll if needed.
             auto& console = *target;
             auto boxed = selalt ^ !!gear.meta(hids::anyAlt);
-            auto coord = gear.coord;
+            auto coord = twod{ gear.coord };
             auto vport = rect{ -origin, console.panel };
             auto delta = dot_00;
             for (auto a : { axis::X, axis::Y })
@@ -7215,6 +7227,10 @@ namespace netxs::ui
         void set_selmod(si32 mode)
         {
             selection_selmod(mode);
+        }
+        void set_oneshot(si32 mode)
+        {
+            selection_oneshot(mode);
         }
         void set_selalt(bool boxed)
         {
@@ -7414,6 +7430,7 @@ namespace netxs::ui
               resume{  faux },
               forced{  faux },
               selmod{ config.def_selmod },
+              onesht{ mime::disabled },
               altscr{ config.def_altscr },
               kbmode{ prot::vt }
         {
@@ -7427,6 +7444,7 @@ namespace netxs::ui
             selection_submit();
             publish_property(ui::term::events::io_log,         [&](auto& v){ v = io_log; });
             publish_property(ui::term::events::selmod,         [&](auto& v){ v = selmod; });
+            publish_property(ui::term::events::onesht,         [&](auto& v){ v = onesht; });
             publish_property(ui::term::events::selalt,         [&](auto& v){ v = selalt; });
             publish_property(ui::term::events::colors::bg,     [&](auto& v){ v = target->brush.bgc(); });
             publish_property(ui::term::events::colors::fg,     [&](auto& v){ v = target->brush.fgc(); });
