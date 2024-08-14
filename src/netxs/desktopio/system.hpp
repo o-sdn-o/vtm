@@ -266,12 +266,12 @@ namespace netxs::os
                             NtOpenFile          = reinterpret_cast<NtOpenFile_ptr>(         ::GetProcAddress(ntdll_dll, "NtOpenFile"));
                             RtlGetVersion       = reinterpret_cast<RtlGetVersion_ptr>(      ::GetProcAddress(ntdll_dll, "RtlGetVersion"));
                             CsrClientCallServer = reinterpret_cast<CsrClientCallServer_ptr>(::GetProcAddress(ntdll_dll, "CsrClientCallServer"));
-                            //TranslateMessageEx  = reinterpret_cast<TranslateMessageEx_ptr>(::GetProcAddress(user32_dll, "TranslateMessageEx"));
+                            //TranslateMessageEx  = reinterpret_cast<TranslateMessageEx_ptr> (::GetProcAddress(user32_dll, "TranslateMessageEx"));
                             //ConsoleControl = reinterpret_cast<ConsoleControl_ptr>(::GetProcAddress(user32_dll, "ConsoleControl"));
                             if (!NtOpenFile)          os::fail("::GetProcAddress(NtOpenFile)");
                             if (!RtlGetVersion)       os::fail("::GetProcAddress(RtlGetVersion)");
                             if (!CsrClientCallServer) os::fail("::GetProcAddress(CsrClientCallServer)");
-                            //if (!TranslateMessageEx) os::fail("::GetProcAddress(TranslateMessageEx)");
+                            //if (!TranslateMessageEx)  os::fail("::GetProcAddress(TranslateMessageEx)");
                             //if (!ConsoleControl) os::fail("::GetProcAddress(ConsoleControl)");
                         }
                     }
@@ -297,7 +297,7 @@ namespace netxs::os
                     }
                    ~refs()
                     {
-                        if (ntdll_dll) ::FreeLibrary(ntdll_dll);
+                        if (ntdll_dll)  ::FreeLibrary(ntdll_dll);
                         //if (user32_dll) ::FreeLibrary(user32_dll);
                     }
 
@@ -2563,7 +2563,7 @@ namespace netxs::os
                 environ = backup;
             #endif
         }
-        auto fork([[maybe_unused]] text prefix, [[maybe_unused]] view config, [[maybe_unused]] view script = {})
+        auto fork([[maybe_unused]] bool system, [[maybe_unused]] text prefix, [[maybe_unused]] view config, [[maybe_unused]] view script = {})
         {
             auto msg = [](auto& success)
             {
@@ -2575,7 +2575,7 @@ namespace netxs::os
 
                 auto success = std::unique_ptr<std::remove_pointer<fd_t>::type, decltype(&::CloseHandle)>(nullptr, &::CloseHandle);
                 auto svclink = os::invalid_fd;
-                if (nt::session() && nt::connect(os::path::ipcname, FILE_WRITE_DATA, svclink)) // Try vtm service to run server in Session 0.
+                if (system && nt::session() && nt::connect(os::path::ipcname, FILE_WRITE_DATA, svclink)) // Try vtm service to run server in Session 0.
                 {
                     auto envars = os::env::add(); // Take current envvars block.
                     auto size = (ui32)(prefix.size() + config.size() + envars.size() + 2);
@@ -3655,7 +3655,8 @@ namespace netxs::os
                             os::stdin_fd  = os::invalid_fd;
                             os::stdout_fd = os::invalid_fd;
                             os::stderr_fd = os::invalid_fd;
-                            if constexpr (!debugmode) ::FreeConsole();
+                            //if constexpr (!debugmode) ::FreeConsole();
+                            ::FreeConsole();
                             auto term = "Native GUI console";
                             log("%%Terminal type: %term%", prompt::os, term);
                             return;
