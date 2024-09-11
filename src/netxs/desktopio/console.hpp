@@ -1,4 +1,4 @@
-// Copyright (c) NetXS Group.
+// Copyright (c) Dmitry Sapozhnikov
 // Licensed under the MIT license.
 
 #pragma once
@@ -1494,13 +1494,12 @@ namespace netxs::ui
     {
     public:
         using tick = datetime::quartz<bell, tier::general, e2::timer::tick.id>;
-        using list = std::vector<rect>;
 
         pro::focus focus; // host: Focus controller. Must be the first of all focus subscriptions.
 
         tick quartz; // host: Frame rate synchronizator.
         si32 maxfps; // host: Frame rate.
-        list debris; // host: Wrecked regions.
+        regs debris; // host: Wrecked regions.
         xmls config; // host: Resultant settings.
         subs tokens; // host: Subscription tokens.
         flag active; // host: Host is available for connections.

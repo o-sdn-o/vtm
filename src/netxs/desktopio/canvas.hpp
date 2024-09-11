@@ -1,4 +1,4 @@
-// Copyright (c) NetXS Group.
+// Copyright (c) Dmitry Sapozhnikov
 // Licensed under the MIT license.
 
 #pragma once
@@ -2352,6 +2352,7 @@ namespace netxs
         {
             T  bitmap{};
             bool sync{};
+            bool hide{};
             twod over{};
             twod step{};
 

@@ -1,4 +1,4 @@
-// Copyright (c) NetXS Group.
+// Copyright (c) Dmitry Sapozhnikov
 // Licensed under the MIT license.
 
 #pragma once
@@ -361,6 +361,8 @@ namespace netxs
             return rect{ netxs::letoh(r.coor), netxs::letoh(r.size) };
         }
     };
+
+    using regs = std::vector<rect>;
 
     static constexpr auto rect_00 = rect{ dot_00,dot_00 };
     static constexpr auto rect_11 = rect{ dot_00,dot_11 };

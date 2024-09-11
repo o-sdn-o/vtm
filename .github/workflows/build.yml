@@ -19,7 +19,7 @@ jobs:
           - os: windows-latest
             cpu: x86
         include:
-          - os: macos-13
+          - os: macos-latest
             platform: macos
             cpu: universal
             arch: any
