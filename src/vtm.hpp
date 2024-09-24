@@ -1558,7 +1558,7 @@ namespace netxs::app::vtm
             if (envar.empty()) conf_rec.appcfg.env = fallback.appcfg.env;
             else for (auto& v : envar)
             {
-                auto value = v->value();
+                auto value = v->take_value();
                 if (value.size())
                 {
                     conf_rec.appcfg.env += value + '\0';
@@ -2074,8 +2074,9 @@ namespace netxs::app::vtm
                     }
                     return std::pair{ func, args };
                 };
+                utf::unescape(script.cmd);
                 auto backup = std::move(script.cmd);
-                auto shadow = utf::dequote(backup);
+                auto shadow = qiew{ backup };
                 utf::trim_front(shadow, delims);
                 while (shadow)
                 {

@@ -40,6 +40,12 @@ namespace netxs::utf
 {
     using ctrl = unidata::cntrls;
 
+    static constexpr auto c0_view = { "·"sv, "☺"sv, "☻"sv, "♥"sv, "♦"sv, "♣"sv, "♠"sv, "•"sv, "◘"sv, "○"sv, "◙"sv, "♂"sv, "♀"sv, "♪"sv, "♫"sv, "☼"sv,
+                                      "►"sv, "◄"sv, "↕"sv, "‼"sv, "¶"sv, "§"sv, "▬"sv, "↨"sv, "↑"sv, "↓"sv, "→"sv, "←"sv, "∟"sv, "↔"sv, "▲"sv, "▼"sv,
+                                      "⌂"sv };
+    static constexpr auto c0_wchr = { L'\0',L'☺', L'☻', L'♥', L'♦', L'♣', L'♠', L'•', L'◘', L'○', L'◙', L'♂', L'♀', L'♪', L'♫', L'☼',
+                                      L'►', L'◄', L'↕', L'‼', L'¶', L'§', L'▬', L'↨', L'↑', L'↓', L'→', L'←', L'∟', L'↔', L'▲', L'▼',
+                                      L'⌂' };
     static constexpr auto replacement_code = utfx{ 0x0000'FFFD };
     static constexpr auto vs04_code = utfx{ 0x0000'FE03 };
     static constexpr auto vs05_code = utfx{ 0x0000'FE04 };
@@ -558,7 +564,7 @@ namespace netxs::utf
 
     struct qiew : public view
     {
-        using span = std::span<char>;
+        using view::view;
 
         struct hash
         {
@@ -569,14 +575,11 @@ namespace netxs::utf
             auto operator()(qiew lhs, qiew rhs) const { return lhs.compare(rhs) == 0; }
         };
 
-        constexpr qiew() noexcept : view() { }
         constexpr qiew(qiew const&) = default;
-        constexpr qiew(span const& v) noexcept : view(v.data(), v.size()) { }
+        constexpr qiew(char const& v) noexcept : view(&v, 1) { }
         constexpr qiew(view const& v) noexcept : view(v) { }
                   qiew(text const& v) noexcept : view(v) { }
-                  qiew(char const& v) noexcept : view(&v, 1) { }
-        template<class T, class ...Args>
-        constexpr qiew(T* ptr, Args&&... len) noexcept : view(ptr, std::forward<Args>(len)...) { }
+        constexpr qiew(char const* ptr, auto&&... len) noexcept : view(ptr, std::forward<decltype(len)>(len)...) { }
         constexpr qiew& operator = (qiew const&) noexcept = default;
 
                  operator text () const { return text{ data(), size() }; }
@@ -1522,29 +1525,49 @@ namespace netxs::utf
         debase<Split, Multiline>(utf8, buff);
         return buff;
     }
-    template<class Iter>
-    auto find_char(Iter head, Iter tail, view delims)
+    // utf: Replace all ctrls lower than 0x20 with cp437.
+    auto debase437(qiew utf8, text& buff)
+    {
+        if (auto code = cpit{ utf8 })
+        {
+            auto next = code.take();
+            do
+            {
+                auto c = next.cdpoint;
+                if (c < 0x20 || c == 0x7F) buff += *(utf::c0_view.begin() + std::min<size_t>(c, utf::c0_view.size() - 1));
+                else                       buff += view(code.textptr, code.utf8len);
+                code.step();
+                next = code.take();
+            }
+            while (code);
+        }
+    }
+    // utf: Return a string without control chars (replace all ctrls with cp437).
+    auto debase437(qiew utf8)
+    {
+        auto buff = text{};
+        debase437(utf8, buff);
+        return buff;
+    }
+    auto _find_char(auto head, auto tail, auto hittest)
     {
         while (head != tail)
         {
             auto c = *head;
-                 if (delims.find(c) != view::npos) break;
-            else if (c == '\\' && ++head == tail) break;
+            if (hittest(c) || (c == '\\' && ++head == tail)) break;
             ++head;
         }
         return head;
     }
     template<class Iter>
+    auto find_char(Iter head, Iter tail, view delims)
+    {
+        return _find_char(head, tail, [&](char c){ return delims.find(c) != view::npos; });
+    }
+    template<class Iter>
     auto find_char(Iter head, Iter tail, char delim)
     {
-        while (head != tail)
-        {
-            auto c = *head;
-                 if (delim == c) break;
-            else if (c == '\\' && ++head == tail) break;
-            ++head;
-        }
-        return head;
+        return _find_char(head, tail, [&](char c){ return c == delim; });
     }
     auto check_any(view shadow, view delims)
     {
@@ -1616,55 +1639,97 @@ namespace netxs::utf
         trim_back (utf8, delims);
         return utf8;
     }
-    auto get_quote(view& utf8, view delims, view skip = {}) // Without quotes.
+    void _escape(qiew line, auto& iter, auto... x)
     {
-        auto head = utf8.begin();
-        auto tail = utf8.end();
-        auto coor = find_char(head, tail, delims);
-        if (std::distance(coor, tail) < 2)
+        while (line)
         {
-            utf8 = view{};
-            return utf8;
+            auto c = line.pop_front();
+            if constexpr (sizeof...(x))
+            if (((c == x && (*iter++ = '\\', *iter++ = x, true))||...))
+            {
+                continue;
+            }
+            switch (c)
+            {
+                case '\033': *iter++ = '\\'; *iter++ = 'e' ; break;
+                case   '\\': *iter++ = '\\'; *iter++ = '\\'; break;
+                case   '\"': *iter++ = '\\'; *iter++ = '\"'; break;
+                case   '\'': *iter++ = '\\'; *iter++ = '\''; break;
+                case   '\n': *iter++ = '\\'; *iter++ = 'n' ; break;
+                case   '\r': *iter++ = '\\'; *iter++ = 'r' ; break;
+                case   '\t': *iter++ = '\\'; *iter++ = 't' ; break;
+                case   '\a': *iter++ = '\\'; *iter++ = 'a' ; break;
+                default:     *iter++ = c; break;
+            }
         }
-        ++coor;
-        auto stop = find_char(coor, tail, delims);
-        if (stop == tail)
-        {
-            utf8 = view{};
-            return utf8;
-        }
-        //todo Clang 13.0.0 doesn't get it
-        //auto crop = view{ coor, stop };
-        auto crop = view{ &(*coor), (size_t)(stop - coor) };
-
-        utf8.remove_prefix(crop.size() + 2);
-        if (!skip.empty()) trim_front(utf8, skip);
-        return crop;
     }
-    auto get_quote(view& utf8) // With quotes.
+    auto _unescape(auto head, auto tail, auto& iter)
     {
-        if (utf8.size() < 2)
+        while (head != tail)
         {
-            utf8 = view{};
-            return utf8;
+            auto c = *head++;
+            if (c == '\\' && head != tail)
+            {
+                c = *head++;
+                switch (c)
+                {
+                    case  'e': *iter++ = '\x1b'; break;
+                    case  't': *iter++ = '\t'  ; break;
+                    case  'r': *iter++ = '\r'  ; break;
+                    case  'n': *iter++ = '\n'  ; break;
+                    case  'a': *iter++ = '\a'  ; break;
+                    case '\\': *iter++ = '\\'  ; break;
+                    default:   *iter++ = c     ; break;
+                }
+            }
+            else *iter++ = c;
         }
-        auto quot = utf8.front();
-        auto head = utf8.begin();
-        auto tail = utf8.end();
-        auto stop = find_char(head + 1, tail, quot);
-        if (stop == tail)
-        {
-            utf8 = view{};
-            return utf8;
-        }
-        //todo Clang 13.0.0 doesn't get it
-        //auto crop = view{ head, stop + 1 };
-        auto crop = view{ &(*head), (size_t)(stop + 1 - head) };
-        utf8.remove_prefix(crop.size());
-        return crop;
+    }
+    auto escape(qiew line, text& dest, auto... x)
+    {
+        dest.resize(dest.size() + line.size() * 2);
+        auto iter = dest.begin();
+        _escape(line, iter, x...);
+        dest.resize(iter - dest.begin());
+    }
+    auto unescape(text& utf8) // Unescape in place.
+    {
+        auto iter = utf8.begin();
+        _unescape(utf8.begin(), utf8.end(), iter);
+        utf8.resize(iter - utf8.begin());
+    }
+    auto unescape(qiew utf8, text& dest) // Unescape to dest.
+    {
+        auto start = dest.size();
+        dest.resize(start + utf8.size());
+        auto iter = dest.begin() + start;
+        _unescape(utf8.begin(), utf8.end(), iter);
+        dest.resize(iter - dest.begin());
+    }
+    auto unescape(qiew utf8) // Return unescaped string.
+    {
+        auto dest = text{};
+        unescape(utf8, dest);
+        return dest;
+    }
+    void quote(view utf8, text& dest) // Escape, add quotes around and append the result to the dest.
+    {
+        auto start = dest.size();
+        dest.resize(start + utf8.size() * 2 + 2);
+        auto iter = dest.begin() + start;
+        *iter++ = '\"';
+        _escape(utf8, iter);
+        *iter++ = '\"';
+        dest.resize(iter - dest.begin());
+    }
+    auto quote(view utf8) // Escape, add quotes around and return the result.
+    {
+        auto dest = text{};
+        quote(utf8, dest);
+        return dest;
     }
     template<bool Lazy = true>
-    auto get_tail(view& utf8, view delims)
+    auto take_front(view& utf8, view delims)
     {
         auto head = utf8.begin();
         auto tail = utf8.end();
@@ -1673,87 +1738,72 @@ namespace netxs::utf
         {
             if constexpr (Lazy)
             {
-                utf8 = view{};
+                utf8 = {};
                 return qiew{ utf8 };
             }
             else
             {
                 auto crop = qiew{ utf8 };
-                utf8 = view{};
+                utf8 = {};
                 return crop;
             }
         }
-        //todo Clang 13.0.0 doesn't get it
-        //auto str = view{ head, stop };
-        auto str = qiew{ &(*head), (size_t)(stop - head) };
-        //utf8.remove_prefix(std::distance(head, stop));
+        auto str = qiew{ head, stop };
         utf8.remove_prefix(str.size());
         return str;
     }
+    auto take_quote(view& utf8, char delim) // Take the fragment inside the quotes (shadow).
+    {
+        if (utf8.size() < 2)
+        {
+            utf8 = {};
+            return utf8;
+        }
+        auto head = std::next(utf8.begin());
+        auto tail = utf8.end();
+        auto stop = find_char(head, tail, delim);
+        if (stop == tail)
+        {
+            utf8 = {};
+            return utf8;
+        }
+        auto crop = view{ head, stop };
+        utf8.remove_prefix(crop.size() + 2);
+        return crop;
+    }
+    auto get_quote(view& utf8) // Get the quoted fragment, including quotes.
+    {
+        if (utf8.size() < 2)
+        {
+            utf8 = {};
+            return utf8;
+        }
+        auto quot = utf8.front();
+        auto head = utf8.begin();
+        auto tail = utf8.end();
+        auto stop = find_char(head + 1, tail, quot);
+        if (stop == tail)
+        {
+            utf8 = {};
+            return utf8;
+        }
+        auto crop = view{ head, stop + 1 };
+        utf8.remove_prefix(crop.size());
+        return crop;
+    }
     auto get_word(view& utf8, view delims = " ")
     {
-        return get_tail<faux>(utf8, delims);
-    }
-    auto quote(text utf8)
-    {
-        if (utf8.empty() || utf8.find(' ') != text::npos)
-        {
-                 if (utf8.find('\"') == text::npos) utf8 = '\"' + utf8 + '\"';
-            else if (utf8.find('\'') == text::npos) utf8 = '\'' + utf8 + '\'';
-            else
-            {
-                auto crop = text{};
-                auto head = utf8.begin();
-                auto tail = utf8.end();
-                crop.reserve(utf8.capacity());
-                crop.push_back('\"');
-                while (head != tail)
-                {
-                    auto c = *head++;
-                    if (c == '\\')
-                    {
-                        crop.push_back(c);
-                        if (head != tail) crop.push_back(*head++);
-                    }
-                    else if (c == '\"')
-                    {
-                        crop.push_back('\\');
-                        crop.push_back(c);
-                    }
-                    else crop.push_back(c);
-                }
-                crop.push_back('\"');
-                std::swap(crop, utf8);
-            }
-        }
-        return utf8;
-    }
-    auto dequote(qiew utf8)
-    {
-        if (utf8.size() > 1) 
-        {
-            auto c = utf8.front();
-            if ((c == '\'' || c == '"') && utf8.back() == c)
-            {
-                utf8.remove_prefix(1);
-                utf8.remove_suffix(1);
-            }
-        }
-        return utf8;
+        return take_front<faux>(utf8, delims);
     }
     // utf: Split text line into quoted tokens.
-    auto tokenize(view utf8, auto&& args, bool dequote = faux)
+    auto tokenize(view utf8, auto&& args)
     {
         utf8 = utf::trim(utf8);
         while (utf8.size())
         {
             auto c = utf8.front();
-            if (c == '\'' || c == '"')
-            {
-                args.emplace_back(dequote ? utf::get_quote(utf8, view{ &c, 1 })
-                                          : utf::get_quote(utf8));
-            }
-            else args.emplace_back(utf::get_word(utf8));
+            if (c == '\'' || c == '"') args.emplace_back(utf::unescape(utf::take_quote(utf8, c)));
+            else                       args.emplace_back(utf::get_word(utf8));
             utf::trim_front(utf8);
         }
         return args;
