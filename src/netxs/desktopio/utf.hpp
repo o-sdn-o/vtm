@@ -1087,40 +1087,6 @@ namespace netxs::utf
         replace_all(crop, from, to);
         return crop;
     }
-    template<class TextOrView, class T>
-    auto remain(TextOrView&& utf8, T const& delimiter, bool lazy = true)
-    {
-        auto crop = std::remove_cvref_t<TextOrView>{};
-        auto what = view{ delimiter };
-        auto coor = lazy ? utf8.find(what) : utf8.rfind(what);
-        if (coor != text::npos)
-        {
-            crop = utf8.substr(coor + what.size(), text::npos);
-        }
-        return crop;
-    }
-    template<class TextOrView>
-    auto remain(TextOrView&& utf8, char delimiter = '.', bool lazy = true)
-    {
-        auto what = view{ &delimiter, 1 };
-        return remain(std::forward<TextOrView>(utf8), what, lazy);
-    }
-    // utf: Return left substring (from begin) until delimeter (lazy=faux: from left, true: from right).
-    template<class T>
-    T cutoff(T const& txt, T const& delimiter = T{ '.' }, bool lazy = true, size_t skip = 0)
-    {
-        return txt.substr(0, lazy ? txt.find(delimiter, skip) : txt.rfind(delimiter, txt.size() - skip));
-    }
-    template<class T>
-    T cutoff(T const& txt, char delimiter, bool lazy = true, size_t skip = 0)
-    {
-        return txt.substr(0, lazy ? txt.find(delimiter, skip) : txt.rfind(delimiter, txt.size() - skip));
-    }
-    template<class T>
-    T domain(T const& txt)
-    {
-        return remain(txt);
-    }
     template<class TextOrView, class F>
     auto adjust(TextOrView&& utf8, size_t required_width, F const& fill_char, bool right_aligned = faux)
     {
@@ -1542,13 +1508,14 @@ namespace netxs::utf
             while (code);
         }
     }
-    // utf: Return a string without control chars (replace all ctrls with cp437).
+    // utf: Return a string without control chars (replace all ctrls with "cp437" glyphs).
     auto debase437(qiew utf8)
     {
         auto buff = text{};
         debase437(utf8, buff);
         return buff;
     }
+    // utf: Find char position ignoring backslashed.
     auto _find_char(auto head, auto tail, auto hittest)
     {
         while (head != tail)
@@ -1559,11 +1526,13 @@ namespace netxs::utf
         }
         return head;
     }
+    // utf: Find char position ignoring backslashed.
     template<class Iter>
     auto find_char(Iter head, Iter tail, view delims)
     {
         return _find_char(head, tail, [&](char c){ return delims.find(c) != view::npos; });
     }
+    // utf: Find char position ignoring backslashed.
     template<class Iter>
     auto find_char(Iter head, Iter tail, char delim)
     {
@@ -1653,8 +1622,6 @@ namespace netxs::utf
             {
                 case '\033': *iter++ = '\\'; *iter++ = 'e' ; break;
                 case   '\\': *iter++ = '\\'; *iter++ = '\\'; break;
-                case   '\"': *iter++ = '\\'; *iter++ = '\"'; break;
-                case   '\'': *iter++ = '\\'; *iter++ = '\''; break;
                 case   '\n': *iter++ = '\\'; *iter++ = 'n' ; break;
                 case   '\r': *iter++ = '\\'; *iter++ = 'r' ; break;
                 case   '\t': *iter++ = '\\'; *iter++ = 't' ; break;
@@ -1712,21 +1679,15 @@ namespace netxs::utf
         unescape(utf8, dest);
         return dest;
     }
-    void quote(view utf8, text& dest) // Escape, add quotes around and append the result to the dest.
+    void quote(view utf8, text& dest, char quote) // Escape, add quotes around and append the result to the dest.
     {
         auto start = dest.size();
         dest.resize(start + utf8.size() * 2 + 2);
         auto iter = dest.begin() + start;
-        *iter++ = '\"';
-        _escape(utf8, iter);
-        *iter++ = '\"';
+        *iter++ = quote;
+        _escape(utf8, iter, quote);
+        *iter++ = quote;
         dest.resize(iter - dest.begin());
-    }
-    auto quote(view utf8) // Escape, add quotes around and return the result.
-    {
-        auto dest = text{};
-        quote(utf8, dest);
-        return dest;
     }
     template<bool Lazy = true>
     auto take_front(view& utf8, view delims)
