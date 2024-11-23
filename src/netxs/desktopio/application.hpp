@@ -24,7 +24,7 @@ namespace netxs::app
 
 namespace netxs::app::shared
 {
-    static const auto version = "v0.9.99.18";
+    static const auto version = "v0.9.99.50";
     static const auto repository = "https://github.com/directvt/vtm";
     static const auto usr_config = "~/.config/vtm/settings.xml"s;
     static const auto sys_config = "/etc/vtm/settings.xml"s;
@@ -33,7 +33,7 @@ namespace netxs::app::shared
     {
         boss.LISTEN(tier::anycast, e2::form::proceed::quit::any, fast)
         {
-            boss.RISEUP(tier::release, e2::form::proceed::quit::one, fast);
+            boss.base::riseup(tier::release, e2::form::proceed::quit::one, fast);
         };
     };
     const auto closing_by_gesture = [](auto& boss)
@@ -41,13 +41,13 @@ namespace netxs::app::shared
         boss.LISTEN(tier::release, hids::events::mouse::button::click::leftright, gear)
         {
             auto backup = boss.This();
-            boss.RISEUP(tier::release, e2::form::proceed::quit::one, true);
+            boss.base::riseup(tier::release, e2::form::proceed::quit::one, true);
             gear.dismiss();
         };
         boss.LISTEN(tier::release, hids::events::mouse::button::click::middle, gear)
         {
             auto backup = boss.This();
-            boss.RISEUP(tier::release, e2::form::proceed::quit::one, true);
+            boss.base::riseup(tier::release, e2::form::proceed::quit::one, true);
             gear.dismiss();
         };
     };
@@ -87,8 +87,8 @@ namespace netxs::app::shared
     };
     const auto set_title = [](base& boss, input::hids& gear, bias alignment = bias::left)
     {
-        boss.RISEUP(tier::request, e2::form::prop::ui::header, old_title, ());
-        gear.owner.RISEUP(tier::request, hids::events::clipbrd, gear);
+        auto old_title = boss.base::riseup(tier::request, e2::form::prop::ui::header);
+        gear.owner.base::riseup(tier::request, hids::events::clipboard, gear);
         auto& data = gear.board::cargo;
         if (data.utf8.empty())
         {
@@ -99,15 +99,70 @@ namespace netxs::app::shared
             if (utf::is_plain(data.utf8) || alignment != bias::left) // Reset aligning to the center if text is plain.
             {
                 auto align = ansi::jet(alignment);
-                boss.RISEUP(tier::preview, e2::form::prop::ui::header, align);
+                boss.base::riseup(tier::preview, e2::form::prop::ui::header, align);
             }
             // Copy clipboard data to title.
-            boss.RISEUP(tier::preview, e2::form::prop::ui::header, title, (data.utf8));
+            auto title = data.utf8;
+            boss.base::riseup(tier::preview, e2::form::prop::ui::header, title);
             if (old_title.size()) // Copy old title to clipboard.
             {
                 gear.set_clipboard(dot_00, old_title, mime::ansitext);
             }
         }
+    };
+    const auto base_kb_navigation = [](ui::pro::keybd& keybd, netxs::sptr<base> scroll, base& boss)
+    {
+        auto& scroll_inst = *scroll;
+        auto esc_pressed = ptr::shared(faux);
+        keybd.proc("WindowClose", [&, esc_pressed](hids& gear, txts&)
+        {
+            if (*esc_pressed)
+            {
+                boss.bell::signal(tier::anycast, e2::form::proceed::quit::one, true);
+                gear.set_handled(true);
+            }
+        });
+        keybd.proc("WindowClosePreview", [&, esc_pressed](hids& /*gear*/, txts&)
+        {
+            if (std::exchange(*esc_pressed, true) != *esc_pressed) boss.bell::signal(tier::anycast, e2::form::state::keybd::command::close, *esc_pressed);
+        });
+        keybd.proc("CancelWindowClose", [&, esc_pressed](hids& /*gear*/, txts&)
+        {
+            if (std::exchange(*esc_pressed, faux) != *esc_pressed) boss.bell::signal(tier::anycast, e2::form::state::keybd::command::close, *esc_pressed);
+        });
+        keybd.proc("ScrollPageUp"    , [&](hids& /*gear*/, txts&){ scroll_inst.base::riseup(tier::preview, e2::form::upon::scroll::bypage::y, { .vector = { 0, 1 }}); });
+        keybd.proc("ScrollPageDown"  , [&](hids& /*gear*/, txts&){ scroll_inst.base::riseup(tier::preview, e2::form::upon::scroll::bypage::y, { .vector = { 0,-1 }}); });
+        keybd.proc("ScrollLineUp"    , [&](hids& /*gear*/, txts&){ scroll_inst.base::riseup(tier::preview, e2::form::upon::scroll::bystep::y, { .vector = { 0, 3 }}); });
+        keybd.proc("ScrollLineDown"  , [&](hids& /*gear*/, txts&){ scroll_inst.base::riseup(tier::preview, e2::form::upon::scroll::bystep::y, { .vector = { 0,-3 }}); });
+        keybd.proc("ScrollCharLeft"  , [&](hids& /*gear*/, txts&){ scroll_inst.base::riseup(tier::preview, e2::form::upon::scroll::bystep::x, { .vector = { 3, 0 }}); });
+        keybd.proc("ScrollCharRight" , [&](hids& /*gear*/, txts&){ scroll_inst.base::riseup(tier::preview, e2::form::upon::scroll::bystep::x, { .vector = {-3, 0 }}); });
+        keybd.proc("ScrollTop"       , [&](hids& /*gear*/, txts&){ scroll_inst.base::riseup(tier::preview, e2::form::upon::scroll::to_top::y); });
+        keybd.proc("ScrollEnd"       , [&](hids& /*gear*/, txts&){ scroll_inst.base::riseup(tier::preview, e2::form::upon::scroll::to_end::y); });
+        //todo use sptr for gear when enqueueing (dangling reference)
+        keybd.proc("ToggleMaximize"  , [&](hids& gear, txts&){ scroll_inst.bell::enqueue(boss.This(), [&](auto& /*boss*/){ scroll_inst.base::riseup(tier::preview, e2::form::size::enlarge::maximize,   gear); }); }); // Refocus-related operations require execution outside of keyboard eves.
+        keybd.proc("ToggleFullscreen", [&](hids& gear, txts&){ scroll_inst.bell::enqueue(boss.This(), [&](auto& /*boss*/){ scroll_inst.base::riseup(tier::preview, e2::form::size::enlarge::fullscreen, gear); }); });
+        auto binding = [&](qiew scheme)
+        {
+            keybd.template bind<tier::preview>( "Esc", scheme, "DropAutoRepeat"    );
+            keybd.template bind<tier::release>( "Esc", scheme, "WindowClosePreview");
+            keybd.template bind<tier::preview>("-Esc", scheme, "WindowClose"       );
+            keybd.template bind<tier::release>( "Any", scheme, "CancelWindowClose" );
+            keybd.bind("PageUp"    , scheme, "ScrollPageUp"    );
+            keybd.bind("PageDown"  , scheme, "ScrollPageDown"  );
+            keybd.bind("UpArrow"   , scheme, "ScrollLineUp"    );
+            keybd.bind("DownArrow" , scheme, "ScrollLineDown"  );
+            keybd.bind("LeftArrow" , scheme, "ScrollCharLeft"  );
+            keybd.bind("RightArrow", scheme, "ScrollCharRight" );
+            keybd.bind("Home"      , scheme, "DropAutoRepeat"  );
+            keybd.bind("Home"      , scheme, "ScrollTop"       );
+            keybd.bind("End"       , scheme, "DropAutoRepeat"  );
+            keybd.bind("End"       , scheme, "ScrollEnd"       );
+            keybd.bind("F11"       , scheme, "DropAutoRepeat"  );
+            keybd.bind("F11"       , scheme, "ToggleMaximize"  );
+            keybd.bind("F12"       , scheme, "DropAutoRepeat"  );
+            keybd.bind("F12"       , scheme, "ToggleFullscreen");
+        };
+        binding("");
     };
 
     using builder_t = std::function<ui::sptr(eccc, xmls&)>;
@@ -137,10 +192,9 @@ namespace netxs::app::shared
         {
             static constexpr auto brand = "type";
             static constexpr auto label = "label";
-            static constexpr auto notes = "notes";
+            static constexpr auto tooltip = "tooltip";
             static constexpr auto route = "action";
-            static constexpr auto param = "data";
-            static constexpr auto onkey = "hotkey";
+            static constexpr auto data = "data";
         }
         namespace type
         {
@@ -163,37 +217,51 @@ namespace netxs::app::shared
             struct look
             {
                 text label{};
-                text notes{};
-                text param{};
-                text onkey{};
+                text tooltip{};
+                text data{};
                 si32 value{};
                 cell hover{};
                 cell focus{};
             };
 
-            using imap = std::unordered_map<si32, si32>;
+            using umap = std::unordered_map<ui64, si32>;
             using list = std::vector<look>;
 
             type brand{};
             bool alive{};
-            si32 taken{};
+            si32 taken{}; // Active label index.
             list views{};
-            imap index{};
+            umap index{};
 
-            void select(si32 i)
+            void select(ui64 i)
             {
                 auto iter = index.find(i);
                 taken = iter == index.end() ? 0 : iter->second;
             }
-            template<class P>
+            template<class Type = si32, class P>
             void reindex(P take)
             {
-                auto count = static_cast<si32>(views.size());
+                auto count = (si32)(views.size());
                 for (auto i = 0; i < count; i++)
                 {
                     auto& l = views[i];
-                    l.value = static_cast<si32>(take(l.param));
-                    index[l.value] = i;
+                    auto hash = ui64{};
+                    if constexpr (std::is_same_v<Type, twod>)
+                    {
+                        auto twod_value = take(l.data);
+                        hash = (ui64)((twod_value.y << 32) | twod_value.x);
+                    }
+                    else if constexpr (std::is_same_v<Type, text>)
+                    {
+                        auto text_value = take(l.data);
+                        hash = (ui64)(qiew::hash{}(text_value));
+                    }
+                    else
+                    {
+                        l.value = (si32)(take(l.data));
+                        hash = (ui64)(l.value);
+                    }
+                    index[hash] = i;
                 }
             }
         };
@@ -223,7 +291,7 @@ namespace netxs::app::shared
                 auto& setup = std::get<1>(config);
                 auto& alive = props.alive;
                 auto& label = props.views.front().label;
-                auto& notes = props.views.front().notes;
+                auto& tooltip = props.views.front().tooltip;
                 auto& hover = props.views.front().hover;
                 auto button = ui::item::ctor(label)->drawdots();
                 button->active(); // Always active for tooltips.
@@ -232,7 +300,7 @@ namespace netxs::app::shared
                     if (hover.clr()) button->shader(hover                , e2::form::state::hover);
                     else             button->shader(cell::shaders::xlight, e2::form::state::hover);
                 }
-                button->template plugin<pro::notes>(notes)
+                button->template plugin<pro::notes>(tooltip)
                     ->setpad({ 2, 2, !slimsize, !slimsize })
                     ->invoke([&](auto& boss) // Store shared ptr to the menu item config.
                     {
@@ -261,31 +329,32 @@ namespace netxs::app::shared
             {
                 auto control = std::vector<link>
                 {
-                    { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "—", .notes = " Minimize " }}},//, .hover = c2 }}}, //toto too funky
+                    { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "—", .tooltip = " Minimize " }}},//, .hover = c2 }}}, //toto too funky
                     [](auto& boss, auto& /*item*/)
                     {
                         boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                         {
-                            boss.RISEUP(tier::release, e2::form::size::minimize, gear);
+                            boss.base::riseup(tier::release, e2::form::size::minimize, gear);
                             gear.dismiss();
                         };
                     }},
-                    { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "□", .notes = " Maximize " }}},//, .hover = c6 }}},
+                    { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "□", .tooltip = " Maximize " }}},//, .hover = c6 }}},
                     [](auto& boss, auto& /*item*/)
                     {
                         boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                         {
-                            boss.RISEUP(tier::preview, e2::form::size::enlarge::maximize, gear);
+                            boss.base::riseup(tier::preview, e2::form::size::enlarge::maximize, gear);
                             gear.dismiss();
                         };
                     }},
-                    { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "×", .notes = " Close ", .hover = c1 }}},
-                    [](auto& boss, auto& /*item*/)
+                    { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "×", .tooltip = " Close ", .hover = c1 }}},
+                    [c1](auto& boss, auto& /*item*/)
                     {
+                        boss.template shader<tier::anycast>(cell::shaders::color(c1), e2::form::state::keybd::command::close);
                         boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                         {
                             auto backup = boss.This();
-                            boss.SIGNAL(tier::anycast, e2::form::proceed::quit::one, faux); // fast=faux: Show closing process.
+                            boss.bell::signal(tier::anycast, e2::form::proceed::quit::one, faux); // fast=faux: Show closing process.
                             gear.dismiss();
                         };
                     }},
@@ -366,7 +435,7 @@ namespace netxs::app::shared
                                 boss.reflow();
                                 if (auto menutent = menutent_shadow.lock())
                                 {
-                                    menutent->SIGNAL(tier::release, e2::form::state::visible, menu_visible);
+                                    menutent->bell::signal(tier::release, e2::form::state::visible, menu_visible);
                                 }
                             }
                         }
@@ -387,11 +456,11 @@ namespace netxs::app::shared
             //auto c3 = highlight_color;
             auto items = list
             {
-                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("F").nil().add("ile"), .notes = " File menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
-                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("E").nil().add("dit"), .notes = " Edit menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
-                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("V").nil().add("iew"), .notes = " View menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
-                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("D").nil().add("ata"), .notes = " Data menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
-                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("H").nil().add("elp"), .notes = " Help menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
+                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("F").nil().add("ile"), .tooltip = " File menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
+                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("E").nil().add("dit"), .tooltip = " Edit menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
+                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("V").nil().add("iew"), .tooltip = " View menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
+                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("D").nil().add("ata"), .tooltip = " Data menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
+                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("H").nil().add("elp"), .tooltip = " Help menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
             };
             auto [menu, cover, menu_data] = create(config, items);
             return menu;
@@ -416,13 +485,12 @@ namespace netxs::app::shared
                 ->plugin<pro::acryl>()
                 ->invoke([&](auto& boss)
                 {
-                    //boss.keybd.accept(true);
                     closing_on_quit(boss);
                     closing_by_gesture(boss);
                     boss.LISTEN(tier::release, e2::form::upon::vtree::attached, parent)
                     {
                         auto title = "error"s;
-                        boss.RISEUP(tier::preview, e2::form::prop::ui::header, title);
+                        boss.base::riseup(tier::preview, e2::form::prop::ui::header, title);
                     };
                 });
             auto msg = ui::post::ctor()
@@ -599,33 +667,48 @@ namespace netxs::app::shared
             map[app_typename] = builder;
         }
     };
+    struct gui_config_t
+    {
+        si32 winstate{};
+        bool aliasing{};
+        span blinking{};
+        twod wincoord{};
+        twod gridsize{};
+        si32 cellsize{};
+        std::list<text> fontlist;
+        input::key::keybind_list_t hotkeys;
+    };
 
-    void splice(xipc client, xmls& config)
+    auto get_gui_config(xmls& config)
+    {
+        auto gui_config = gui_config_t{ .winstate = config.take("/config/gui/winstate", win::state::normal, app::shared::win::options),
+                                        .aliasing = config.take("/config/gui/antialiasing", faux),
+                                        .blinking = config.take("/config/gui/blinkrate", span{ 400ms }),
+                                        .wincoord = config.take("/config/gui/wincoor", dot_mx),
+                                        .gridsize = config.take("/config/gui/gridsize", dot_mx),
+                                        .cellsize = std::clamp(config.take("/config/gui/cellheight", si32{ 20 }), 0, 256) };
+        if (gui_config.cellsize == 0) gui_config.cellsize = 20;
+        if (gui_config.gridsize == dot_00) gui_config.gridsize = dot_mx;
+        auto recs = config.list("/config/gui/fonts/font");
+        for (auto& f : recs)
+        {
+            //todo implement 'fonts/font/file' - font file path/url
+            gui_config.fontlist.push_back(f->take_value());
+        }
+        gui_config.hotkeys = ui::pro::keybd::load(config, "gui");
+        return gui_config;
+    }
+    void splice(xipc client, gui_config_t& gc)
     {
         if (os::dtvt::active || !(os::dtvt::vtmode & ui::console::gui)) os::tty::splice(client);
         else
         {
             os::dtvt::client = client;
-            auto winstate = config.take("/config/gui/winstate", win::state::normal, app::shared::win::options);
-            auto aliasing = config.take("/config/gui/antialiasing", faux);
-            auto blinking = config.take("/config/gui/blinkrate", span{ 400ms });
-            auto wincoord = config.take("/config/gui/wincoor", dot_mx);
-            auto gridsize = config.take("/config/gui/gridsize", dot_mx);
-            auto cellsize = std::clamp(config.take("/config/gui/cellheight", si32{ 20 }), 0, 256);
-            if (cellsize == 0) cellsize = 20;
-            if (gridsize == dot_00) gridsize = dot_mx;
-            auto fontlist = std::list<text>{};
-            auto recs = config.list("/config/gui/fonts/font");
-            for (auto& f : recs)
-            {
-                //todo implement 'fonts/font/file' - font file path/url
-                fontlist.push_back(f->take_value());
-            }
             auto connect = [&]
             {
                 auto event_domain = netxs::events::auth{};
-                auto window = event_domain.create<gui::window>(event_domain, fontlist, cellsize, aliasing, blinking);
-                window->connect(winstate, wincoord, gridsize);
+                auto window = event_domain.create<gui::window>(event_domain, gc.fontlist, gc.cellsize, gc.aliasing, gc.blinking, dot_21, gc.hotkeys);
+                window->connect(gc.winstate, gc.wincoord, gc.gridsize);
             };
             if (os::stdout_fd != os::invalid_fd)
             {
@@ -643,13 +726,16 @@ namespace netxs::app::shared
     void start(text cmd, text aclass, xmls& config)
     {
         auto [client, server] = os::ipc::xlink();
+        auto config_lock = ui::tui_domain().unique_lock(); // Sync multithreaded access to config.
+        auto gui_config = app::shared::get_gui_config(config);
         auto thread = std::thread{ [&, &client = client] //todo clang 15.0.0 still disallows capturing structured bindings (wait for clang 16.0.0)
         {
-            app::shared::splice(client, config);
+            app::shared::splice(client, gui_config);
         }};
         auto domain = ui::host::ctor(server, config)->plugin<scripting::host>();
-        auto appcfg = eccc{ .cmd = cmd, .cfg = os::dtvt::active ? ""s : "<config simple=1/>"s };
+        auto appcfg = eccc{ .cmd = cmd };
         auto applet = app::shared::builder(aclass)(appcfg, config);
+        config_lock.unlock();
         domain->invite(server, applet, os::dtvt::vtmode, os::dtvt::gridsz);
         domain->stop();
         server->shut();

@@ -29,7 +29,25 @@ int main(int argc, char* argv[])
     }
     else while (getopt)
     {
-        if (getopt.match("--svc"))
+        if (getopt.match("--cwd"))
+        {
+            auto path = getopt.next();
+            if (path.size())
+            {
+                if (os::env::cwd(path)) log("%%Set current working directory to '%path%'", prompt::os, path);
+                else                    log("%%Failed to set current working directory to '%path%'", prompt::os, ansi::err(path));
+            }
+        }
+        else if (getopt.match("--env"))
+        {
+            auto var_val = getopt.next();
+            if (var_val.size())
+            {
+                log("%%Set environment variable '%var_val%'", prompt::os, var_val);
+                os::env::set(var_val);
+            }
+        }
+        else if (getopt.match("--svc"))
         {
             auto ok = os::process::dispatch();
             return ok ? 0 : 1;
@@ -151,6 +169,8 @@ int main(int argc, char* argv[])
                 "\n    -r, --, --run        Run desktop applet standalone."
                 "\n    <type>               Desktop applet to run."
                 "\n    <args...>            Desktop applet arguments."
+                "\n    --env <var=val>      Set environment variable."
+                "\n    --cwd <path>         Set current working directory."
                 "\n"
                 "\n    Desktop applet             │ Type │ Arguments"
                 "\n    ───────────────────────────┼──────┼─────────────────────────────────────────────────"
@@ -314,7 +334,7 @@ int main(int argc, char* argv[])
         auto shadow = params;
         auto apname = view{};
         auto aptype = text{};
-        utf::to_low(shadow);
+        utf::to_lower(shadow);
              if (shadow.starts_with(app::vtty::id))      { aptype = app::teletype::id;  apname = app::teletype::name;  }
         else if (shadow.starts_with(app::term::id))      { aptype = app::terminal::id;  apname = app::terminal::name;  }
         else if (shadow.starts_with(app::dtvt::id))      { aptype = app::dtvt::id;      apname = app::dtvt::name;      }
@@ -385,8 +405,9 @@ int main(int argc, char* argv[])
                 auto cmd = script;
                 auto cfg = config.utf8();
                 auto win = os::dtvt::gridsz;
+                auto gui = app::shared::get_gui_config(config);
                 userinit.send(client, userid.first, os::dtvt::vtmode, env, cwd, cmd, cfg, win);
-                app::shared::splice(client, config);
+                app::shared::splice(client, gui);
                 return 0;
             }
             else return failed(denied ? code::noaccess : code::noserver);
@@ -428,9 +449,12 @@ int main(int argc, char* argv[])
         signal.reset();
 
         using e2 = ui::e2;
+        auto config_lock = ui::tui_domain().unique_lock(); // Sync multithreaded access to config.
         auto domain = ui::host::ctor<app::vtm::hall>(server, config);
         domain->plugin<scripting::host>();
         domain->autorun();
+        auto settings = config.utf8();
+        config_lock.unlock();
 
         log("%%Session started"
             "\n      user: %userid%"
@@ -451,7 +475,7 @@ int main(int argc, char* argv[])
                         if (active)
                         {
                             onecmd.cmd = cmd;
-                            domain->SIGNAL(tier::release, scripting::events::invoke, onecmd);
+                            domain->bell::signal(tier::release, scripting::events::invoke, onecmd);
                         }
                         else
                         {
@@ -480,9 +504,8 @@ int main(int argc, char* argv[])
             }
         }};
 
-        auto settings = config.utf8();
-        auto execline = [&](qiew line){ domain->SIGNAL(tier::release, scripting::events::invoke, onecmd, ({ .cmd = line })); };
-        auto shutdown = [&]{ domain->SIGNAL(tier::general, e2::shutdown, msg, (utf::concat(prompt::main, "Shutdown on signal"))); };
+        auto execline = [&](qiew line){ domain->bell::signal(tier::release, scripting::events::invoke, { .cmd = line }); };
+        auto shutdown = [&]{ domain->bell::signal(tier::general, e2::shutdown, utf::concat(prompt::main, "Shutdown on signal")); };
         execline(script);
         auto readline = os::tty::readline(execline, shutdown);
         while (auto user = server->meet())

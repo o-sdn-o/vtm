@@ -24,15 +24,19 @@
 </thead>
 <tbody>
   <tr>
-    <th>F10</th>
+    <th>Ctrl-Alt ¹</th>
+    <td colspan="9">Toggle alternate keyboard mode</td>
+  </tr>
+  <tr>
+    <th>F10 ¹</th>
     <td colspan="9">Disconnect all users and shutdown if there are no apps running</td>
   </tr>
   <tr>
-    <th>Shift+F7</th>
+    <th>Shift+F7 ¹</th>
     <td colspan="9">Leave current session</td>
   </tr>
   <tr>
-    <th>Ctrl+PgUp/PgDn</th>
+    <th>Ctrl+PageUp/PageDown ¹</th>
     <td colspan="9">Switch focus between running apps</td>
   </tr>
   <tr>
@@ -157,24 +161,24 @@
     <th></th>
     <th>GUI window</th>
     <th>Resizing grips</th>
-    <th>Window 1px-height row (in fullscreen mode)¹</th>
+    <th>Window 1px-height row (in fullscreen mode)²</th>
   </tr>
 </thead>
 <tbody>
   <tr>
-    <th>Alt+Enter</th>
+    <th>Alt+Enter ¹</th>
     <td colspan="3">Toggle fullscreen mode</td>
   </tr>
   <tr>
-    <th>Ctrl+CapsLock</th>
+    <th>Ctrl+CapsLock ¹</th>
     <td colspan="3">Toggle antialiasing mode</td>
   </tr>
   <tr>
-    <th>CapsLock+Up/DownArrow</th>
+    <th>CapsLock+UpArrow/DownArrow ¹</th>
     <td colspan="3">Scale cell size</td>
   </tr>
   <tr>
-    <th>CapsLock+0</th>
+    <th>CapsLock+0 ¹</th>
     <td colspan="3">Reset cell size</td>
   </tr>
   <tr>
@@ -188,10 +192,6 @@
   <tr>
     <th>DoubleLeftClick</th>
     <td colspan="3">Toggle fullscreen mode (if unhandled)</td>
-  </tr>
-  <tr>
-    <th>Home+End</th>
-    <td colspan="3">Close GUI window</td>
   </tr>
   <tr>
     <th>AnyDrag<br>Left+RightDrag</th>
@@ -214,4 +214,31 @@
 </tbody>
 </table>
 
-¹ — In fullscreen mode, the GUI window reserves a 1px high area at the top for forwarding mouse events.
+## Built-in Terminal
+
+<table>
+  <thead>
+    <tr><th>Hotkey ¹</th>              <th>Default action</th></tr>
+  </thead>
+  <tbody>
+    <tr><th>Alt+RightArrow</th>        <td>Highlight next match of selected text fragment. Clipboard content is used if no active selection.</td></tr>
+    <tr><th>Alt+LeftArrow</th>         <td>Highlight previous match of selected text fragment. Clipboard content is used if no active selection.</td></tr>
+    <tr><th>Shift+Ctrl+PageUp</th>     <td>Scroll one page up.</td></tr>
+    <tr><th>Shift+Ctrl+PageDown</th>   <td>Scroll one page down.</td></tr>
+    <tr><th>Shift+Alt+LeftArrow</th>   <td>Scroll one page to the left.</td></tr>
+    <tr><th>Shift+Alt+RightArrow</th>  <td>Scroll one page to the right.</td></tr>
+    <tr><th>Shift+Ctrl+UpArrow</th>    <td>Scroll one line up.</td></tr>
+    <tr><th>Shift+Ctrl+DownArrow</th>  <td>Scroll one line down.</td></tr>
+    <tr><th>Shift+Ctrl+LeftArrow</th>  <td>Scroll one cell to the left.</td></tr>
+    <tr><th>Shift+Ctrl+RightArrow</th> <td>Scroll one cell to the right.</td></tr>
+    <tr><th>Shift+Ctrl+Home</th>       <td>Don't repeat the Scroll to the scrollback top.</td></tr>
+    <tr><th>Shift+Ctrl+Home</th>       <td>Scroll to the scrollback top.</td></tr>
+    <tr><th>Shift+Ctrl+End</th>        <td>Don't repeat the Scroll to the scrollback bottom (reset viewport position).</td></tr>
+    <tr><th>Shift+Ctrl+End</th>        <td>Scroll to the scrollback bottom (reset viewport position).</td></tr>
+  </tbody>
+</table>
+
+---
+
+¹ — Key bindings can be customized using settings.  
+² — In fullscreen mode, the GUI window reserves a 1px high area at the top for forwarding mouse events.

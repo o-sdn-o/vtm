@@ -27,6 +27,7 @@ namespace netxs
     using wchr = wchar_t;
     using flux = std::stringstream;
     using utfx = uint32_t;
+    using txts = std::vector<text>;
     using namespace std::literals;
 
     static constexpr auto whitespaces = " \n\r\t"sv;
@@ -114,7 +115,7 @@ namespace netxs::utf
         {
             return vs_block + p(w) + x + (p(h) + y) * mx;
         }
-        auto whxy(si32 vs)
+        auto whxy(si32 vs_value)
         {
             static auto lut = []
             {
@@ -135,7 +136,7 @@ namespace netxs::utf
                 }
                 return v;
             }();
-            return lut[vs];
+            return lut[vs_value];
         }
     }
     static constexpr auto mtx = std::to_array({ matrix::vs<00,00>, matrix::vs<11,11>, matrix::vs<21,00> });
@@ -232,30 +233,32 @@ namespace netxs::utf
         size_t balance;
         size_t utf8len;
 
+        operator bool () { return balance > 0; }
         cpit(view utf8)
             : textptr{ utf8.data() },
               balance{ utf8.size() },
               utf8len{ 0           }
         { }
 
+        auto front()
+        {
+            return *textptr;
+        }
         void redo(view utf8)
         {
             textptr = utf8.data();
             balance = utf8.size();
         }
-
         view rest()
         {
             return view{ textptr, balance };
         }
-
         void step()
         {
             textptr += utf8len;
             balance -= utf8len;
             utf8len = 0;
         }
-
         prop take()
         {
             utfx cp;
@@ -287,7 +290,6 @@ namespace netxs::utf
                             else return prop(utf8len = 1);
                         }
                         else return prop(utf8len = 1);
-
                         break;
                     case 3:
                         if (balance > 2)
@@ -311,7 +313,6 @@ namespace netxs::utf
                             else return prop(utf8len = 1);
                         }
                         else return prop(utf8len = balance);
-
                         break;
                     default: // case 4
                         if (balance > 3)
@@ -347,17 +348,11 @@ namespace netxs::utf
 
             return prop(cp, utf8len);
         }
-
         auto next()
         {
             auto cpoint = take();
                           step();
             return cpoint;
-        }
-
-        operator bool ()
-        {
-            return balance > 0;
         }
     };
 
@@ -452,8 +447,8 @@ namespace netxs::utf
     //      yield: Handle grapheme clusters.
     //             auto y = [&](frag const& cluster){};
     //      Clusterize: parse by grapheme clusters (true) or codepoints (faux)
-    template<bool Clusterize = true, class S, class Y>
-    void decode(S serve, Y yield, view utf8, si32& decsg)
+    template<bool Clusterize = true, class S, class Y, class A>
+    void decode(S serve, Y yield, A ascii,  view utf8, si32& decsg)
     {
         static const auto dec_sgm_lookup = std::vector<frag> // DEC Special Graphics mode lookup table.
         {//  _      `      a      b       c       d       e      f      g      h       i       j      k      l      m      n     o       p      q      r      s      t      u      v      w      x      y      z      {      |      }      ~                                 };
@@ -507,13 +502,51 @@ namespace netxs::utf
                 }
                 else
                 {
+                    auto is_plain = [](char c){ return c >= 0x20 && (byte)(c - 0x7f) > 0x20; };
                     if (decsg && next.cdpoint <= 0x7e && next.cdpoint >= 0x5f) // ['_' - '~']
                     {
                         yield(dec_sgm_lookup[next.cdpoint - 0x5f]);
                         code.step();
                         next = code.take();
+                        continue;
                     }
-                    else if constexpr (Clusterize)
+                    else if (is_plain(code.front()))
+                    {
+                        auto rest = code.rest();
+                        auto head = rest.begin();
+                        auto iter = head;
+                        auto tail = rest.end();
+                        while (++iter != tail && is_plain(*iter))
+                        { }
+                        auto plain = view{ head, iter };
+                        if (iter == tail)
+                        {
+                            ascii(plain);
+                            break;
+                        }
+                        code.redo(view{ iter, tail });
+                        auto left = next;
+                        next = code.take();
+                        if (left.allied(next)) // Check if the next codepoint is some kind of joiner/modifier.
+                        {
+                            --iter;
+                            if (head != iter)
+                            {
+                                plain = view{ head, iter };
+                                ascii(plain);
+                            }
+                            code.redo(view{ iter, tail });
+                            code.utf8len = 1; // ASCII.
+                            next = left;
+                            // Fall to clusterize.
+                        }
+                        else
+                        {
+                            ascii(plain);
+                            continue;
+                        }
+                    }
+                    if constexpr (Clusterize)
                     {
                         auto head = code.textptr;
                         auto left = next;
@@ -522,10 +555,9 @@ namespace netxs::utf
                             code.step();
                             if (next.correct)
                             {
-                                next = code.take();
-                                if (auto size = left.combine(next))
+                                if (!code || (next = code.take(), left.combine(next)))
                                 {
-                                    auto crop = frag{ view(head, size), left };
+                                    auto crop = frag{ view(head, left.utf8len), left };
                                     yield(crop);
                                     break;
                                 }
@@ -565,14 +597,15 @@ namespace netxs::utf
     struct qiew : public view
     {
         using view::view;
+        using equal = std::equal_to<>;
 
         struct hash
         {
-            auto operator()(qiew key) const { return std::hash<view>{}(key); }
-        };
-        struct equal
-        {
-            auto operator()(qiew lhs, qiew rhs) const { return lhs.compare(rhs) == 0; }
+            using is_transparent = void;
+            using hash_type = std::hash<view>;
+            auto operator()(text const& s) const { return hash_type{}(s); }
+            auto operator()(char const* s) const { return hash_type{}(s); }
+            auto operator()(view s)        const { return hash_type{}(s); }
         };
 
         constexpr qiew(qiew const&) = default;
@@ -812,30 +845,38 @@ namespace netxs::utf
     }
     namespace
     {
-        void _to_utf(text& utf8, utfx code)
+        void _to_utf(utfx code, auto push)
         {
             if (code <= 0x007f)
             {
-                utf8.push_back(static_cast<char>(code));
+                push((char)code);
             }
             else if (code <= 0x07ff)
             {
-                utf8.push_back(static_cast<char>(0xc0 | ((code >> 0x06) & 0x1f)));
-                utf8.push_back(static_cast<char>(0x80 | ( code          & 0x3f)));
+                push((char)(0xc0 | ((code >> 0x06) & 0x1f)));
+                push((char)(0x80 | ( code          & 0x3f)));
             }
             else if (code <= 0xffff)
             {
-                utf8.push_back(static_cast<char>(0xe0 | ((code >> 0x0c) & 0x0f)));
-                utf8.push_back(static_cast<char>(0x80 | ((code >> 0x06) & 0x3f)));
-                utf8.push_back(static_cast<char>(0x80 | ( code          & 0x3f)));
+                push((char)(0xe0 | ((code >> 0x0c) & 0x0f)));
+                push((char)(0x80 | ((code >> 0x06) & 0x3f)));
+                push((char)(0x80 | ( code          & 0x3f)));
             }
             else
             {
-                utf8.push_back(static_cast<char>(0xf0 | ((code >> 0x12) & 0x07)));
-                utf8.push_back(static_cast<char>(0x80 | ((code >> 0x0c) & 0x3f)));
-                utf8.push_back(static_cast<char>(0x80 | ((code >> 0x06) & 0x3f)));
-                utf8.push_back(static_cast<char>(0x80 | ( code          & 0x3f)));
+                push((char)(0xf0 | ((code >> 0x12) & 0x07)));
+                push((char)(0x80 | ((code >> 0x0c) & 0x3f)));
+                push((char)(0x80 | ((code >> 0x06) & 0x3f)));
+                push((char)(0x80 | ( code          & 0x3f)));
             }
+        }
+        void _to_utf(text& utf8, utfx code)
+        {
+            _to_utf(code, [&](char c){ utf8.push_back(c); });
+        }
+        void _to_utf(auto& iter, utfx code)
+        {
+            _to_utf(code, [&](char c){ *iter++ = c; });
         }
     }
     auto to_utf_from_code(utfx code)
@@ -1136,20 +1177,23 @@ namespace netxs::utf
     {
         return std::bitset<L>(n).to_string();
     }
-    template<bool UpperCase = faux, class V, class = std::enable_if_t<std::is_integral_v<V>>>
-    auto to_hex(V number, size_t width = sizeof(V) * 2, char filler = '0')
+    template<bool UpperCase = faux>
+    auto _to_hex(auto number, size_t width, auto push)
     {
         static constexpr auto nums = UpperCase ? "0123456789ABCDEF"
                                                : "0123456789abcdef";
+        auto part = width * 4;
+        while (std::exchange(part, part - 4))
+        {
+            push(nums[(number >> part) & 0x0f]);
+        }
+    }
+    template<bool UpperCase = faux, class V, class = std::enable_if_t<std::is_integral_v<V>>>
+    auto to_hex(V number, size_t width = sizeof(V) * 2, char filler = '0')
+    {
         auto crop = text(width, filler);
         auto head = crop.begin();
-        auto tail = head + width;
-        auto part = -4 + 4*width;
-        while (head != tail)
-        {
-            *head++ = nums[(number >> part) & 0x0f];
-             part  -= 4;
-        }
+        _to_hex<UpperCase>(number, width, [&](char c){ *head++ = c; });
         return crop;
     }
     template<class T, class ...Args>
@@ -1161,15 +1205,15 @@ namespace netxs::utf
     template<bool UpperCase = faux, class T, class = std::enable_if_t<std::is_integral_v<T>>>
     auto to_hex(T number, text& crop, size_t width = sizeof(T) * 2)
     {
-        static constexpr auto nums = UpperCase ? "0123456789ABCDEF"
-                                               : "0123456789abcdef";
-        auto part = -4 + 4 * width;
-        while (width--)
-        {
-            crop.push_back(nums[(number >> part) & 0x0f]);
-            part -= 4;
-        }
+        _to_hex<UpperCase>(number, width, [&](char c){ crop.push_back(c); });
         return crop;
+    }
+    template<bool Uppercase = faux>
+    auto to_hex_0x(auto const& n)
+    {
+        auto h = [](auto const& n){ return (flux{} << std::showbase << (Uppercase ? std::uppercase : std::nouppercase) << std::hex << n).str(); };
+        if constexpr (std::is_same_v<wchr, std::decay_t<decltype(n)>>) return h((si32)n);
+        else                                                           return h(n);
     }
     template<bool UpperCase = faux>
     auto buffer_to_hex(view buffer, bool formatted = faux)
@@ -1403,7 +1447,7 @@ namespace netxs::utf
                 if (++step == 4)
                 {
                     step = 0;
-                    for (auto& a : buff) a = static_cast<byte>(look.find(a));
+                    for (auto& a : buff) a = (byte)look.find(a);
                     data.push_back(( buff[0]         << 2) + ((buff[1] & 0x30) >> 4));
                     data.push_back(((buff[1] & 0x0F) << 4) + ((buff[2] & 0x3C) >> 2));
                     data.push_back(((buff[2] & 0x03) << 6) +   buff[3]);
@@ -1414,7 +1458,7 @@ namespace netxs::utf
             {
                 auto temp = step;
                 while (temp < 4) buff[temp++] = 0;
-                for (auto& a : buff) a = static_cast<byte>(look.find(a));
+                for (auto& a : buff) a = (byte)look.find(a);
                 if (step > 1) data.push_back(( buff[0]         << 2) + ((buff[1] & 0x30) >> 4));
                 if (step > 2) data.push_back(((buff[1] & 0x0F) << 4) + ((buff[2] & 0x3C) >> 2));
             }
@@ -1467,11 +1511,20 @@ namespace netxs::utf
                 default:
                 {
                     auto cp = traits.cdpoint;
-                    if (cp < 0x100000) { buff += "\\u"; utf::to_hex<true>(cp, buff, 4); }
-                    else               { buff += "\\U"; utf::to_hex<true>(cp, buff, 8); }
+                    buff += "\\u{";
+                    utf::to_hex<true>(cp, buff, cp < 0x100000 ? 4 : 8);
+                    buff += "}";
                 }
             }
             return utf8;
+        };
+        auto a = [&](view plain)
+        {
+            for (auto c : plain)
+            {
+                if (c == '\\') buff += "\\\\";
+                else           buff += c;
+            }
         };
         auto y = [&](frag const& cluster)
         {
@@ -1480,8 +1533,8 @@ namespace netxs::utf
             //else if (cluster.text.front() == ' ') buff += "\x20";
             else                                   buff += cluster.text;
         };
-        decode<faux>(s, y, utf8, mode);
-        return static_cast<si32>(buff.length() - init);
+        decode<faux>(s, y, a, utf8, mode);
+        return (si32)(buff.length() - init);
     }
     // utf: Return a string without control chars (replace all ctrls with printables).
     template<bool Split = true, bool Multiline = true>
@@ -1520,8 +1573,7 @@ namespace netxs::utf
     {
         while (head != tail)
         {
-            auto c = *head;
-            if (hittest(c) || (c == '\\' && ++head == tail)) break;
+            if (hittest(head) || (*head == '\\' && ++head == tail)) break;
             ++head;
         }
         return head;
@@ -1530,13 +1582,20 @@ namespace netxs::utf
     template<class Iter>
     auto find_char(Iter head, Iter tail, view delims)
     {
-        return _find_char(head, tail, [&](char c){ return delims.find(c) != view::npos; });
+        return _find_char(head, tail, [&](auto iter){ return delims.find(*iter) != view::npos; });
+    }
+    // utf: Find substring position ignoring backslashed.
+    auto find_substring(view& utf8, auto... delims)
+    {
+        auto head = utf8.begin();
+        auto tail = utf8.end();
+        return _find_char(head, tail, [&](auto iter){ return (view{ iter, tail }.starts_with(delims) || ...); });
     }
     // utf: Find char position ignoring backslashed.
     template<class Iter>
     auto find_char(Iter head, Iter tail, char delim)
     {
-        return _find_char(head, tail, [&](char c){ return c == delim; });
+        return _find_char(head, tail, [&](auto iter){ return *iter == delim; });
     }
     auto check_any(view shadow, view delims)
     {
@@ -1646,7 +1705,24 @@ namespace netxs::utf
                     case  'n': *iter++ = '\n'  ; break;
                     case  'a': *iter++ = '\a'  ; break;
                     case '\\': *iter++ = '\\'  ; break;
-                    default:   *iter++ = c     ; break;
+                    case  'u': if (head != tail)
+                    {
+                        auto next = head;
+                        auto d = *next;
+                        auto quoted = d == '{';
+                        if (quoted) ++next;
+                        auto shadow = qiew{ next, tail };
+                        if (auto v = to_int<si32, 16>(shadow))
+                        if (auto codepoint = v.value(); codepoint >= 0 && codepoint <= 0x10FFFF)
+                        if (!quoted || (shadow.size() && shadow.pop_front() == '}'))
+                        {
+                            _to_utf(iter, codepoint); // This expansion cannot cause overflow.
+                            head = tail - shadow.size();
+                            break;
+                        }
+                    }
+                    [[fallthrough]];
+                    default: *iter++ = c; break;
                 }
             }
             else *iter++ = c;
@@ -1695,6 +1771,31 @@ namespace netxs::utf
         auto head = utf8.begin();
         auto tail = utf8.end();
         auto stop = find_char(head, tail, delims);
+        if (stop == tail)
+        {
+            if constexpr (Lazy)
+            {
+                utf8 = {};
+                return qiew{ utf8 };
+            }
+            else
+            {
+                auto crop = qiew{ utf8 };
+                utf8 = {};
+                return crop;
+            }
+        }
+        auto str = qiew{ head, stop };
+        utf8.remove_prefix(str.size());
+        return str;
+    }
+    template<bool Lazy = true, class ...ViewList>
+    auto take_front(view& utf8, std::tuple<ViewList...> const& delims)
+    {
+        auto head = utf8.begin();
+        auto tail = utf8.end();
+        auto args = std::tuple_cat(std::make_tuple(utf8), delims);
+        auto stop = std::apply(find_substring<ViewList...>, args);
         if (stop == tail)
         {
             if constexpr (Lazy)
@@ -1796,31 +1897,35 @@ namespace netxs::utf
         auto test = utf8.find('\033');
         return test == text::npos;
     }
-    auto to_low(char c)
+    auto to_lower(char c)
     {
         return c >= 'A' && c <= 'Z' ? (char)(c + ('a' - 'A')) : c;
     }
-    auto& to_low(text& utf8, size_t size = text::npos)
+    auto to_upper(char c)
+    {
+        return c >= 'a' && c <= 'z' ? (char)(c - ('a' - 'A')) : c;
+    }
+    auto& to_lower(text& utf8, size_t size = text::npos)
     {
         auto head = utf8.begin();
         auto tail = head + std::min(utf8.size(), size);
-        std::transform(head, tail, head, [](auto c){ return to_low(c); });
+        std::transform(head, tail, head, [](auto c){ return to_lower(c); });
         return utf8;
     }
-    auto to_low(text&& utf8)
+    auto to_lower(text&& utf8)
     {
-        return to_low(utf8);
+        return to_lower(utf8);
     }
-    auto& to_up(text& utf8, size_t size = text::npos)
+    auto& to_upper(text& utf8, size_t size = text::npos)
     {
         auto head = utf8.begin();
         auto tail = head + std::min(utf8.size(), size);
-        std::transform(head, tail, head, [](char c){ return c >= 'a' && c <= 'z' ? (char)(c - ('a' - 'A')) : c; });
+        std::transform(head, tail, head, [](char c){ return to_upper(c); });
         return utf8;
     }
-    auto to_up(text&& utf8)
+    auto to_upper(text&& utf8)
     {
-        return to_up(utf8);
+        return to_upper(utf8);
     }
     template<class W, class P>
     void for_each(text& utf8, W const& what, P proc)
@@ -1839,15 +1944,6 @@ namespace netxs::utf
             spot += what_sz;
         }
     }
-    auto to_hex_0x(auto const& n)
-    {
-        auto result = (flux{} << std::showbase << std::hex << n).str();
-        return result;
-    }
-    auto to_hex_0x(wchr n)
-    {
-        return to_hex_0x((int)n);
-    }
     auto trunc(view utf8, size_t maxy) // Returns a string trimmed at maxy lines.
     {
         auto crop = 0_sz;
@@ -1863,7 +1959,7 @@ namespace netxs::utf
     {
         input << format;
     }
-    void print2(auto& input, view& format, auto&& arg, auto&& ...args)
+    void print2(auto& input, view& format, auto&& arg, auto&&... args)
     {
         auto crop = [](view& format)
         {

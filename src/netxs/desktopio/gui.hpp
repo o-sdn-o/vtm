@@ -641,9 +641,10 @@ namespace netxs::gui
         ComPtr<IDWriteFactory2>        factory2; // fonts: DWrite factory.
         ComPtr<IDWriteFontCollection>  fontlist; // fonts: System font collection.
         ComPtr<IDWriteTextAnalyzer2>   analyzer; // fonts: Glyph indicies reader.
-        std::future<void>              bgworker; // fonts: Background fallback reindex.
+        std::thread                    bgworker; // fonts: Background fallback reindex.
         wide                           oslocale; // fonts: User locale.
         shaper                         fontshaper{ *this }; // fonts: .
+        si32                           index_ready{ 0 }; // fonts: Font fallback reindex is complete if index > 0.
 
         void set_fonts(auto family_names, bool fresh = true)
         {
@@ -700,7 +701,14 @@ namespace netxs::gui
             };
             for (auto& f : fallback) if ((f.color || f.fixed) && hittest(f.fontface[0].faceinst)) return f;
             for (auto& f : fallback) if ((!f.color && !f.fixed) && hittest(f.fontface[0].faceinst)) return f;
-            if (bgworker.valid()) bgworker.get();
+            static auto empty_font = typeface{};
+            //todo enqueue font fallback lookup and return empty_font;
+            if (index_ready <= 0) // Font index is not ready yet.
+            {
+                if constexpr (debugmode) log("%%Font fallback index is not ready yet", prompt::gui);
+                index_ready--;
+                return empty_font;
+            }
             auto try_font = [&](auto i, bool test)
             {
                 auto hit = faux;
@@ -734,10 +742,15 @@ namespace netxs::gui
                 if ((fontstat[i].s & fontcat::valid) && try_font(fontstat[i].i, faux)) return fallback.back();
             }
             log("%%No fonts found in the system", prompt::gui);
-            return fallback.emplace_back(); // Should never happen.
+            return empty_font; // Should never happen.
         }
 
-        fonts(std::list<text>& family_names, si32 cell_height)
+        ~fonts()
+        {
+            index_ready = 10;
+            if (bgworker.joinable()) bgworker.join();
+        }
+        fonts(std::list<text>& family_names, si32 cell_height, auto signal_to_redraw)
             : oslocale(LOCALE_NAME_MAX_LENGTH, '\0')
         {
             ::DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)factory2.GetAddressOf());
@@ -757,10 +770,11 @@ namespace netxs::gui
                 log("%%Using default locale 'en-US'", prompt::gui);
             }
             oslocale.shrink_to_fit();
-            bgworker = std::async(std::launch::async, [&]
+            bgworker = std::thread{ [&, signal_to_redraw]
             {
                 for (auto i = 0u; i < fontstat.size(); i++)
                 {
+                    if (index_ready > 0) break;
                     fontstat[i].i = i;
                     auto barefont = ComPtr<IDWriteFontFamily>{};
                     auto fontfile = ComPtr<IDWriteFont2>{};
@@ -800,7 +814,9 @@ namespace netxs::gui
                 sort();
                 //for (auto f : fontstat) log("id=", utf::to_hex(f.s), " i= ", f.i, " n=", f.n);
                 log("%%Font fallback index initialized", prompt::gui);
-            });
+                auto state = std::exchange(index_ready, 10);
+                if (state < 0) signal_to_redraw(); // Notify about font fallback index is ready to redraw canvas.
+            }};
             if (fallback.empty())
             {
                 auto default_font = std::list{ "Courier New"s };
@@ -869,7 +885,7 @@ namespace netxs::gui
         };
 
         shaper fontshaper{ *this };
-        fonts(std::list<text>& /*family_names*/, si32 /*cell_height*/)
+        fonts(std::list<text>& /*family_names*/, si32 /*cell_height*/, auto ...)
         { }
         auto& take_font(utfx /*base_char*/)
         {
@@ -1027,6 +1043,11 @@ namespace netxs::gui
             if (c.bld()) format |= fonts::style::bold;
             auto base_char = codepoints.front().cdpoint;
             auto& f = fcache.take_font(base_char);
+            if (f.fontface.empty()) // Font index is not ready yet. Try again later.
+            {
+                glyph_mask.type = sprite::undef;
+                return;
+            }
             fcache.fontshaper.faceinst = f.fontface[format].faceinst;
             if (!fcache.fontshaper.faceinst) return;
 
@@ -1348,11 +1369,15 @@ namespace netxs::gui
                 if (c.jgc())
                 {
                     iter = glyphs.emplace(token, mono_buffer).first;
-                    rasterize(iter->second, c);
                 }
                 else return;
             }
             auto& glyph_mask = iter->second;
+            if (glyph_mask.type == sprite::undef)
+            {
+                if (c.jgc()) rasterize(glyph_mask, c);
+                else return;
+            }
             if (glyph_mask.area)
             {
                 auto [w, h, x, y] = c.whxy();
@@ -1393,6 +1418,8 @@ namespace netxs::gui
         using b256 = std::array<byte, 256>;
         using title = ui::pro::title;
         using focus = ui::pro::focus;
+        using keybd = ui::pro::keybd;
+        using kmap = input::key::kmap;
 
         static constexpr auto shadow_dent = dent{ 1,1,1,1 } * 3;
         static constexpr auto wheel_delta_base = 120; // WHEEL_DELTA
@@ -1404,14 +1431,6 @@ namespace netxs::gui
             bool show{}; // blink: Blinking layer is active.
             byts mask{}; // blink: Blinking cells map.
             si32 poll{}; // blink: Blinking cells count.
-        };
-        struct keystate
-        {
-            static constexpr auto _counter = __COUNTER__ + 1;
-            static constexpr auto unknown  = __COUNTER__ - _counter;
-            static constexpr auto pressed  = __COUNTER__ - _counter;
-            static constexpr auto repeated = __COUNTER__ - _counter;
-            static constexpr auto released = __COUNTER__ - _counter;
         };
         struct bttn
         {
@@ -1436,9 +1455,11 @@ namespace netxs::gui
         };
         struct timers
         {
-            static constexpr auto _counter = __COUNTER__ + 1;
-            static constexpr auto none     = __COUNTER__ - _counter;
-            static constexpr auto blink    = __COUNTER__ - _counter;
+            static constexpr auto _counter   = __COUNTER__ + 1;
+            static constexpr auto none       = __COUNTER__ - _counter;
+            static constexpr auto blink      = __COUNTER__ - _counter;
+            static constexpr auto clipboard  = __COUNTER__ - _counter;
+            static constexpr auto rightshift = __COUNTER__ - _counter;
         };
         struct syscmd
         {
@@ -1463,6 +1484,7 @@ namespace netxs::gui
             X(pass_state) /* Pass keybd modifiers state.           */ \
             X(pass_input) /* Pass keybd input.                     */ \
             X(expose_win) /* Order to expose window.               */ \
+            X(no_command) /* Noop. Just to update.                 */ \
             X(cmd_w_data) /* Command with payload.                 */
             static constexpr auto _base = 99900;
             static constexpr auto _counter = __COUNTER__ + 1 - _base;
@@ -1518,6 +1540,9 @@ namespace netxs::gui
             static constexpr auto end      = 0x23; // VK_END;
             static constexpr auto home     = 0x24; // VK_HOME;
 
+            static constexpr auto f11      = 0x7A; // VK_F11;
+            static constexpr auto f12      = 0x7B; // VK_F12;
+
             static constexpr auto key_0    = '0'; // VK_0;
 
             static constexpr auto numlock  = 0x90; // VK_NUMLOCK;
@@ -1565,7 +1590,7 @@ namespace netxs::gui
                 if (!wheel && buson && owner) target_list = std::vector<ui32>(group.begin(), group.end());
                 return target_list;
             }
-            auto solo(ui32 local_target)
+            auto set_solo(ui32 local_target)
             {
                 auto lock = std::lock_guard{ mutex };
                 auto copy = std::vector<ui32>(group.size());
@@ -1615,22 +1640,22 @@ namespace netxs::gui
 
             //todo use gear.m_sys
             input::sysmouse m = {}; // evnt: .
-            input::syskeybd k = {}; // evnt: .
-            input::sysfocus f = {}; // evnt: .
             input::syswinsz w = {}; // evnt: .
             input::sysclose c = {}; // evnt: .
             netxs::sptr<input::hids> gears; // evnt: .
 
-            auto keybd(auto&& data, auto proc)
+            auto keybd(hids& gear, auto proc)
             {
                 if (alive)
                 {
                     auto lock = s11n::syskeybd.freeze();
-                    lock.thing.set(data);
+                    lock.thing.set(gear);
                     lock.thing.sendfx([&](auto block)
                     {
-                        intio.send(block);
-                        proc(block);
+                        if (proc(block))
+                        {
+                            intio.send(block);
+                        }
                     });
                 }
             };
@@ -1700,24 +1725,24 @@ namespace netxs::gui
             void handle(s11n::xs::header_request   lock)
             {
                 auto& item = lock.thing;
-                owner.RISEUP(tier::request, e2::form::prop::ui::header, header_utf8, ());
+                auto header_utf8 = owner.base::riseup(tier::request, e2::form::prop::ui::header);
                 s11n::header.send(intio, item.window_id, header_utf8);
             }
             void handle(s11n::xs::footer_request   lock)
             {
                 auto& item = lock.thing;
-                owner.RISEUP(tier::request, e2::form::prop::ui::footer, footer_utf8, ());
+                auto footer_utf8 = owner.base::riseup(tier::request, e2::form::prop::ui::footer);
                 s11n::footer.send(intio, item.window_id, footer_utf8);
             }
             void handle(s11n::xs::header           lock)
             {
                 auto& item = lock.thing;
-                owner.RISEUP(tier::preview, e2::form::prop::ui::header, item.utf8);
+                owner.base::riseup(tier::preview, e2::form::prop::ui::header, item.utf8);
             }
             void handle(s11n::xs::footer           lock)
             {
                 auto& item = lock.thing;
-                owner.RISEUP(tier::preview, e2::form::prop::ui::footer, item.utf8);
+                owner.base::riseup(tier::preview, e2::form::prop::ui::footer, item.utf8);
             }
             void handle(s11n::xs::clipdata         lock)
             {
@@ -1769,41 +1794,48 @@ namespace netxs::gui
                 owner.window_post_command(ipc::expose_win);
                 //owner.bell::enqueue(owner.This(), [&](auto& /*boss*/)
                 //{
-                //    owner.RISEUP(tier::preview, e2::form::layout::expose, area, ());
+                //    owner.base::riseup(tier::preview, e2::form::layout::expose);
                 //});
             }
-            void handle(s11n::xs::focus_cut        lock)
+            void handle(s11n::xs::sysfocus         lock)
             {
-                auto& item = lock.thing;
-                // We are the focus tree endpoint. Signal back the focus set up.
-                owner.SIGNAL(tier::release, hids::events::keybd::focus::bus::off, seed, ({ .id = item.gear_id }));
+                auto guard = owner.sync(); // Guard the owner.This() call.
+                auto owner_ptr = owner.This();
+                auto& f = lock.thing;
+                if (f.state)
+                {
+                    if (owner.mfocus.focused()) // We are the focus tree endpoint.
+                    {
+                        pro::focus::set(owner_ptr, f.gear_id, f.focus_type, faux);
+                    }
+                    else owner.window_post_command(ipc::take_focus);
+                    if (f.focus_type == solo::on) // Set solo focus.
+                    {
+                        owner.window_post_command(ipc::solo_focus); // Request to drop all parallel foci.
+                    }
+                }
+                else
+                {
+                    pro::focus::off(owner_ptr, f.gear_id);
+                }
             }
-            void handle(s11n::xs::focus_set        lock)
+            void handle(s11n::xs::hotkey_scheme    lock)
             {
-                auto& item = lock.thing;
-                if (owner.mfocus.focused()) // We are the focus tree endpoint. Signal back the focus set up.
+                auto& k = lock.thing;
+                auto guard = owner.sync();
+                if (auto gear_ptr = owner.bell::getref<hids>(k.gear_id))
                 {
-                    owner.SIGNAL(tier::release, hids::events::keybd::focus::bus::on, seed, ({ .id = item.gear_id, .solo = item.solo, .item = owner.This() }));
-                }
-                else owner.window_post_command(ipc::take_focus);
-                if (item.solo == ui::pro::focus::solo::on) // Set solo focus.
-                {
-                    owner.window_post_command(ipc::solo_focus);
+                    owner.scheme = k.hscheme;
+                    owner.window_post_command(ipc::sync_state);
                 }
             }
-            void handle(s11n::xs::keybd_event      lock)
+            void handle(s11n::xs::syskeybd         lock)
             {
                 auto& gear = *gears;
                 auto& keybd = lock.thing;
-                gear.alive    = true;
-                gear.ctlstate = keybd.ctlstat;
-                gear.extflag  = keybd.extflag;
-                gear.virtcod  = keybd.virtcod;
-                gear.scancod  = keybd.scancod;
-                gear.pressed  = keybd.pressed;
-                gear.cluster  = keybd.cluster;
-                gear.handled  = keybd.handled;
-                owner.SIGNAL(tier::release, hids::events::keybd::key::post, gear);
+                gear.alive = true;
+                keybd.syncto(gear);
+                owner.bell::signal(tier::release, hids::events::keybd::key::post, gear);
             };
             void handle(s11n::xs::mouse_event      lock)
             {
@@ -1811,8 +1843,8 @@ namespace netxs::gui
                 auto& mouse = lock.thing;
                 auto basis = gear.owner.base::coor();
                 owner.global(basis);
-                gear.replay(mouse.cause, mouse.coord - basis, mouse.delta, mouse.buttons, mouse.ctlstat, mouse.whlfp, mouse.whlsi, mouse.hzwhl);
-                gear.pass<tier::release>(owner.This(), gear.owner.base::coor(), true);
+                gear.replay(mouse.cause, mouse.coord - basis, mouse.click - basis, mouse.delta, mouse.buttons, mouse.ctlstat, mouse.whlfp, mouse.whlsi, mouse.hzwhl);
+                gear.pass(tier::release, owner.This(), gear.owner.base::coor(), true);
             }
             void handle(s11n::xs::warping          lock)
             {
@@ -1824,7 +1856,7 @@ namespace netxs::gui
                 //todo revise
                 //owner.bell::enqueue(owner.This(), [&, fps = lock.thing.frame_rate](auto& /*boss*/) mutable
                 //{
-                //    owner.SIGNAL(tier::general, e2::config::fps, fps);
+                //    owner.bell::signal(tier::general, e2::config::fps, fps);
                 //});
             }
             void handle(s11n::xs::logs             lock)
@@ -1852,7 +1884,7 @@ namespace netxs::gui
                 //todo revise
                 //owner.bell::enqueue(owner.This(), [&](auto& /*boss*/)
                 //{
-                //    owner.RISEUP(tier::release, e2::form::global::sysstart, 1);
+                //    owner.base::riseup(tier::release, e2::form::global::sysstart, 1);
                 //});
             }
             void handle(s11n::xs::cwd            /*lock*/)
@@ -1860,7 +1892,7 @@ namespace netxs::gui
                 //todo revise
                 //owner.bell::enqueue(owner.This(), [&, path = lock.thing.path](auto& /*boss*/)
                 //{
-                //    owner.RISEUP(tier::preview, e2::form::prop::cwd, path);
+                //    owner.base::riseup(tier::preview, e2::form::prop::cwd, path);
                 //});
             }
             struct
@@ -1883,8 +1915,6 @@ namespace netxs::gui
             {
                 auto& gear = *gears;
                 m.gear_id = gear.id;
-                k.gear_id = gear.id;
-                f.gear_id = gear.id;
                 w.gear_id = gear.id;
                 m.enabled = input::hids::stat::ok;
                 m.coordxy = { si16min, si16min };
@@ -1894,10 +1924,11 @@ namespace netxs::gui
 
         title titles; // winbase: UI header/footer.
         focus wfocus; // winbase: UI focus.
-        layer master; // winbase: Layer index for Client.
-        layer blinky; // winbase: Layer index for blinking characters.
-        layer header; // winbase: Layer index for Header.
-        layer footer; // winbase: Layer index for Footer.
+        keybd wkeybd; // winbase: Keyboard controller.
+        layer master; // winbase: Layer for Client.
+        layer blinky; // winbase: Layer for blinking characters.
+        layer header; // winbase: Layer for Header.
+        layer footer; // winbase: Layer for Footer.
         fonts fcache; // winbase: Font cache.
         glyph gcache; // winbase: Glyph cache.
         blink blinks; // winbase: Blinking layer state.
@@ -1936,12 +1967,16 @@ namespace netxs::gui
         foci  mfocus; // winbase: GUI multi-focus control.
         regs  fields; // winbase: Text input field list.
         evnt  stream; // winbase: DirectVT event proxy.
+        kmap  chords; // winbase: Pressed key table (key chord).
+        text  scheme; // winbase: Current hotkey scheme.
+        bool  drykey; // winbase: Hotkey scheme should be sent as soon as possible.
 
-        winbase(auth& indexer, std::list<text>& font_names, si32 cell_height, bool antialiasing, span blink_rate, twod grip_cell = dot_21)
+        winbase(auth& indexer, std::list<text>& font_names, si32 cell_height, bool antialiasing, span blink_rate, twod grip_cell, input::key::keybind_list_t& hotkeys)
             : base{ indexer },
               titles{ *this, "", "", faux },
-              wfocus{ *this },
-              fcache{ font_names, cell_height },
+              wfocus{ *this, ui::pro::focus::mode::relay },
+              wkeybd{ *this },
+              fcache{ font_names, cell_height, [&]{ netxs::set_flag<task::all>(reload); window_post_command(ipc::no_command); } },
               gcache{ fcache, antialiasing },
               blinks{ .init = blink_rate },
               cellsz{ fcache.cellsize },
@@ -1965,8 +2000,25 @@ namespace netxs::gui
               heldby{ 0x0 },
               whlacc{ 0.f },
               wdelta{ 24.f },
-              stream{ *this, *os::dtvt::client }
-        { }
+              stream{ *this, *os::dtvt::client },
+              drykey{ faux }
+        {
+            wkeybd.proc("IncreaseCellHeight"    , [&](hids& gear, txts&){ gear.set_handled(); IncreaseCellHeight(1.f); });
+            wkeybd.proc("DecreaseCellHeight"    , [&](hids& gear, txts&){ gear.set_handled(); IncreaseCellHeight(-1.f);});
+            wkeybd.proc("ResetCellHeight"       , [&](hids& gear, txts&){ gear.set_handled(); ResetCellHeight();        });
+            wkeybd.proc("ToggleFullscreenMode"  , [&](hids& gear, txts&){ gear.set_handled(); ToggleFullscreenMode();   });
+            wkeybd.proc("ToggleAntialiasingMode", [&](hids& gear, txts&){ gear.set_handled(); ToggleAntialiasingMode(); });
+            wkeybd.proc("RollFontsBackward"     , [&](hids& gear, txts&){ gear.set_handled(); RollFontList(feed::rev);  });
+            wkeybd.proc("RollFontsForward"      , [&](hids& gear, txts&){ gear.set_handled(); RollFontList(feed::fwd);  });
+            wkeybd.proc("_ResetWheelAccumulator", [&](hids& /*gear*/, txts&){ whlacc = {}; });
+            //todo use scheme="*"
+            wkeybd.bind<tier::preview>("-Ctrl", "" , "_ResetWheelAccumulator");
+            wkeybd.bind<tier::preview>("-Ctrl", "1", "_ResetWheelAccumulator");
+            for (auto& r : hotkeys)
+            {
+                wkeybd.bind<tier::preview>(r.chord, r.scheme, r.actions);
+            }
+        }
 
         virtual bool layer_create(layer& s, winbase* host_ptr = nullptr, twod win_coord = {}, twod grid_size = {}, dent border_dent = {}, twod cell_size = {}) = 0;
         //virtual void layer_delete(layer& s) = 0;
@@ -1976,10 +2028,11 @@ namespace netxs::gui
         virtual void layer_timer_start(layer& s, span elapse, ui32 eventid) = 0;
         virtual void layer_timer_stop(layer& s, ui32 eventid) = 0;
 
+        virtual void keybd_sync_state(si32 virtcod = 0) = 0;
         virtual void keybd_sync_layout() = 0;
         virtual void keybd_read_vkstat() = 0;
         virtual void keybd_wipe_vkstat() = 0;
-        virtual void keybd_read_input(si32& keystat, si32& virtcod) = 0;
+        virtual bool keybd_read_input() = 0;
         virtual void keybd_send_block(view block) = 0;
         virtual bool keybd_read_toggled(si32 virtcod) = 0;
         virtual bool keybd_test_toggled(si32 virtcod) = 0;
@@ -2438,6 +2491,7 @@ namespace netxs::gui
             auto prime_canvas = layer_get_bits(master);
             auto blink_canvas = layer_get_bits(blinky);
             auto origin = blink_canvas.coor();
+            //todo blinks.mask size is out of sync on intensive resize
             auto iter = blinks.mask.begin() + offset;
             auto p = rect{ origin + start, cellsz };
             auto m = origin + blink_canvas.size();
@@ -2795,148 +2849,209 @@ namespace netxs::gui
                 }
             }
         }
-        void stream_keybd(auto& k)
+        void stream_keybd(hids& gear)
         {
-            stream.keybd(k, [&](view block)
+            gear.handled = faux;
+            stream.keybd(gear, [&](view block)
             {
                 if (mfocus.active())
                 {
-                    keybd_send_block(block);
+                    keybd_send_block(block); // Send multifocus events.
                 }
+                return wkeybd.filter<tier::preview>(gear);
             });
         }
-        void keybd_send_state(view cluster = {}, si32 keystat = {}, si32 virtcod = {}, si32 scancod = {}, bool extflag = {})
+        void keybd_send_state(si32 virtcod = {}, si32 keystat = {}, si32 scancod = {}, bool extflag = {}, view cluster = {}, bool synth = faux)
         {
-            //todo revise
-            //todo implement all possible modifiers state (eg kana)
-            //if (keybd_test_toggled(vkey::oem_copy) cs |= ...;
-            //if (keybd_test_toggled(vkey::oem_auto) cs |= ...;
-            //if (keybd_test_toggled(vkey::oem_enlw) cs |= NLS_HIRAGANA;
-            auto state  = si32{};
+            if (virtcod == 0 && drykey) // Send empty key to update hotkey scheme state if it is changed.
+            {
+                drykey = faux;
+                auto& gear = *stream.gears;
+                gear.hscheme = scheme;
+                auto temp = syskeybd{}; //todo same code in system.hpp:4918
+                std::swap(temp.vkchord, gear.vkchord);
+                std::swap(temp.scchord, gear.scchord);
+                std::swap(temp.chchord, gear.chchord);
+                std::swap(temp.cluster, gear.cluster);
+                std::swap(temp.keystat, gear.keystat);
+                gear.virtcod = 0;
+                gear.scancod = 0;
+                gear.keycode = 0;
+                gear.payload = input::keybd::type::keypress;
+                stream_keybd(gear);
+                std::swap(temp.vkchord, gear.vkchord);
+                std::swap(temp.scchord, gear.scchord);
+                std::swap(temp.chchord, gear.chchord);
+                std::swap(temp.cluster, gear.cluster);
+                std::swap(temp.keystat, gear.keystat);
+                return;
+            }
+
+            auto state = 0;
             auto cs = 0;
             if (extflag) cs |= input::key::ExtendedKey;
-            if (keybd_test_toggled(vkey::numlock )) { state |= input::hids::NumLock; cs |= input::key::NumLockMode; }
-            if (keybd_test_toggled(vkey::capslock)) state |= input::hids::CapsLock;
-            if (keybd_test_toggled(vkey::scrllock)) state |= input::hids::ScrlLock;
-            if (keybd_test_pressed(vkey::lshift  )) state |= input::hids::LShift;
-            if (keybd_test_pressed(vkey::rshift  )) state |= input::hids::RShift;
-            if (keybd_test_pressed(vkey::lcontrol)) state |= input::hids::LCtrl;
-            if (keybd_test_pressed(vkey::rcontrol)) state |= input::hids::RCtrl;
-            if (keybd_test_pressed(vkey::lalt    )) state |= input::hids::LAlt;
-            if (keybd_test_pressed(vkey::ralt    )) state |= input::hids::RAlt;
-            if (keybd_test_pressed(vkey::lwin    )) state |= input::hids::LWin;
-            if (keybd_test_pressed(vkey::rwin    )) state |= input::hids::RWin;
-            if (keybd_test_pressed(vkey::control )) mouse_capture(by::keybd); // Capture mouse if Ctrl modifier is pressed (to catch Ctrl+AnyClick outside the window).
-            else                                   mouse_release(by::keybd);
-            auto changed = std::exchange(keymod, state) != keymod;
-            auto pressed = keystat == keystate::pressed;
-            auto repeated = keystat == keystate::repeated;
-            auto repeat_ctrl = repeated && (virtcod == vkey::shift    || virtcod == vkey::control || virtcod == vkey::alt
-                                         || virtcod == vkey::capslock || virtcod == vkey::numlock || virtcod == vkey::scrllock
-                                         || virtcod == vkey::lwin     || virtcod == vkey::rwin);
-            if (!changed && (repeat_ctrl || (scancod == 0 && cluster.empty()))) return; // We don't send repeated modifiers.
+            if (synth)
+            {
+                state = keymod;
+            }
             else
             {
-                if (changed || stream.k.ctlstat != keymod)
+                if (keybd_test_toggled(vkey::numlock )) state |= input::hids::NumLock, cs |= input::key::NumLockMode;
+                if (keybd_test_toggled(vkey::capslock)) state |= input::hids::CapsLock;
+                if (keybd_test_toggled(vkey::scrllock)) state |= input::hids::ScrlLock;
+                if (keybd_test_pressed(vkey::lcontrol)) state |= input::hids::LCtrl;
+                if (keybd_test_pressed(vkey::rcontrol)) state |= input::hids::RCtrl;
+                if (keybd_test_pressed(vkey::lalt    )) state |= input::hids::LAlt;
+                if (keybd_test_pressed(vkey::ralt    )) state |= input::hids::RAlt;
+                if (keybd_test_pressed(vkey::lwin    )) state |= input::hids::LWin;
+                if (keybd_test_pressed(vkey::rwin    )) state |= input::hids::RWin;
+                if (keybd_test_pressed(vkey::control )) mouse_capture(by::keybd); // Capture mouse if Ctrl modifier is pressed (to catch Ctrl+AnyClick outside the window).
+                else                                    mouse_release(by::keybd);
+                auto old_ls = keymod & input::hids::LShift;
+                auto old_rs = keymod & input::hids::RShift;
+                auto new_ls = keybd_test_pressed(vkey::lshift);
+                auto new_rs = keybd_test_pressed(vkey::rshift);
+                //log("old_ls=%% old_rs=%%  new_ls=%% new_rs=%% keymod=%%", (si32)old_ls, (si32)old_rs, (si32)new_ls, (si32)new_rs, utf::to_hex(keymod));
+                state |= old_ls | old_rs;
+                if (new_ls != !!old_ls || new_rs != !!old_rs) // MS Windows Shift+Shift bug workaround.
                 {
-                    stream.gears->ctlstate = keymod;
-                    stream.k.ctlstat = keymod;
-                    stream.m.ctlstat = keymod;
-                    stream.m.timecod = datetime::now();
-                    stream.m.changed++;
-                    stream.mouse(stream.m); // Fire mouse event to update kb modifiers.
+                    keymod = state;
+                    //todo unify
+                    if (!new_ls && !new_rs && old_ls && old_rs && chords.pushed[input::key::LeftShift].stamp < chords.pushed[input::key::RightShift].stamp) // Respect release order.
+                    {
+                        //if (old_rs && !new_rs) // RightShift released.
+                        {
+                            layer_timer_stop(master, timers::rightshift); // Stop catching RightShift release.
+                            keymod &= ~input::hids::RShift;
+                            keybd_send_state(vkey::shift, input::key::released, input::key::map::data(input::key::RightShift).scan, {}, {}, true);
+                        }
+                        //if (old_ls && !new_ls) // LeftShift released.
+                        {
+                            keymod &= ~input::hids::LShift;
+                            keybd_send_state(vkey::shift, input::key::released, input::key::map::data(input::key::LeftShift).scan, {}, {}, true);
+                        }
+                    }
+                    else
+                    {
+                        if (old_ls && !new_ls) // LeftShift released.
+                        {
+                            keymod &= ~input::hids::LShift;
+                            keybd_send_state(vkey::shift, input::key::released, input::key::map::data(input::key::LeftShift).scan, {}, {}, true);
+                        }
+                        if (old_rs && !new_rs) // RightShift released.
+                        {
+                            layer_timer_stop(master, timers::rightshift); // Stop catching RightShift release.
+                            keymod &= ~input::hids::RShift;
+                            keybd_send_state(vkey::shift, input::key::released, input::key::map::data(input::key::RightShift).scan, {}, {}, true);
+                        }
+                    }
+                    if (!old_ls && new_ls) // LeftShift pressed.
+                    {
+                        keymod |= input::hids::LShift;
+                        keybd_send_state(vkey::shift, input::key::pressed, input::key::map::data(input::key::LeftShift).scan, {}, {}, true);
+                    }
+                    if (!old_rs && new_rs) // RightShift pressed.
+                    {
+                        keymod |= input::hids::RShift;
+                        keybd_send_state(vkey::shift, input::key::pressed, input::key::map::data(input::key::RightShift).scan, {}, {}, true);
+                    }
+                    if (new_ls && new_rs) // Two Shifts pressed.
+                    {
+                        layer_timer_start(master, 33ms, timers::rightshift); // Try to catch RightShift release.
+                    }
+                    //log(" keymod=%%", utf::to_hex(keymod));
+                    if (virtcod == vkey::shift) return;
+                    state = keymod;
                 }
-                stream.k.extflag = extflag;
-                stream.k.virtcod = virtcod;
-                stream.k.scancod = scancod;
-                stream.k.pressed = pressed || repeated;
-                stream.k.keycode = input::key::xlat(virtcod, scancod, cs);
-                stream.k.cluster = cluster;
-                stream_keybd(stream.k);
+            }
+            auto changed = std::exchange(keymod, state) != keymod || synth;
+            auto& gear = *stream.gears;
+            if (changed || gear.ctlstat != keymod)
+            {
+                gear.ctlstat = keymod;
+                stream.m.ctlstat = keymod;
+                stream.m.timecod = datetime::now();
+                stream.m.changed++;
+                stream.mouse(stream.m); // Fire mouse event to update kb modifiers.
+            }
+            gear.payload = input::keybd::type::keypress;
+            gear.extflag = extflag;
+            gear.virtcod = virtcod;
+            gear.scancod = scancod;
+            auto keycode = input::key::xlat(virtcod, scancod, cs);
+            if ((gear.keystat == input::key::released || keycode != gear.keycode) && keystat == input::key::repeated) keystat = input::key::pressed; // LeftMod+RightMod press is treated by the OS as a repeated LeftMod.
+            gear.keystat = keystat;
+            gear.keycode = keycode;
+            gear.cluster = cluster;
+            gear.hscheme = scheme;
+            auto repeat_ctrl = keystat == input::key::repeated && (virtcod == vkey::shift    || virtcod == vkey::control || virtcod == vkey::alt
+                                                                || virtcod == vkey::capslock || virtcod == vkey::numlock || virtcod == vkey::scrllock
+                                                                || virtcod == vkey::lwin     || virtcod == vkey::rwin);
+            //print_vkstat("keybd_send_state");
+            if (changed || (!repeat_ctrl && (scancod != 0 || !cluster.empty()))) // We don't send repeated modifiers.
+            {
+                synth ? chords.build(gear)
+                      : chords.build(gear, [&](auto index){ return !keybd_test_pressed(index); });
+                stream_keybd(gear);
             }
         }
         void keybd_send_input(view utf8, byte payload_type)
         {
-            stream.k.payload = payload_type;
-            stream.k.cluster = utf8;
-            stream_keybd(stream.k);
-            stream.k.payload = input::keybd::type::keypress;
+            auto& gear = *stream.gears;
+            gear.payload = payload_type;
+            gear.cluster = utf8;
+            chords.reset(gear);
+            stream_keybd(gear);
         }
-        void keybd_press()
+        void IncreaseCellHeight(fp32 dir)
         {
-            auto keystat = keystate::unknown;
-            auto virtcod = 0;
-            keybd_read_input(keystat, virtcod);
-            if (keystat == keystate::unknown) return;
-            if (keystat == keystate::pressed || keystat == keystate::repeated)
+            if (!isbusy.exchange(true))
+            bell::enqueue(This(), [&, dir](auto& /*boss*/)
             {
-                if (keybd_test_pressed(vkey::capslock) && (keybd_test_pressed(vkey::up) || keybd_test_pressed(vkey::down))) // Change cell height by CapsLock+Up/DownArrow.
-                {
-                    auto dir = keybd_test_pressed(vkey::up) ? 1.f : -1.f;
-                    if (!isbusy.exchange(true))
-                    bell::enqueue(This(), [&, dir](auto& /*boss*/)
-                    {
-                        change_cell_size(faux, dir);
-                        sync_cellsz();
-                        update_gui();
-                    });
-                }
-            }
-            else // if (keystat == keystate::released)
+                change_cell_size(faux, dir);
+                sync_cellsz();
+                update_gui();
+            });
+        }
+        void ResetCellHeight()
+        {
+            bell::enqueue(This(), [&](auto& /*boss*/)
             {
-                if (virtcod == vkey::control)
-                {
-                    whlacc = {};
-                }
-            }
-            if (keystat == keystate::pressed)
+                auto dy = origsz - cellsz.y;
+                change_cell_size(faux, (fp32)dy, master.area.size / 2);
+                sync_cellsz();
+                update_gui();
+            });
+        }
+        void ToggleFullscreenMode()
+        {
+            bell::enqueue(This(), [&](auto& /*boss*/)
             {
-                if (keybd_test_pressed(vkey::alt) && keybd_test_pressed(vkey::enter)) // Toggle maximized mode by Alt+Enter.
-                {
-                    bell::enqueue(This(), [&](auto& /*boss*/)
-                    {
-                        if (fsmode != state::minimized) set_state(fsmode == state::maximized ? state::normal : state::maximized);
-                    });
-                }
-                else if (keybd_test_pressed(vkey::capslock) && keybd_test_pressed(vkey::control)) // Toggle antialiasing mode by Ctrl+CapsLock.
-                {
-                    bell::enqueue(This(), [&](auto& /*boss*/)
-                    {
-                        set_aa_mode(!gcache.aamode);
-                    });
-                }
-                else if (keybd_test_pressed(vkey::capslock) && keybd_test_pressed(vkey::key_0)) // Reset cell scaling.
-                {
-                    bell::enqueue(This(), [&](auto& /*boss*/)
-                    {
-                        auto dy = origsz - cellsz.y;
-                        change_cell_size(faux, (fp32)dy, master.area.size / 2);
-                        sync_cellsz();
-                        update_gui();
-                    });
-                }
-                else if (keybd_test_pressed(vkey::home) && keybd_test_pressed(vkey::end)) // Shutdown by LeftArrow+RightArrow.
-                {
-                    bell::enqueue(This(), [&](auto& /*boss*/)
-                    {
-                        window_shutdown();
-                    });
-                }
+                if (fsmode != state::minimized) set_state(fsmode == state::maximized ? state::normal : state::maximized);
+            });
+        }
+        void ToggleAntialiasingMode()
+        {
+            bell::enqueue(This(), [&](auto& /*boss*/)
+            {
+                set_aa_mode(!gcache.aamode);
+            });
+        }
+        void RollFontList(feed dir)
+        {
+            if (fcache.families.empty()) return;
+            auto& families = fcache.families;
+            if (dir == feed::fwd)
+            {
+                families.push_back(std::move(families.front()));
+                families.pop_front();
             }
-            //else if (keystat == keystate::released && fcache.families.size()) // Renumerate font list.
-            //{
-            //    auto flen = fcache.families.size();
-            //    auto index = virtcod == 0x30 ? fcache.families.size() - 1 : virtcod - 0x30;
-            //    if (index > 0 && index < flen)
-            //    {
-            //        auto& flist = fcache.families;
-            //        auto iter = flist.begin();
-            //        std::advance(iter, index);
-            //        flist.splice(flist.begin(), flist, iter, std::next(iter)); // Move it to the begining of the list.
-            //        set_font_list(flist);
-            //        print_font_list(true);
-            //    }
-            //}
+            else
+            {
+                families.push_front(std::move(families.back()));
+                families.pop_back();
+            }
+            set_font_list(families);
         }
         arch run_command(arch command, arch lParam)
         {
@@ -2982,19 +3097,18 @@ namespace netxs::gui
                 {
                     auto input_data = qiew{ (char*)data.ptr, data.len };
                     auto keybd = input::syskeybd{};
+                    if (stream.gears)
                     if (keybd.load(input_data))
                     {
+                        auto& gear = *stream.gears;
                         keymod = keybd.ctlstat;
                         stream.m.ctlstat = keymod;
-                        stream.k.ctlstat = keymod;
-                        stream.k.payload = keybd.payload;
-                        stream.k.extflag = keybd.extflag;
-                        stream.k.virtcod = keybd.virtcod;
-                        stream.k.scancod = keybd.scancod;
-                        stream.k.pressed = keybd.pressed;
-                        stream.k.keycode = keybd.keycode;
-                        stream.k.cluster = std::move(keybd.cluster);
-                        stream.keybd(stream.k);
+                        keybd.syncto(gear);
+                        gear.gear_id = gear.bell::id; // Restore gear id.
+                        if (wkeybd.filter<tier::preview>(gear))
+                        {
+                            stream.keybd(gear);
+                        }
                     }
                 }
                 else command = 0;
@@ -3006,7 +3120,7 @@ namespace netxs::gui
                 {
                     bell::enqueue(This(), [&](auto& /*boss*/)
                     {
-                        SIGNAL(tier::release, hids::events::keybd::focus::bus::on, seed, ({ .id = stream.gears->id, .solo = (si32)ui::pro::focus::solo::on, .item = This() }));
+                        bell::signal(tier::release, hids::events::focus::set, { .gear_id = stream.gears->id, .focus_type = solo::on });
                         if (mfocus.wheel) window_post_command(ipc::sync_state);
                     });
                 }
@@ -3020,14 +3134,14 @@ namespace netxs::gui
                 {
                     bell::enqueue(This(), [&](auto& /*boss*/)
                     {
-                        SIGNAL(tier::release, hids::events::keybd::focus::bus::off, seed, ({ .id = stream.gears->id }));
+                        auto seed = bell::signal(tier::release, hids::events::focus::off, { .gear_id = stream.gears->id });
                     });
                 }
             }
             else if (command == ipc::solo_focus)
             {
                 auto local_target = (ui32)master.hWnd;
-                auto target_list = mfocus.solo(local_target);
+                auto target_list = mfocus.set_solo(local_target);
                 for (auto target : target_list) window_send_command(target, ipc::drop_focus);
             }
             else if (command == ipc::sync_state)
@@ -3063,9 +3177,29 @@ namespace netxs::gui
         }
         void timer_event(arch eventid)
         {
-            bell::enqueue(This(), [&, eventid](auto& /*boss*/)
+            if (eventid == timers::clipboard)
             {
-                if (fsmode == state::minimized || eventid != timers::blink) return;
+                layer_timer_stop(master, timers::clipboard);
+                sync_clipboard();
+            }
+            else if (eventid == timers::rightshift)
+            {
+                auto new_rs = keybd_read_pressed(vkey::rshift);
+                if (!new_rs)
+                {
+                    layer_timer_stop(master, timers::rightshift);
+                    keybd_sync_state();
+                    //::GetKeyboardState(vkstat.data()); // Sync with thread kb state.
+                    //if (keymod & input::hids::RShift)
+                    //{
+                    //    keymod &= ~input::hids::RShift;
+                    //    keybd_send_state(vkey::shift, input::key::released, input::key::map::data(input::key::RightShift).scan, {}, {}, true);
+                    //}
+                }
+            }
+            else if (eventid == timers::blink) bell::enqueue(This(), [&](auto& /*boss*/)
+            {
+                if (fsmode == state::minimized) return;
                 auto visible = blinky.live;
                 if (mfocus.focused() && visible)
                 {
@@ -3099,6 +3233,11 @@ namespace netxs::gui
                 }
             });
         }
+        void book_clipboard()
+        {
+            auto random_delay = 150ms + datetime::milliseconds(os::process::id.second) / 2; // Delay in random range from 150ms upto 650ms.
+            layer_timer_start(master, random_delay, timers::clipboard);
+        }
         void sync_clipboard()
         {
             os::clipboard::sync(master.hWnd, stream, stream.intio, gridsz);
@@ -3109,7 +3248,7 @@ namespace netxs::gui
             auto inputfield_request = ui::e2::command::request::inputfields.param({ .gear_id = stream.gears->id, .acpStart = acpStart, .acpEnd = acpEnd });
             stream.send_input_fields_request(*this, inputfield_request);
             // We can't sync with the ui here. This causes a deadlock.
-            //SIGNAL(tier::general, ui::e2::command::request::inputfields, inputfield_request, ({ .gear_id = stream.gears->id, .acpStart = acpStart, .acpEnd = acpEnd })); // pro::focus retransmits as a tier::release for focused objects.
+            //auto inputfield_request = bell::signal(tier::general, ui::e2::command::request::inputfields, { .gear_id = stream.gears->id, .acpStart = acpStart, .acpEnd = acpEnd }); // pro::focus retransmits as a tier::release for focused objects.
             fields = inputfield_request.wait_for();
             auto win_area = blinky.area;
             if (fields.empty()) fields.push_back(win_area);
@@ -3154,14 +3293,16 @@ namespace netxs::gui
                 {
                     zoom_by_wheel(gear.whlfp, faux);
                 };
-                LISTEN(tier::release, hids::events::keybd::focus::bus::any, seed)
+                LISTEN(tier::release, hids::events::focus::any, seed)
                 {
-                    auto deed = this->bell::template protos<tier::release>();
-                    if (seed.guid == decltype(seed.guid){}) // To avoid focus tree infinite looping.
+                    auto deed = this->bell::protos(tier::release);
+                    auto state = deed == hids::events::focus::set.id;
+                    stream.sysfocus.send(stream.intio, seed.gear_id, state, seed.focus_type);
+                    if (state)
                     {
-                        seed.guid = os::process::id.second;
+                        drykey = true; // Trigger to send a hotkey scheme packet.
+                        window_post_command(ipc::sync_state);
                     }
-                    stream.focusbus.send(stream.intio, seed.id, seed.guid, netxs::events::subindex(deed));
                 };
                 LISTEN(tier::release, e2::form::prop::ui::title, head_foci)
                 {
@@ -3179,6 +3320,7 @@ namespace netxs::gui
                 {
                     update_footer();
                 };
+                bell::signal(tier::anycast, e2::form::upon::started, This());
             }
             auto winio = std::thread{[&]
             {
@@ -3674,7 +3816,7 @@ namespace netxs::gui
         //todo static
         bool keybd_read_pressed(si32 virtcod) { return !!(::GetAsyncKeyState(virtcod) & 0x8000); }
         bool keybd_read_toggled(si32 virtcod) { return !!(::GetAsyncKeyState(virtcod) & 0x0001); }
-        void keybd_read_input(si32& keystat, si32& virtcod)
+        bool keybd_read_input()
         {
             union key_state_t
             {
@@ -3690,14 +3832,15 @@ namespace netxs::gui
                 } v;
             };
             auto param = key_state_t{ .token = (ui32)winmsg.lParam };
-            virtcod = std::clamp((si32)winmsg.wParam, 0, 255);
-            keystat = param.v.state == 0 ? keystate::pressed
-                    : param.v.state == 1 ? keystate::repeated
-                    : param.v.state == 3 ? keystate::released : keystate::unknown;
+            if (param.v.state == 2/*unknown*/) return faux;
+            auto virtcod = std::clamp((si32)winmsg.wParam, 0, 255);
+            // When RightMod is pressed while the LeftMod is pressed it is treated as repeating.
+            auto keystat = param.v.state == 0 ? input::key::pressed
+                         : param.v.state == 1 ? input::key::repeated
+                         /*param.v.state ==3*/: input::key::released;
             auto extflag = param.v.extended;
             auto scancod = param.v.scancode;
             auto keytype = 0;
-            if (keystat == keystate::unknown) return;
             //log("Vkey=", utf::to_hex(virtcod), " scancod=", utf::to_hex(scancod), " pressed=", pressed ? "1":"0", " repeat=", repeat ? "1":"0");
             //todo process Alt+Numpads on our side: use TSF message pump.
             //if (auto rc = os::nt::TranslateMessageEx(&winmsg, 1/*It doesn't work as expected: Do not process Alt+Numpad*/)) // ::TranslateMessageEx() do not update IME.
@@ -3717,16 +3860,14 @@ namespace netxs::gui
             if (!mfocus.focused()) // ::PeekMessageW() could call wind_proc() inside for any non queued msgs like wind_proc(WM_KILLFOCUS).
             {
                 toWIDE.clear();
-                keystat = keystate::unknown;
-                return;
+                return faux;
             }
             if (virtcod == vkey::packet && toWIDE.size())
             {
                 auto c = toWIDE.back();
                 if (c >= 0xd800 && c <= 0xdbff)
                 {
-                    keystat = keystate::unknown;
-                    return; // Incomplete surrogate pair in VT_PACKET stream.
+                    return faux; // Incomplete surrogate pair in VT_PACKET stream.
                 }
             }
             ::GetKeyboardState(vkstat.data()); // Sync with thread kb state.
@@ -3736,20 +3877,20 @@ namespace netxs::gui
                 if (keytype == 1)
                 {
                     utf::to_utf(toWIDE, toUTF8);
-                    if (keystat == keystate::released) // Only Alt+Numpad fires on release.
+                    if (keystat == input::key::released) // Only Alt+Numpad fires on release.
                     {
-                        keybd_send_state({}, keystat, virtcod, scancod, extflag); // Release Alt. Send empty string.
+                        keybd_send_state(virtcod, keystat, scancod, extflag); // Release Alt. Send empty string.
                         keybd_send_input(toUTF8, input::keybd::type::imeinput); // Send Alt+Numpads result.
                         toWIDE.clear();
                         //print_vkstat("Alt+Numpad");
-                        return;
+                        return true;
                     }
                 }
-                keybd_send_state(toUTF8, keystat, virtcod, scancod, extflag);
+                keybd_send_state(virtcod, keystat, scancod, extflag, toUTF8);
             }
             toWIDE.clear();
             //print_vkstat("keybd_read_input");
-            return;
+            return true;
         }
         void window_message_pump()
         {
@@ -3760,7 +3901,7 @@ namespace netxs::gui
                 if (mfocus.wheel && (winmsg.message == WM_KEYDOWN    || winmsg.message == WM_KEYUP || // Ignore all kb events in unfocused state.
                                      winmsg.message == WM_SYSKEYDOWN || winmsg.message == WM_SYSKEYUP))
                 {
-                    keybd_press();
+                    keybd_read_input();
                     sys_command(syscmd::update);
                 }
                 else
@@ -3771,10 +3912,10 @@ namespace netxs::gui
             }
             tslink.stop();
         }
-        void keybd_sync_state()
+        void keybd_sync_state(si32 virtcod = {})
         {
             ::GetKeyboardState(vkstat.data());
-            keybd_send_state();
+            keybd_send_state(virtcod);
             //print_vkstat("keybd_sync_state");
         }
         void keybd_read_vkstat() // Loading without sending. Will be sent after the focus bus is turned on.
@@ -3948,11 +4089,11 @@ namespace netxs::gui
                 static auto xbttn = [](auto wParam){ return hi(wParam) == XBUTTON1 ? bttn::xbutton1 : bttn::xbutton2; };
                 static auto moved = [](auto lParam){ auto& p = *((WINDOWPOS*)lParam); return !(p.flags & SWP_NOMOVE); };
                 static auto coord = [](auto lParam){ auto& p = *((WINDOWPOS*)lParam); return twod{ p.x, p.y }; };
-                static auto hover_win = testy<HWND>{};
+                static auto hover_win = HWND{};
                 static auto hover_rec = TRACKMOUSEEVENT{ .cbSize = sizeof(TRACKMOUSEEVENT), .dwFlags = TME_LEAVE, .dwHoverTime = HOVER_DEFAULT };
                 switch (msg)
                 {
-                    case WM_MOUSEMOVE:        if (hover_win(hWnd)) ::TrackMouseEvent((hover_rec.hwndTrack = hWnd, &hover_rec));
+                    case WM_MOUSEMOVE:        if (std::exchange(hover_win, hWnd) != hover_win) ::TrackMouseEvent((hover_rec.hwndTrack = hWnd, &hover_rec));
                                               w->mouse_moved();                                  break; //todo mouse events are broken when IME is active (only work on lower rotated monitor half). TSF message pump?
                     case WM_TIMER:            w->timer_event(wParam);                            break;
                     case WM_MOUSELEAVE:       w->mouse_leave(); hover_win = {};                  break;
@@ -3972,7 +4113,7 @@ namespace netxs::gui
                     case WM_KILLFOCUS:        if (wParam != (arch)hWnd) w->focus_event(faux);    break; // Don't refocus.
                     case WM_COPYDATA:         stat = w->run_command(ipc::cmd_w_data, lParam);    break; // Receive command with data.
                     case WM_USER:             stat = w->run_command(wParam, lParam);             break; // Receive command.
-                    case WM_CLIPBOARDUPDATE:  w->sync_clipboard();                               break;
+                    case WM_CLIPBOARDUPDATE:  w->book_clipboard();                               break; // Schedule clipboard update.
                     case WM_INPUTLANGCHANGE:  w->keybd_sync_layout();                            break;
                     case WM_SETTINGCHANGE:    w->sync_os_settings();                             break;
                     case WM_WINDOWPOSCHANGED: if (moved(lParam)) w->check_window(coord(lParam)); break; // Check moving only. Windows moves our layers the way they wants without our control.
@@ -4070,40 +4211,40 @@ namespace netxs::gui
         window(auto&& ...Args)
             : winbase{ Args... }
         { }
-        bool layer_create(layer& /*s*/, winbase* /*host_ptr*/ = nullptr, twod /*win_coord*/ = {}, twod /*grid_size*/ = {}, dent /*border_dent*/ = {}, twod /*cell_size*/ = {}) { return true; }
-        //void layer_delete(layer& /*s*/) {}
         bool keybd_test_pressed(si32 /*virtcod*/) { return true; /*!!(vkstat[virtcod] & 0x80);*/ }
         bool keybd_test_toggled(si32 /*virtcod*/) { return true; /*!!(vkstat[virtcod] & 0x01);*/ }
         bool keybd_read_pressed(si32 /*virtcod*/) { return true; /*!!(::GetAsyncKeyState(virtcod) & 0x8000);*/ }
         bool keybd_read_toggled(si32 /*virtcod*/) { return true; /*!!(::GetAsyncKeyState(virtcod) & 0x0001);*/ }
-        void keybd_read_input(si32& /*keystat*/, si32& /*virtcod*/) {}
+        bool keybd_read_input() { return true; }
         void keybd_wipe_vkstat() {}
         void keybd_read_vkstat() {}
+        void keybd_send_block(view /*block*/) {}
         void keybd_sync_layout() {}
+        void keybd_sync_state(si32 /*virtcod*/) {}
+        bool layer_create(layer& /*s*/, winbase* /*host_ptr*/ = nullptr, twod /*win_coord*/ = {}, twod /*grid_size*/ = {}, dent /*border_dent*/ = {}, twod /*cell_size*/ = {}) { return true; }
         void layer_move_all() {}
         void layer_present(layer& /*s*/) {}
+        void layer_timer_start(layer& /*s*/, span /*elapse*/, ui32 /*eventid*/) {}
+        void layer_timer_stop(layer& /*s*/, ui32 /*eventid*/) {}
+        bits layer_get_bits(layer& /*s*/, bool /*zeroize*/ = faux) { return bits{}; }
         void window_sync_taskbar(si32 /*new_state*/) {}
         rect window_get_fs_area(rect window_area) { return window_area; }
         void window_send_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         void window_post_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
-        void window_make_foreground() {}
-        twod mouse_get_pos() { return twod{}; }
-        void mouse_capture(si32 /*captured_by*/) {}
-        void mouse_release(si32 /*released_by*/) {}
-        void mouse_catch_outside() {}
         cont window_recv_command(arch /*lParam*/) { return cont{}; }
+        void window_make_foreground() {}
         void window_make_focused() {}
         void window_make_exposed() {}
         void window_message_pump() {}
         void window_initilize() {}
         void window_shutdown() {}
         void window_cleanup() {}
-        void sync_os_settings() {}
-        void layer_timer_start(layer& /*s*/, span /*elapse*/, ui32 /*eventid*/) {}
-        void layer_timer_stop(layer& /*s*/, ui32 /*eventid*/) {}
-        bits layer_get_bits(layer& /*s*/, bool /*zeroize*/ = faux) { return bits{}; }
         void window_set_title(view /*utf8*/) {}
-        void keybd_send_block(view /*block*/) {}
+        twod mouse_get_pos() { return twod{}; }
+        void mouse_capture(si32 /*captured_by*/) {}
+        void mouse_release(si32 /*released_by*/) {}
+        void mouse_catch_outside() {}
+        void sync_os_settings() {}
     };
 }
 

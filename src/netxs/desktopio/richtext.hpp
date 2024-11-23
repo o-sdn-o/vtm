@@ -47,7 +47,7 @@ namespace netxs::ui
     {
         rect textline{ }; // flow: Textline placeholder.
         si32 textsize{ }; // flow: Full textline length (1D).
-        side boundary{ }; // flow: Affected area by the text output.
+        rect boundary{ }; // flow: Affected area by the text output.
         si32 curpoint{ }; // flow: Current substring start position.
         si32 caret_mx{ }; // flow: Maximum x-coor value on the visible area.
         twod caretpos{ }; // flow: Current virtual (w/o style applied) cursor position.
@@ -170,7 +170,7 @@ namespace netxs::ui
             //todo revise: It is actually only for the coor.y that is negative.
 
             printout.coor += cliprect.coor;
-            boundary |= printout;
+            minmax(printout);
 
             if constexpr (!std::is_same_v<P, noop>)
             {
@@ -244,13 +244,13 @@ namespace netxs::ui
             : flow{ pagerect.size }
         { }
 
-        void   vsize(si32 height) { pagerect.size.y = height;  } // flow: Set client full height.
-        void    size(twod size)   { pagerect.size = size; } // flow: Set client full size.
-        void    full(rect area)   { pagerect = area;      } // flow: Set client full rect.
-        auto&   full() const      { return pagerect;      } // flow: Get client full rect reference.
-        auto& minmax() const      { return boundary;      } // flow: Return the output range.
-        void  minmax(twod p)      { boundary |= p;        } // flow: Register twod.
-        void  minmax(rect r)      { boundary |= r;        } // flow: Register rect.
+        void   vsize(si32 height) { pagerect.size.y = height;      } // flow: Set client full height.
+        void    size(twod size)   { pagerect.size = size;          } // flow: Set client full size.
+        void    full(rect area)   { pagerect = area;               } // flow: Set client full rect.
+        auto&   full() const      { return pagerect;               } // flow: Get client full rect reference.
+        auto& minmax() const      { return boundary;               } // flow: Return the output range.
+        void  minmax(twod p)      { boundary |= rect{ p, dot_11 }; } // flow: Register twod (cursor).
+        void  minmax(rect r)      { boundary |= r;                 } // flow: Register rect.
 
         // flow: Sync paragraph style.
         template<class T>
@@ -401,7 +401,7 @@ namespace netxs::ui
         twod up () // flow: Register cursor position.
         {
             auto cp = flow::cp();
-            boundary |= cp; /* |= cursor*/;
+            minmax(cp); /* |= cursor*/;
             return cp;
         }
         void zz (twod offset = dot_00)
@@ -437,7 +437,7 @@ namespace netxs::ui
         {
             flow::zz(offset);
             flow::sc();
-            boundary = caretpos;
+            boundary = { .coor = caretpos };
         }
         void reset(flow const& canvas) // flow: Reset flow state.
         {
@@ -559,6 +559,11 @@ namespace netxs::ui
         auto substr(si32 at, si32 width = netxs::si32max) const { return shadow().substr(at, width);       }
         void trimto(si32 max_size)                              { if (length() > max_size) crop(max_size); }
         void resize(si32 oversize)                              { if (oversize > length()) crop(oversize); }
+        auto take_piece(si32 at, si32 width = netxs::si32max) const
+        {
+            if (width == netxs::si32max) width = length() - at;
+            return rich{ core::crop(at, width) };
+        }
         auto empty()
         {
             return canvas.empty();
@@ -575,7 +580,7 @@ namespace netxs::ui
                 if (*next != blank) break;
                 tail = next;
             }
-            auto new_size = static_cast<si32>(tail - head);
+            auto new_size = (si32)(tail - head);
             if (max_size && max_size < new_size) new_size = max_size;
             if (new_size != length()) crop(new_size);
         }
@@ -1403,7 +1408,50 @@ namespace netxs::ui
                                                     len.y * len.x);
             while (dst != end) *dst++ = blank;
         }
-
+        //todo make it 2D
+        // rich: Pop glyph matrix.
+        auto pop_cluster()
+        {
+            auto cluster = netxs::text{};
+            auto size = (si32)core::canvas.size();
+            if (size)
+            {
+                auto& back = canvas.back();
+                auto [w, h, x, y] = back.whxy();
+                if constexpr (debugmode) log("\tw=%%, h=%%, x=%%, y=%%", w, h, x, y);
+                if (w && x == w && size >= w)
+                {
+                    auto current_x = w - 1;
+                    auto head = canvas.rbegin() + 1;
+                    auto tail = head + current_x;
+                    while (head != tail)
+                    {
+                        auto& c = *head;
+                        if (!c.same_txt(back) || !c.like(back))
+                        {
+                            break;
+                        }
+                        auto [cw, ch, cx, cy] = c.whxy();
+                        if constexpr (debugmode) log("\t\tcurrent_x=%%, cw=%%, ch=%%, cx=%%, cy=%%", current_x, cw, ch, cx, cy);
+                        if (cw != w || ch != h || cy != y || cx != current_x)
+                        {
+                            break;
+                        }
+                        head++;
+                        current_x--;
+                    }
+                    if (head == tail)
+                    {
+                        cluster = back.txt();
+                        if (cluster.size())
+                        {
+                            core::crop(size - w);
+                        }
+                    }
+                }
+            }
+            return cluster;
+        }
         //todo unify
         auto& at(si32 p) const
         {
@@ -1439,7 +1487,27 @@ namespace netxs::ui
         para(id_t id, auto utf8)      { brush.link(id); ansi::parse(utf8, this);               }
         para(auto utf8)               {                 ansi::parse(utf8, this);               }
         auto& operator  = (auto utf8) { wipe(brush);    ansi::parse(utf8, this); return *this; }
-        auto& operator += (auto utf8) {                 ansi::parse(utf8, this); return *this; }
+        auto& operator += (auto utf8)
+        {
+            if (parser::defer && caret && caret == length())
+            {
+                //if constexpr (debugmode) log("try to reassemble cluster=", lyric->back().txt());
+                auto last_cluster = lyric->pop_cluster();
+                if (caret != length())
+                {
+                    caret = length();
+                    auto reassembled_cluster = text{};
+                    reassembled_cluster.reserve(last_cluster.length() + utf8.length());
+                    reassembled_cluster += last_cluster;
+                    reassembled_cluster += utf8;
+                    ansi::parse(reassembled_cluster, this);
+                    //if constexpr (debugmode) log("\treassembled_cluster=", utf::buffer_to_hex(reassembled_cluster, true));
+                    return *this;
+                }
+            }
+            ansi::parse(utf8, this);
+            return *this;
+        }
 
         operator writ const& () const { return locus; }
 
@@ -1452,20 +1520,18 @@ namespace netxs::ui
             return shadow().substr(start, width);
         }
         bool   bare() const { return locus.bare();    } // para: Does the paragraph have no locator.
-        auto length() const { return lyric->size().x; } // para: Return printable length.
+        si32 length() const { return lyric->size().x; } // para: Return printable length. //todo Apple clang doesn't get auto return.
         auto  empty() const { return !length();       } // para: Return true if empty.
         auto   size() const { return lyric->size();   } // para: Return 2D volume size.
         auto&  back() const { return brush;           } // para: Return current brush.
         bool   busy() const { return length() || !parser::empty() || brush.busy(); } // para: Is it filled.
-        void   ease()   { brush.nil(); lyric->each([&](auto& c){ c.clr(brush); });  } // para: Reset color for all text.
-        void   link(id_t id)         { lyric->each([&](auto& c){ c.link(id);   });  } // para: Set object ID for each cell.
-        void   wipe(cell c = cell{}) // para: Clear the text and locus, and reset SGR attributes.
+        void   ease()        { lyric->each([&](auto& c){ c.clr({});  });  } // para: Reset color for all text.
+        void   link(id_t id) { lyric->each([&](auto& c){ c.link(id); });  } // para: Set object ID for each cell.
+        template<bool ResetStyle = faux>
+        void wipe(cell c = cell{}) // para: Clear the text and locus, and reset SGR attributes.
         {
-            parser::reset(c);
+            parser::reset<ResetStyle>(c);
             caret = 0;
-            //todo revise
-            //style.rst();
-            //proto.clear();
             locus.kill();
             lyric->kill();
         }
@@ -1480,7 +1546,7 @@ namespace netxs::ui
             else if (!busy()) locus.push(cmd);
         }
         // para: Convert into the screen-adapted sequence (unfold, remove zerospace chars, etc.).
-        void data(si32 count, grid const& proto) override
+        void data(si32 count, core::body const& proto) override
         {
             lyric->splice(caret, count, proto, cell::shaders::full);
             caret += count;
@@ -1644,30 +1710,31 @@ namespace netxs::ui
             caret_check();
             if (caret != length())
             {
+                auto& line = content();
+                auto left = line.take_piece(0, caret);
+                auto right = line.take_piece(caret);
+                std::swap(left, line);
+                parser::defer = true;
+                auto prev_caret = caret;
+                operator+=(utf8);
+                caret = line.length();
                 if (inserting)
                 {
-                    auto coor = caret;
-                    auto size = length();
-                    caret = size;
-                    operator+=(utf8);
-                    auto& line = content();
-                    auto  grow = length() - size;
-                    line.scroll(coor, size - coor, grow);
-                    caret = coor + grow;
+                    line.rich::insert(caret, right);
                 }
                 else
                 {
-                    operator+=(utf8);
-                    auto size = length();
-                    if (caret < size)
+                    auto delta = caret - prev_caret;
+                    if (delta < right.length())
                     {
-                        auto [w, h, x, y] = at(caret).whxy();
+                        auto [w, h, x, y] = right.begin(delta)->whxy();
                         if (w != 1 && x != 1) // Broken cluster.
                         {
-                            auto& line = content();
-                            size--;
-                            line.scroll(caret, 1, size - caret);
-                            line.crop(size);
+                            delta++;
+                        }
+                        if (delta < right.length())
+                        {
+                            line.rich::insert(caret, right.take_piece(delta));
                         }
                     }
                 }
@@ -1778,10 +1845,10 @@ namespace netxs::ui
     class rope
     {
         using iter = std::list<netxs::sptr<para>>::const_iterator;
-        iter source;
-        si32 prefix;
-        iter finish;
-        si32 suffix;
+        iter source; // rope: First segment.
+        si32 prefix; // rope: .
+        iter finish; // rope: Last segment (inclusive).
+        si32 suffix; // rope: .
         twod volume; // Rope must consist of text lines of the same height.
 
         rope(iter& source, si32 prefix, iter& finish, si32 suffix, twod volume)
@@ -2034,14 +2101,14 @@ namespace netxs::ui
         // page: Clear the list of paragraphs.
         page& clear(bool preserve_state = faux)
         {
-            if (!preserve_state) parser::brush.reset();
+            if (!preserve_state) parser::reset();
             parts.clear();
             batch.resize(1);
             layer = batch.begin();
             index = 0;
             auto& item = **layer;
             item.id(index);
-            item.wipe(parser::brush);
+            item.wipe<true>(parser::brush);
             reindex();
             return *this;
         }
@@ -2126,7 +2193,7 @@ namespace netxs::ui
                 ansi::parser::post(cluster);
             }
         }
-        void data(si32 count, grid const& proto) override
+        void data(si32 count, core::body const& proto) override
         {
             auto& item = **layer;
             item.lyric->splice(item.caret, count, proto, cell::shaders::full);
@@ -2134,7 +2201,7 @@ namespace netxs::ui
         }
         auto& current()       { return **layer; } // page: Access to the current paragraph.
         auto& current() const { return **layer; } // page: RO access to the current paragraph.
-        auto  size()    const { return static_cast<si32>(batch.size()); }
+        auto  size()    const { return (si32)batch.size(); }
         // page: Estimated page size calculation (use fake printing for accurate calc).
         auto  limits() const
         {
@@ -2210,11 +2277,11 @@ namespace netxs::ui
                          if (c =='\\') { data.push_back('\\'); data.push_back('\\'); }
                     else if (c == '{') { data.push_back('\\'); data.push_back('{' ); }
                     else if (c == '}') { data.push_back('\\'); data.push_back('}' ); }
-                    else if (c < 0x80) { data.push_back(static_cast<char>(c)); }
+                    else if (c < 0x80) { data.push_back((char)c); }
                     else
                     {
                         data.push_back('\\'); data.push_back('u');
-                        data += std::to_string(static_cast<si16>(c));
+                        data += std::to_string((si16)c);
                         data.push_back('?');
                     }
                 }
@@ -2650,7 +2717,7 @@ namespace netxs::ui
             };
             object.stream(publish);
             auto& cover = flow::minmax();
-            size.y = cover.height() + 1;
+            size.y = cover.size.y;
             return cp;
         }
         // face: Reflow text page on the canvas and hold position
@@ -2675,7 +2742,7 @@ namespace netxs::ui
                     // Don't tie the first line if it's the only one. Make one step forward.
                     if (anker.y == 0
                      && anker.y == flow::cp().y
-                     && cover.height() > 1)
+                     && cover.size.y > 1)
                     {
                         //todo? the increment is removed bcos it shifts mc one row down on Ctrl+O and back
                         //basis.y++;
@@ -2690,7 +2757,7 @@ namespace netxs::ui
                 }
                 else
                 {
-                    basis.y = std::clamp(basis.y, -cover.b, region.size.y - cover.t - 1);
+                    basis.y = std::clamp(basis.y, -(cover.coor.y + cover.size.y - 1), region.size.y - cover.coor.y - 1);
                 }
 
                 moved = faux;

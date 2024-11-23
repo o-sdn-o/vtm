@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cstring> // std::memcpy
 #include <utility> // std::cmp_equal
+#include <numeric> // std::accumulate
 
 #ifndef faux
     #define faux (false)
@@ -111,6 +112,14 @@ namespace netxs
         Y_only = 1 << 1,
         all    = X_only | Y_only,
     };
+
+    struct solo
+    {
+        static constexpr auto off = 0; // Allow group focus.
+        static constexpr auto on  = 1; // Set unique focus.
+        static constexpr auto mix = 2; //todo define (used by Tile).
+    };
+
     constexpr auto operator & (axes l, axes r) { return static_cast<si32>(l) & static_cast<si32>(r); }
 
     template<class T>
@@ -1028,11 +1037,11 @@ namespace netxs
         using twod = T;
         using type = disintegrate<twod>;
 
-        auto gain = static_cast<ui16>( 0 );
-        auto   dx = static_cast<si32>( p1.x - p0.x );
-        auto   dy = static_cast<si32>( p1.y - p0.y );
-        auto   lx = static_cast<ui32>( std::abs(dx) );
-        auto   ly = static_cast<ui32>( std::abs(dy) );
+        auto gain = ui16{};
+        auto   dx = (si32)(p1.x - p0.x);
+        auto   dy = (si32)(p1.y - p0.y);
+        auto   lx = (ui32)std::abs(dx);
+        auto   ly = (ui32)std::abs(dy);
 
         rect = rect.normalize();
         auto& coor = rect.coor;

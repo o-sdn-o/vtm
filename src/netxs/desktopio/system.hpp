@@ -275,7 +275,7 @@ namespace netxs::os
                         }
                     }
 
-                    void operator=(refs const&) = delete;
+                    void operator = (refs const&) = delete;
                     refs(refs const&)           = delete;
                     refs(refs&& other)
                         :           ntdll_dll{ other.ntdll_dll           },
@@ -427,10 +427,10 @@ namespace netxs::os
             auto ioctl(DWORD dwIoControlCode, fd_t hDevice, I&& send = {}, O&& recv = {}) -> NTSTATUS
             {
                 auto BytesReturned   = DWORD{};
-                auto lpInBuffer      = std::is_same_v<std::decay_t<I>, noop> ? nullptr : static_cast<void*>(&send);
-                auto nInBufferSize   = std::is_same_v<std::decay_t<I>, noop> ? 0       : static_cast<DWORD>(sizeof(send));
-                auto lpOutBuffer     = std::is_same_v<std::decay_t<O>, noop> ? nullptr : static_cast<void*>(&recv);
-                auto nOutBufferSize  = std::is_same_v<std::decay_t<O>, noop> ? 0       : static_cast<DWORD>(sizeof(recv));
+                auto lpInBuffer      = std::is_same_v<std::decay_t<I>, noop> ? nullptr : (void*)(&send);
+                auto nInBufferSize   = std::is_same_v<std::decay_t<I>, noop> ? 0       : (DWORD)(sizeof(send));
+                auto lpOutBuffer     = std::is_same_v<std::decay_t<O>, noop> ? nullptr : (void*)(&recv);
+                auto nOutBufferSize  = std::is_same_v<std::decay_t<O>, noop> ? 0       : (DWORD)(sizeof(recv));
                 auto lpBytesReturned = &BytesReturned;
                 auto ok = ::DeviceIoControl(hDevice,
                                             dwIoControlCode,
@@ -522,7 +522,7 @@ namespace netxs::os
                 auto cmd_shim = args.size() && [&]
                 {
                     auto cmd = args.front();
-                    utf::to_low(cmd);
+                    utf::to_lower(cmd);
                     return cmd == "cmd"
                         || cmd == "cmd.exe"
                         || cmd.ends_with("\\cmd")
@@ -643,7 +643,7 @@ namespace netxs::os
                     }
                     if (c.inv()) std::swap(f, b);
                     if (c.und()) std::swap(f, b);  // Interferes with the menu scrollbar mimics.
-                    auto attr = static_cast<ui16>((b << 4) | f);
+                    auto attr = (ui16)((b << 4) | f);
                     // LEADING/TRAILINGs only for OEMs.
                     //if (c.und()) attr |= COMMON_LVB_UNDERSCORE;  // LVB attributes historically available only for DBCS code pages.
                     //if (c.ovr()) attr |= COMMON_LVB_GRID_HORIZONTAL;
@@ -742,9 +742,10 @@ namespace netxs::os
                     : public ansi::parser
                 {
                     using redo = std::list<std::pair<deco, ansi::mark>>;
+                    using body = core::body;
 
                     redo stack; // vtparser: Style state stack.
-                    grid cache; // vtparser: Temp buffer for console cells.
+                    body cache; // vtparser: Temp buffer for console cells.
                     twod coord; // vtparser: Current cursor position inside console::buffer.
                     twod saved; // vtparser: Saved cursor position.
                     bool shown; // vtparser: Cursor visibility state.
@@ -944,7 +945,7 @@ namespace netxs::os
                         }
                         coord = std::clamp(coord, dot_00, console::buffer - dot_11);
                     }
-                    void data(si32 count, grid const& proto)
+                    void data(si32 count, core::body const& proto)
                     {
                         auto start = coord;
                         auto panel = std::max(dot_11, console::buffer);
@@ -1204,7 +1205,7 @@ namespace netxs::os
                 os::close(token);
                 if (rc && name.size())
                 {
-                    auto user_name = utf::to_low(utf::to_utf(name + L'@' + domain));
+                    auto user_name = utf::to_lower(utf::to_utf(name + L'@' + domain));
                     auto user_id = sid.empty() ? "unknown"s : sid;
                     return std::pair{ user_name, user_id };
                 }
@@ -1856,8 +1857,9 @@ namespace netxs::os
                 utf::split(subset, '\0', [&](qiew rec)
                 {
                     if (rec.empty()) return;
-                    auto var = rec.substr(0, rec.find('=', 1)); // 1: Skip the first char to support cmd.exe's strange subdirs like =A:=A:\Dir.
-                    auto val = rec.substr(var.size() + 1/*=*/);
+                    auto pos = rec.find('=', 1); // 1: Skip the first char to support cmd.exe's strange subdirs like =A:=A:\Dir.
+                    auto var = rec.substr(0, pos);
+                    auto val = rec.substr(pos + 1/*=*/);
                     env_map[var] = val;
                 });
             };
@@ -1898,6 +1900,15 @@ namespace netxs::os
                 auto val = value.str();
                 ok(::setenv(var.c_str(), val.c_str(), 1), "::setenv()", os::unexpected);
             #endif
+        }
+        // os::env: Set envvar value.
+        auto set(qiew variable_value)
+        {
+            if (variable_value.size() < 2) return;
+            auto pos = variable_value.find('=', 1); // 1: Skip the first char to support cmd.exe's strange subdirs like =A:=A:\Dir.
+            auto var = variable_value.substr(0, pos);
+            auto val = variable_value.substr(pos + 1/*=*/);
+            set(var, val);
         }
         // os::env: Unset envvar.
         auto unset(qiew variable)
@@ -1954,7 +1965,7 @@ namespace netxs::os
                 auto chars = text(255, '\0');
                 auto error = ::gethostname(chars.data(), chars.size());
                 auto usrid = ::geteuid();
-                #if defined(__BSD__)
+                #if defined(__BSD__) || defined(__ANDROID__)
                 auto uname = ::getlogin(); // username associated with a session, even if it has no controlling terminal.
                 #else
                 auto uname = ::cuserid(nullptr);
@@ -1972,6 +1983,13 @@ namespace netxs::os
             auto err = std::error_code{};
             auto cwd = std::filesystem::current_path(err).string();
             return cwd;
+        }
+        // os::env: Set current working directory.
+        auto cwd(text path)
+        {
+            auto err = std::error_code{};
+            if (path.size()) fs::current_path(path, err);
+            return !!err;
         }
     }
 
@@ -2075,7 +2093,7 @@ namespace netxs::os
                         sync(error, mime::textonly);
                         return;
                     }
-                    std::this_thread::yield();
+                    os::sleep(15ms);
                 }
                 if (auto seqno = ::GetClipboardSequenceNumber(); seqno != os::clipboard::sequence)
                 {
@@ -2380,11 +2398,12 @@ namespace netxs::os
 
         auto getid()
         {
-            #if defined(_WIN32)
-                auto id = static_cast<ui32>(::GetCurrentProcessId());
-            #else
-                auto id = static_cast<ui32>(::getpid());
-            #endif
+            auto id = (ui32)
+                #if defined(_WIN32)
+                    ::GetCurrentProcessId();
+                #else
+                    ::getpid();
+                #endif
             ui::console::id = std::pair{ id, datetime::now() };
             return ui::console::id;
         }
@@ -2507,10 +2526,10 @@ namespace netxs::os
                 auto buffer = wide(MAX_PATH, '\0');
                 while (buffer.size() <= 32768)
                 {
-                    auto length = ::GetModuleFileNameExW(handle,         // hProcess
-                                                         NULL,           // hModule
-                                                         buffer.data(),  // lpFilename
-                                      static_cast<DWORD>(buffer.size()));// nSize
+                    auto length = ::GetModuleFileNameExW(handle,        // hProcess
+                                                         NULL,          // hModule
+                                                         buffer.data(), // lpFilename
+                                                  (DWORD)buffer.size());// nSize
                     if (length == 0) break;
                     if (buffer.size() > length + 1)
                     {
@@ -2950,11 +2969,64 @@ namespace netxs::os
             auto done = remove() || rename();
             return done;
         }
+        auto delete_reg_keys()
+        {
+            #if defined(_WIN32)
+            auto subtree1 = L"Directory\\shell\\vtm";
+            auto subtree2 = L"Directory\\Background\\shell\\vtm";
+            ::RegDeleteTreeW(HKEY_CLASSES_ROOT, subtree1);
+            ::RegDeleteTreeW(HKEY_CLASSES_ROOT, subtree2);
+            log("The following registry keys have been removed:"
+                "\n    HKEY_CLASSES_ROOT\\%subtree1%"
+                "\n    HKEY_CLASSES_ROOT\\%subtree2%", utf::to_utf(subtree1), utf::to_utf(subtree2));
+            #endif
+            return true;
+        }
+        auto create_reg_keys([[maybe_unused]] auto& file)
+        {
+            #if defined(_WIN32)
+            auto file_exe = utf::to_utf(file.filename().string());
+            if (file_exe.find(' ') != text::npos)
+            {
+                log("Registry keys were not created: The source binary file name contains spaces.");
+                return true;
+            }
+            auto key_vtm1 = L"Directory\\shell\\vtm";
+            auto key_cmd1 = L"Directory\\shell\\vtm\\command";
+            auto key_vtm2 = L"Directory\\Background\\shell\\vtm";
+            auto key_cmd2 = L"Directory\\Background\\shell\\vtm\\command";
+            auto verb_value = L"Run in vtm"s;
+            auto icon_value = file_exe;
+            auto exec_value = file_exe + L" --cwd \"%v\" --run term";
+            ::RegSetKeyValueW(HKEY_CLASSES_ROOT, key_vtm1, nullptr, REG_SZ, verb_value.data(), 2 * ((DWORD)verb_value.size() + 1/*terminating null*/));
+            ::RegSetKeyValueW(HKEY_CLASSES_ROOT, key_vtm1, L"Icon", REG_SZ, icon_value.data(), 2 * ((DWORD)icon_value.size() + 1));
+            ::RegSetKeyValueW(HKEY_CLASSES_ROOT, key_cmd1, nullptr, REG_SZ, exec_value.data(), 2 * ((DWORD)exec_value.size() + 1));
+            ::RegSetKeyValueW(HKEY_CLASSES_ROOT, key_vtm2, nullptr, REG_SZ, verb_value.data(), 2 * ((DWORD)verb_value.size() + 1));
+            ::RegSetKeyValueW(HKEY_CLASSES_ROOT, key_vtm2, L"Icon", REG_SZ, icon_value.data(), 2 * ((DWORD)icon_value.size() + 1));
+            ::RegSetKeyValueW(HKEY_CLASSES_ROOT, key_cmd2, nullptr, REG_SZ, exec_value.data(), 2 * ((DWORD)exec_value.size() + 1));
+            auto root_key1 = "HKEY_CLASSES_ROOT\\" + utf::to_utf(key_vtm1);
+            auto root_key2 = "HKEY_CLASSES_ROOT\\" + utf::to_utf(key_vtm2);
+            log("The following registry keys were created:"
+                "\n    %key_vtm1%\\Default=%verb%"
+                "\n    %key_vtm1%\\Icon=%icon%"
+                "\n    %key_cmd1%\\command\\Default=%exec%"
+                "\n    %key_vtm2%\\Default=%verb%"
+                "\n    %key_vtm2%\\Icon=%icon%"
+                "\n    %key_cmd2%\\command\\Default=%exec%",
+                    root_key1, utf::to_utf(verb_value),
+                    root_key1, utf::to_utf(icon_value),
+                    root_key1, utf::to_utf(exec_value),
+                    root_key2, utf::to_utf(verb_value),
+                    root_key2, utf::to_utf(icon_value),
+                    root_key2, utf::to_utf(exec_value));
+            #endif
+            return true;
+        }
         auto uninstall()
         {
             auto file = fs::path{};
             auto dest = fs::path{};
-            auto done = getpaths(file, dest, faux) && removefile(dest);
+            auto done = getpaths(file, dest, faux) && delete_reg_keys() && removefile(dest);
             return done;
         }
         auto install()
@@ -3005,7 +3077,7 @@ namespace netxs::os
                 else log("Failed to copy process image to '%path%'.", dest.string());
                 return done;
             };
-            auto done = getpaths(file, dest) && (fs::equivalent(file, dest, code) || (removefile(dest) && copy()));
+            auto done = getpaths(file, dest) && create_reg_keys(file) && (fs::equivalent(file, dest, code) || (removefile(dest) && copy()));
             return done;
         }
     }
@@ -3245,7 +3317,7 @@ namespace netxs::os
                 #elif defined(__linux__)
 
                     auto cred = ucred{};
-                    #ifdef __ANDROID__
+                    #if defined(__ANDROID__)
                         auto size = socklen_t{ sizeof(cred) };
                     #else
                         auto size = unsigned{ sizeof(cred) };
@@ -3787,8 +3859,8 @@ namespace netxs::os
                     });
                 };
                 haspty = ::isatty(os::stdin_fd);
-                haspty ? proc([&](auto ...args){ return io::select<true>(args...); })
-                       : proc([&](auto ...args){ return io::select<faux>(args...); });
+                haspty ? proc([&](auto... args){ return io::select<true>(args...); })
+                       : proc([&](auto... args){ return io::select<faux>(args...); });
 
             #endif
             if (cfsize)
@@ -4218,7 +4290,7 @@ namespace netxs::os
         struct vtty
         {
             std::thread             stdwrite{};
-            testy<twod>             termsize{};
+            twod                    termsize{};
             flag                    attached{};
             flag                    signaled{};
             escx                    writebuf{};
@@ -4248,12 +4320,12 @@ namespace netxs::os
                 {
                     termlink = consrv::create(terminal);
                 }
-                termsize(cfg.win);
+                termsize = cfg.win;
                 auto trailer = [&, cmd = cfg.cmd]
                 {
+                    auto exitcode = termlink->wait(); // Wait all attached processes to exit (waiting for conversations to complete, send pending writebuf).
                     if (attached.exchange(faux))
                     {
-                        auto exitcode = termlink->wait();
                         log("%%Process '%cmd%' exited with code %code%", prompt::vtty, ansi::hi(utf::debase437(cmd)), utf::to_hex_0x(exitcode));
                         writesyn.notify_one(); // Interrupt writing thread.
                         terminal.onexit(exitcode, "", signaled.exchange(true)); // Only if the process terminates on its own (not forced by sighup).
@@ -4769,6 +4841,9 @@ namespace netxs::os
         {
             struct adapter : s11n
             {
+                text hscheme;
+                id_t gear_id = 1;
+
                 void direct(s11n::xs::bitmap_vt16    /*lock*/, view& data) { io::send(data); }
                 void direct(s11n::xs::bitmap_vt256   /*lock*/, view& data) { io::send(data); }
                 void direct(s11n::xs::bitmap_vtrgb   /*lock*/, view& data) { io::send(data); }
@@ -4830,11 +4905,49 @@ namespace netxs::os
                     else                             item.set();
                     os::clipboard::set(item);
                     auto crop = utf::trunc(item.utf8, dtvt::gridsz.y / 2); // Trim preview before sending.
-                    s11n::sysboard.send(dtvt::client, id_t{}, item.size, crop.str(), item.form);
+                    s11n::sysboard.send(dtvt::client, gear_id, item.size, crop.str(), item.form);
                 }
                 void handle(s11n::xs::clipdata_request lock)
                 {
                     s11n::recycle_cliprequest(dtvt::client, lock);
+                }
+                void handle(s11n::xs::sysfocus         lock)
+                {
+                    auto& item = lock.thing;
+                    if (item.state)
+                    {
+                        sync_hotkey_scheme();
+                    }
+                }
+                void handle(s11n::xs::hotkey_scheme    lock)
+                {
+                    auto& k = lock.thing;
+                    hscheme = k.hscheme;
+                    sync_hotkey_scheme();
+                }
+                // adapter: Send an empty hotkey scheme packet.
+                void sync_hotkey_scheme()
+                {
+                    auto item = s11n::syskeybd.freeze();
+                    auto temp = input::syskeybd{}; //todo same code in gui.hpp:2860
+                    std::swap(temp.vkchord, item.thing.vkchord);
+                    std::swap(temp.scchord, item.thing.scchord);
+                    std::swap(temp.chchord, item.thing.chchord);
+                    std::swap(temp.cluster, item.thing.cluster);
+                    std::swap(temp.keystat, item.thing.keystat);
+                    item.thing.gear_id = gear_id;
+                    item.thing.hscheme = hscheme;
+                    item.thing.virtcod = 0;
+                    item.thing.scancod = 0;
+                    item.thing.keycode = 0;
+                    item.thing.payload = input::keybd::type::keypress;
+                    item.thing.set();
+                    item.thing.sendby<faux, faux>(dtvt::client);
+                    std::swap(temp.vkchord, item.thing.vkchord);
+                    std::swap(temp.scchord, item.thing.scchord);
+                    std::swap(temp.chchord, item.thing.chchord);
+                    std::swap(temp.cluster, item.thing.cluster);
+                    std::swap(temp.keystat, item.thing.keystat);
                 }
 
                 adapter()
@@ -4905,18 +5018,21 @@ namespace netxs::os
         {
             if constexpr (debugmode) log(prompt::tty, "Reading thread started", ' ', utf::to_hex_0x(std::this_thread::get_id()));
             auto alive = true;
+            auto gear_id = id_t{ 1 }; // Non-zero id.
             auto p_txtdata = text{};
+            auto chords = input::key::kmap{};
             auto m = input::sysmouse{};
             auto k = input::syskeybd{};
-            auto f = input::sysfocus{};
             auto c = input::sysclose{};
             auto w = input::syswinsz{};
             m.enabled = input::hids::stat::ok;
             m.coordxy = { si16min, si16min };
             c.fast = true;
-            f.state = true;
             w.winsize = os::dtvt::gridsz;
-            focus(f);
+            k.gear_id = gear_id;
+            m.gear_id = gear_id;
+            w.gear_id = gear_id;
+            focus(alive);
 
             #if defined(_WIN32)
 
@@ -4947,8 +5063,8 @@ namespace netxs::os
                      || (quest_key & 0xff) != VK_OEM_2)
                     {
                         true_null = input::key::find(true_null & 0xff, input::key::Key2);
-                        slash_key = input::key::find(slash_key & 0xff, input::key::Slash) | (slash_key & 0xff00);
-                        quest_key = input::key::find(quest_key & 0xff, input::key::Slash) | (quest_key & 0xff00);
+                        slash_key = input::key::find(slash_key & 0xff, input::key::KeySlash) | (slash_key & 0xff00);
+                        quest_key = input::key::find(quest_key & 0xff, input::key::KeySlash) | (quest_key & 0xff00);
                         k.keycode = input::key::config;
                         k.cluster.clear();
                         utf::to_utf_from_code(true_null, k.cluster);
@@ -4972,20 +5088,24 @@ namespace netxs::os
                                 k.extflag = faux;
                                 k.virtcod = 'C';
                                 k.scancod = ::MapVirtualKeyW('C', MAPVK_VK_TO_VSC);
-                                k.pressed = true;
                                 k.keycode = input::key::KeyC;
+                                k.keystat = input::key::pressed;
                                 k.cluster = "\x03";
+                                chords.build(k);
                                 keybd(k);
+                                // Release key is auto generated by someone.
                             }
                             else if (signal == os::signals::ctrl_break)
                             {
                                 k.extflag = faux;
                                 k.virtcod = ansi::c0_etx;
                                 k.scancod = ansi::ctrl_break;
-                                k.pressed = true;
                                 k.keycode = input::key::Break;
+                                k.keystat = input::key::pressed;
                                 k.cluster = "\x03";
+                                chords.build(k);
                                 keybd(k);
+                                // Release key is auto generated by someone.
                             }
                             else if (signal == os::signals::close
                                   || signal == os::signals::logoff
@@ -5038,14 +5158,16 @@ namespace netxs::os
                                 k.extflag = r.Event.KeyEvent.dwControlKeyState & ENHANCED_KEY;
                                 k.virtcod = r.Event.KeyEvent.wVirtualKeyCode;
                                 k.scancod = r.Event.KeyEvent.wVirtualScanCode;
-                                k.pressed = r.Event.KeyEvent.bKeyDown;
                                 k.keycode = input::key::xlat(k.virtcod, k.scancod, (si32)r.Event.KeyEvent.dwControlKeyState);
+                                k.keystat = r.Event.KeyEvent.bKeyDown ? (chords.exist(k.keycode) ? input::key::repeated : input::key::pressed) : input::key::released;
                                 k.cluster = toutf;
-                                do
+                                chords.build(k);
+                                if (r.Event.KeyEvent.wRepeatCount-- > 0) keybd(k);
+                                if (k.keystat != input::key::released) while (r.Event.KeyEvent.wRepeatCount-- > 0)
                                 {
+                                    k.keystat = input::key::repeated;
                                     keybd(k);
                                 }
-                                while (r.Event.KeyEvent.wRepeatCount-- > 1);
                             }
                             else if (std::distance(head, tail) > 2) // Surrogate pairs special case.
                             {
@@ -5064,14 +5186,20 @@ namespace netxs::os
                                     k.scancod = r.Event.KeyEvent.wVirtualScanCode;
                                     k.cluster = toutf;
                                     k.keycode = input::key::xlat(k.virtcod, k.scancod, (si32)r.Event.KeyEvent.dwControlKeyState);
-                                    do
+                                    if (r.Event.KeyEvent.wRepeatCount-- > 0)
                                     {
-                                        k.pressed = true;
-                                        keybd(k);
-                                        k.pressed = faux;
+                                        k.keystat = input::key::pressed;
+                                        chords.build(k);
                                         keybd(k);
                                     }
-                                    while (r.Event.KeyEvent.wRepeatCount-- > 1);
+                                    while (r.Event.KeyEvent.wRepeatCount-- > 0)
+                                    {
+                                        k.keystat = input::key::repeated;
+                                        keybd(k);
+                                    }
+                                    k.keystat = input::key::released;
+                                    chords.build(k);
+                                    keybd(k);
                                 }
                             }
                             point = {};
@@ -5097,6 +5225,7 @@ namespace netxs::os
                                     utf::to_utf(wcopy, p_txtdata);
                                     k.payload = input::keybd::type::keypaste;
                                     k.cluster = p_txtdata;
+                                    chords.reset(k);
                                     keybd(k);
                                     k.payload = input::keybd::type::keypress;
                                     wcopy.clear();
@@ -5145,9 +5274,10 @@ namespace netxs::os
                         }
                         else if (r.EventType == FOCUS_EVENT)
                         {
-                            f.state = r.Event.FocusEvent.bSetFocus;
-                            focus(f);
-                            if (!f.state) kbmod = {}; // To keep the modifiers from sticking.
+                            chords.reset(k);
+                            auto state = !!r.Event.FocusEvent.bSetFocus;
+                            focus(state);
+                            if (!state) kbmod = {}; // To keep the modifiers from sticking.
                         }
                     }
                 }
@@ -5310,33 +5440,33 @@ namespace netxs::os
                     using namespace input;
                     auto keymask = std::vector<std::pair<si32, text>>
                     {
-                        { key::PageUp,     "\033[5; ~"  },
-                        { key::PageDown,   "\033[6; ~"  },
-                        { key::End,        "\033[1; F"  },
-                        { key::Home,       "\033[1; H"  },
-                        { key::LeftArrow,  "\033[1; D"  },
-                        { key::UpArrow,    "\033[1; A"  },
-                        { key::RightArrow, "\033[1; C"  },
-                        { key::DownArrow,  "\033[1; B"  },
-                        { key::Insert,     "\033[2; ~"  },
-                        { key::Delete,     "\033[3; ~"  },
-                        { key::F1,         "\033[1; P"  },
-                        { key::F2,         "\033[1; Q"  },
-                        { key::F3,         "\033[1; R"  },
-                        { key::F4,         "\033[1; S"  },
-                        { key::F5,         "\033[15; ~" },
-                        { key::F6,         "\033[17; ~" },
-                        { key::F7,         "\033[18; ~" },
-                        { key::F8,         "\033[19; ~" },
-                        { key::F9,         "\033[20; ~" },
-                        { key::F10,        "\033[21; ~" },
-                        { key::F11,        "\033[23; ~" },
-                        { key::F12,        "\033[24; ~" },
+                        { key::KeyPageUp,     "\033[5; ~"  },
+                        { key::KeyPageDown,   "\033[6; ~"  },
+                        { key::KeyEnd,        "\033[1; F"  },
+                        { key::KeyHome,       "\033[1; H"  },
+                        { key::KeyLeftArrow,  "\033[1; D"  },
+                        { key::KeyUpArrow,    "\033[1; A"  },
+                        { key::KeyRightArrow, "\033[1; C"  },
+                        { key::KeyDownArrow,  "\033[1; B"  },
+                        { key::KeyInsert,     "\033[2; ~"  },
+                        { key::KeyDelete,     "\033[3; ~"  },
+                        { key::F1,            "\033[1; P"  },
+                        { key::F2,            "\033[1; Q"  },
+                        { key::F3,            "\033[1; R"  },
+                        { key::F4,            "\033[1; S"  },
+                        { key::F5,            "\033[15; ~" },
+                        { key::F6,            "\033[17; ~" },
+                        { key::F7,            "\033[18; ~" },
+                        { key::F8,            "\033[19; ~" },
+                        { key::F9,            "\033[20; ~" },
+                        { key::F10,           "\033[21; ~" },
+                        { key::F11,           "\033[23; ~" },
+                        { key::F12,           "\033[24; ~" },
                     };
                     auto m = std::unordered_map<text, std::pair<text, si32>, qiew::hash, qiew::equal>
                     {
                         //{ "\033\x7f"  , { "\x08", key::Backspace     | hids::LAlt   << 8 }},
-                        { "\033\x7f"  , { "",     key::Slash         |(hids::LCtrl | hids::LAlt | hids::LShift) << 8 }},
+                        { "\033\x7f"  , { "",     key::KeySlash      |(hids::LCtrl | hids::LAlt | hids::LShift) << 8 }},
                         { "\033\x00"s , { "",     key::Space         | hids::AltGr  << 8 }},
                         { "\x00"s     , { " ",    key::Space         | hids::LCtrl  << 8 }},
                         { "\x08"      , { "\x7f", key::Backspace     | hids::LCtrl  << 8 }},
@@ -5346,8 +5476,8 @@ namespace netxs::os
                         { "\033\033"  , { "",     key::Esc           | hids::LAlt   << 8 }},
                         { "\x7f"      , { "\x08", key::Backspace                         }},
                         { "\x09"      , { "\x09", key::Tab                               }},
-                        { "\x0d"      , { "\x0d", key::Enter                             }},
-                        { "\x0a"      , { "\x0a", key::Enter         | hids::LCtrl  << 8 }},
+                        { "\x0d"      , { "\x0d", key::KeyEnter                          }},
+                        { "\x0a"      , { "\x0a", key::KeyEnter      | hids::LCtrl  << 8 }},
 
                         //{ "\x1a"      , { "",     key::Pause                             }},
                         //{ "\x1a"      , { "\x1a", key::KeyZ          | hids::LCtrl  << 8 }},
@@ -5355,8 +5485,8 @@ namespace netxs::os
                         { "\x1c"      , { "",     key::Key4          | hids::LCtrl  << 8 }},
                         { "\x1d"      , { "",     key::Key5          | hids::LCtrl  << 8 }},
                         { "\x1e"      , { "",     key::Key6          | hids::LCtrl  << 8 }},
-                        { "\x1f"      , { "",     key::Slash         | hids::LCtrl  << 8 }},
-                        { "\033\x1f"  , { "",     key::Slash         | hids::AltGr  << 8 }},
+                        { "\x1f"      , { "",     key::KeySlash      | hids::LCtrl  << 8 }},
+                        { "\033\x1f"  , { "",     key::KeySlash      | hids::AltGr  << 8 }},
                         { "\x20"      , { " ",    key::Space                             }},
                         { "\x21"      , { "!",    key::Key1          | hids::LShift << 8 }},
                         { "\x22"      , { "\"",   key::SingleQuote   | hids::LShift << 8 }},
@@ -5367,26 +5497,26 @@ namespace netxs::os
                         { "\x27"      , { "'",    key::SingleQuote                       }},
                         { "\x28"      , { "(",    key::Key9          | hids::LShift << 8 }},
                         { "\x29"      , { ")",    key::Key0          | hids::LShift << 8 }},
-                        { "\x2a"      , { "*",    key::Multiply                          }},
-                        { "\x2b"      , { "+",    key::Plus                              }},
+                        { "\x2a"      , { "*",    key::KeyMultiply                       }},
+                        { "\x2b"      , { "+",    key::KeyPlus                           }},
                         { "\x2c"      , { ",",    key::Comma                             }},
-                        { "\x2d"      , { "-",    key::Minus                             }},
-                        { "\x2e"      , { ".",    key::Period                            }},
-                        { "\x2f"      , { "/",    key::Slash                             }},
+                        { "\x2d"      , { "-",    key::KeyMinus                          }},
+                        { "\x2e"      , { ".",    key::KeyPeriod                         }},
+                        { "\x2f"      , { "/",    key::KeySlash                          }},
 
                         { "\x3a"      , { ":",    key::Semicolon     | hids::LShift << 8 }},
                         { "\x3b"      , { ";",    key::Semicolon                         }},
                         { "\x3c"      , { "<",    key::Comma         | hids::LShift << 8 }},
                         { "\x3d"      , { "=",    key::Equal                             }},
-                        { "\x3e"      , { ">",    key::Period        | hids::LShift << 8 }},
-                        { "\x3f"      , { "?",    key::Slash         | hids::LShift << 8 }},
+                        { "\x3e"      , { ">",    key::KeyPeriod     | hids::LShift << 8 }},
+                        { "\x3f"      , { "?",    key::KeySlash      | hids::LShift << 8 }},
                         { "\x40"      , { "@",    key::Key2          | hids::LShift << 8 }},
 
                         { "\x5b"      , { "[",    key::OpenBracket                       }},
                         { "\x5c"      , { "\\",   key::BackSlash                         }},
                         { "\x5d"      , { "]",    key::ClosedBracket                     }},
                         { "\x5e"      , { "^",    key::Key6          | hids::LShift << 8 }},
-                        { "\x5f"      , { "_",    key::Minus         | hids::LShift << 8 }},
+                        { "\x5f"      , { "_",    key::KeyMinus      | hids::LShift << 8 }},
                         { "\x60"      , { "`",    key::BackQuote                         }},
 
                         { "\x7b"      , { "{",    key::OpenBracket   | hids::LShift << 8 }},
@@ -5394,16 +5524,16 @@ namespace netxs::os
                         { "\x7d"      , { "}",    key::ClosedBracket | hids::LShift << 8 }},
                         { "\x7e"      , { "~",    key::BackQuote     | hids::LShift << 8 }},
 
-                        { "\033[5~"   , { "",     key::PageUp                            }},
-                        { "\033[6~"   , { "",     key::PageDown                          }},
-                        { "\033[F"    , { "",     key::End                               }},
-                        { "\033[H"    , { "",     key::Home                              }},
-                        { "\033[D"    , { "",     key::LeftArrow                         }},
-                        { "\033[A"    , { "",     key::UpArrow                           }},
-                        { "\033[C"    , { "",     key::RightArrow                        }},
-                        { "\033[B"    , { "",     key::DownArrow                         }},
-                        { "\033[2~"   , { "",     key::Insert                            }},
-                        { "\033[3~"   , { "",     key::Delete                            }},
+                        { "\033[5~"   , { "",     key::KeyPageUp                         }},
+                        { "\033[6~"   , { "",     key::KeyPageDown                       }},
+                        { "\033[F"    , { "",     key::KeyEnd                            }},
+                        { "\033[H"    , { "",     key::KeyHome                           }},
+                        { "\033[D"    , { "",     key::KeyLeftArrow                      }},
+                        { "\033[A"    , { "",     key::KeyUpArrow                        }},
+                        { "\033[C"    , { "",     key::KeyRightArrow                     }},
+                        { "\033[B"    , { "",     key::KeyDownArrow                      }},
+                        { "\033[2~"   , { "",     key::KeyInsert                         }},
+                        { "\033[3~"   , { "",     key::KeyDelete                         }},
                         { "\033OP"    , { "",     key::F1                                }},
                         { "\033OQ"    , { "",     key::F2                                }},
                         { "\033OR"    , { "",     key::F3                                }},
@@ -5447,6 +5577,7 @@ namespace netxs::os
                 {
                     k.payload = input::keybd::type::keypaste;
                     k.cluster = cluster;
+                    chords.reset(k);
                     keybd(k);
                     k.payload = input::keybd::type::keypress;
                 };
@@ -5539,8 +5670,43 @@ namespace netxs::os
                     }
                     k.extflag = {};
                     k.handled = {};
-                    k.pressed = true; keybd(k);
-                    k.pressed = faux; keybd(k);
+                    k.keystat = input::key::pressed;
+                    if (auto mods = std::exchange(k.ctlstat, 0))
+                    {
+                        auto cluster = std::exchange(k.cluster, ""s);
+                        auto keycode = std::exchange(k.keycode, 0);
+                        auto virtcod = std::exchange(k.virtcod, 0);
+                        auto scancod = std::exchange(k.scancod, 0);
+                        if (mods & hids::LCtrl)  k.ctlstat |= hids::LCtrl,  k.keycode = input::key::LeftCtrl,  k.virtcod = input::key::map::data(k.keycode).vkey, k.scancod = input::key::map::data(k.keycode).scan, chords.build(k), keybd(k);
+                        if (mods & hids::LAlt)   k.ctlstat |= hids::LAlt,   k.keycode = input::key::LeftAlt,   k.virtcod = input::key::map::data(k.keycode).vkey, k.scancod = input::key::map::data(k.keycode).scan, chords.build(k), keybd(k);
+                        if (mods & hids::LShift) k.ctlstat |= hids::LShift, k.keycode = input::key::LeftShift, k.virtcod = input::key::map::data(k.keycode).vkey, k.scancod = input::key::map::data(k.keycode).scan, chords.build(k), keybd(k);
+                        if (mods & hids::LWin)   k.ctlstat |= hids::LWin,   k.keycode = input::key::LeftWin,   k.virtcod = input::key::map::data(k.keycode).vkey, k.scancod = input::key::map::data(k.keycode).scan, chords.build(k), keybd(k);
+                        std::swap(k.cluster, cluster);
+                        std::swap(k.keycode, keycode);
+                        std::swap(k.virtcod, virtcod);
+                        std::swap(k.scancod, scancod);
+                    }
+                    chords.build(k);
+                    keybd(k);
+                    k.keystat = input::key::released;
+                    chords.build(k);
+                    keybd(k);
+                    if (auto mods = k.ctlstat)
+                    {
+                        auto cluster = std::exchange(k.cluster, ""s);
+                        auto keycode = std::exchange(k.keycode, 0);
+                        auto virtcod = std::exchange(k.virtcod, 0);
+                        auto scancod = std::exchange(k.scancod, 0);
+                        if (mods & hids::LWin  ) k.ctlstat &= ~hids::LWin,   k.keycode = input::key::LeftWin,   k.virtcod = input::key::map::data(k.keycode).vkey, k.scancod = input::key::map::data(k.keycode).scan, chords.build(k), keybd(k);
+                        if (mods & hids::LShift) k.ctlstat &= ~hids::LShift, k.keycode = input::key::LeftShift, k.virtcod = input::key::map::data(k.keycode).vkey, k.scancod = input::key::map::data(k.keycode).scan, chords.build(k), keybd(k);
+                        if (mods & hids::LAlt  ) k.ctlstat &= ~hids::LAlt,   k.keycode = input::key::LeftAlt,   k.virtcod = input::key::map::data(k.keycode).vkey, k.scancod = input::key::map::data(k.keycode).scan, chords.build(k), keybd(k);
+                        if (mods & hids::LCtrl ) k.ctlstat &= ~hids::LCtrl,  k.keycode = input::key::LeftCtrl,  k.virtcod = input::key::map::data(k.keycode).vkey, k.scancod = input::key::map::data(k.keycode).scan, chords.build(k), keybd(k);
+                        k.ctlstat = mods;
+                        std::swap(k.cluster, cluster);
+                        std::swap(k.keycode, keycode);
+                        std::swap(k.virtcod, virtcod);
+                        std::swap(k.scancod, scancod);
+                    }
                 };
 
                 auto parser = [&, input = text{}, pflag = faux](view accum) mutable
@@ -5649,8 +5815,8 @@ namespace netxs::os
                             }
                             else if (t == type::focus)
                             {
-                                f.state = s.back() == 'I';
-                                focus(f);
+                                auto state = s.back() == 'I';
+                                focus(state);
                             }
                             else if (t == type::style)
                             {
@@ -5799,14 +5965,27 @@ namespace netxs::os
                     auto wndproc = [](auto hWnd, auto uMsg, auto wParam, auto lParam)
                     {
                         static auto alive = flag{ true };
+                        static auto timers_clipboard = 1u;
                         switch (uMsg)
                         {
                             case WM_CREATE:
                                 ok(::AddClipboardFormatListener(hWnd), "::AddClipboardFormatListener()", os::unexpected);
-                                // Continue processing the switch to initialize the clipboard state after startup.
-                            case WM_CLIPBOARDUPDATE:
                                 os::clipboard::sync((arch)hWnd, binary::proxy(), dtvt::client, dtvt::gridsz);
                                 break;
+                            case WM_TIMER:
+                                if (wParam == timers_clipboard)
+                                {
+                                    ::KillTimer(hWnd, timers_clipboard);
+                                    os::clipboard::sync((arch)hWnd, binary::proxy(), dtvt::client, dtvt::gridsz);
+                                }
+                                else return DefWindowProc(hWnd, uMsg, wParam, lParam);
+                                break;
+                            case WM_CLIPBOARDUPDATE:
+                            {
+                                auto random_delay = 150ms + datetime::milliseconds(os::process::id.second) / 2; // Delay in random range from 150ms upto 650ms.
+                                ::SetTimer(hWnd, timers_clipboard, datetime::round<ui32>(random_delay), nullptr);
+                                break;
+                            }
                             case WM_DESTROY:
                                 ok(::RemoveClipboardFormatListener(hWnd), "::RemoveClipboardFormatListener()", os::unexpected);
                                 ::PostQuitMessage(0);
@@ -5872,14 +6051,6 @@ namespace netxs::os
                 inpmode &=~nt::console::inmode::quickedit;
                 ok(::SetConsoleMode(os::stdin_fd, inpmode), "::SetConsoleMode()", os::unexpected);
 
-                // Switch to altbuf.
-                auto saved_fd = os::stdout_fd;
-                if (!ok(os::stdout_fd = ::CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE, 0, nullptr, CONSOLE_TEXTMODE_BUFFER, nullptr), "::CreateConsoleScreenBuffer()", os::unexpected))
-                {
-                    os::stdout_fd = saved_fd;
-                    saved_fd = os::invalid_fd;
-                }
-                else ok(::SetConsoleActiveScreenBuffer(os::stdout_fd), "::SetConsoleActiveScreenBuffer(", utf::to_hex_0x(os::stdout_fd), ")", os::unexpected);
                 io::send(os::stdout_fd, ansi::altbuf(true).cursor(faux).bpmode(true)); // Windows 10 console compatibility (turning scrollback off, cursor not hidden by WinAPI).
                 auto palette = CONSOLE_SCREEN_BUFFER_INFOEX{ .cbSize = sizeof(CONSOLE_SCREEN_BUFFER_INFOEX), .wAttributes = {} };
                 ok(::GetConsoleScreenBufferInfoEx(os::stdout_fd, &palette), "::GetConsoleScreenBufferInfoEx()", os::unexpected);
@@ -5891,7 +6062,9 @@ namespace netxs::os
                 if (dtvt::vtmode & ui::console::nt16)
                 {
                     auto c16 = palette;
+                    c16.dwSize = { (si16)dtvt::gridsz.x, (si16)dtvt::gridsz.y };
                     c16.srWindow = { .Right = (si16)dtvt::gridsz.x, .Bottom = (si16)dtvt::gridsz.y }; // Suppress unexpected scrollbars.
+                    c16.dwCursorPosition = {};
                     argb::set_vtm16_palette([&](auto index, auto color){ c16.ColorTable[index] = argb::swap_rb(color); }); // conhost crashes if alpha non zero.
                     ok(::SetConsoleScreenBufferInfoEx(os::stdout_fd, &c16), "::SetConsoleScreenBufferInfoEx()", os::unexpected);
                 }
@@ -5918,10 +6091,17 @@ namespace netxs::os
 
             auto alarm = fire{};
             auto alive = flag{ true };
-            auto keybd = [&](auto& data){ if (alive)                proxy.syskeybd.send(intio, data); };
+            auto keybd = [&](auto& data)
+            {
+                if (alive)
+                {
+                    data.hscheme = proxy.hscheme; // Inject current hotkey scheme.
+                    proxy.syskeybd.send(intio, data);
+                }
+            };
             auto mouse = [&](auto& data){ if (alive)                proxy.sysmouse.send(intio, data); };
+            auto focus = [&](auto state){ if (alive)                proxy.sysfocus.send(intio, proxy.gear_id, state, 0); };
             auto winsz = [&](auto& data){ if (alive)                proxy.syswinsz.send(intio, data); };
-            auto focus = [&](auto& data){ if (alive)                proxy.sysfocus.send(intio, data); };
             auto close = [&](auto& data){ if (alive.exchange(faux)) proxy.sysclose.send(intio, data); };
             auto input = std::thread{ [&]{ tty::reader(alarm, keybd, mouse, winsz, focus, close, noop{}); }};
             auto clips = std::thread{ [&]{ clipbd(alarm); } };
@@ -5945,19 +6125,6 @@ namespace netxs::os
                     auto count = DWORD{};
                     ok(::FillConsoleOutputAttribute(os::stdout_fd, 0, dtvt::gridsz.x * dtvt::gridsz.y, {}, &count), "::FillConsoleOutputAttribute()", os::unexpected); // To avoid palette flickering.
                     ok(::SetConsoleScreenBufferInfoEx(os::stdout_fd, &palette), "::SetConsoleScreenBufferInfoEx()", os::unexpected);
-                }
-                if (saved_fd != os::invalid_fd)
-                {
-                    auto s = dtvt::consize();
-                    os::close(os::stdout_fd);
-                    os::stdout_fd = saved_fd;
-                    if (ok(::SetConsoleActiveScreenBuffer(os::stdout_fd), "::SetConsoleActiveScreenBuffer()", os::unexpected))
-                    {
-                        if (!(dtvt::vtmode & ui::console::nt16) && s != dtvt::consize()) // wt issue GH #16231
-                        {
-                            std::cout << prompt::os << ansi::err("Terminal size is out of sync. See https://github.com/microsoft/terminal/issues/16231 for details.") << "\n";
-                        }
-                    }
                 }
             #else 
                 io::send(os::stdout_fd, vtend);
@@ -6030,7 +6197,7 @@ namespace netxs::os
                     auto mutex = std::mutex{};
                     auto panel = dtvt::consize();
                     auto wraps = true;
-                    auto clear = [&](auto&& ...args) // Erase the readline block and output the args.
+                    auto clear = [&](auto&&... args) // Erase the readline block and output the args.
                     {
                         if (width)
                         {
@@ -6062,7 +6229,7 @@ namespace netxs::os
                         osout(yield);
                         yield.clear();
                     };
-                    auto enter = [&](auto&& ...args)
+                    auto enter = [&](auto&&... args)
                     {
                         if (block.length()) yield.add("\r\n");
                         if constexpr (sizeof...(args)) yield.add(std::forward<decltype(args)>(args)...);
@@ -6100,7 +6267,7 @@ namespace netxs::os
                                 print(true);
                                 break;
                             case input::keybd::type::keypress:
-                                if (!data.pressed) return;
+                                if (!data.keystat) return;
                                 [[fallthrough]];
                             case input::keybd::type::imeinput:
                                 if (!alive || data.cluster.empty()) return;
@@ -6147,7 +6314,7 @@ namespace netxs::os
                         auto guard = std::lock_guard{ mutex };
                         panel = data.winsize;
                     };
-                    auto focus = [&](auto& /*data*/){ if (!alive) return;/*if (data.state) log<faux>('-');*/ };
+                    auto focus = [&](auto& /*data*/){ if (!alive) return;/*if (data) log<faux>('-');*/ };
                     auto close = [&](auto& /*data*/)
                     {
                         if (alive.exchange(faux))

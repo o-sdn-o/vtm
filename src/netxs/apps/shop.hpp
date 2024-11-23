@@ -195,15 +195,14 @@ namespace netxs::app::shop
             auto window = ui::cake::ctor();
             window->plugin<pro::focus>(pro::focus::mode::focused)
                   ->colors(whitelt, 0x60000000)
-                  //->plugin<pro::track>()
+                  ->plugin<pro::keybd>()
                   ->plugin<pro::acryl>()
                   ->plugin<pro::cache>()
                   ->invoke([](auto& boss)
                   {
-                        //boss.keybd.accept(true);
                         boss.LISTEN(tier::anycast, e2::form::proceed::quit::any, fast)
                         {
-                            boss.RISEUP(tier::release, e2::form::proceed::quit::one, fast);
+                            boss.base::riseup(tier::release, e2::form::proceed::quit::one, fast);
                         };
                   });
             auto object = window->attach(ui::fork::ctor(axis::Y))
@@ -227,11 +226,16 @@ namespace netxs::app::shop
                                                               ->plugin<pro::focus>()
                                                               ->plugin<pro::grade>()
                                                               ->shader(cell::shaders::xlight, e2::form::state::hover)
-                                                              ->shader(cell::shaders::color(c3), e2::form::state::keybd::focus::count);
+                                                              ->shader(cell::shaders::color(c3), e2::form::state::focus::count);
                         items->attach(ui::post::ctor())
                              ->upload(desktopio_body)
                              ->plugin<pro::grade>();
                 layers->attach(app::shared::scroll_bars(scroll));
+            window->invoke([&](auto& boss)
+            {
+                auto& keybd = boss.template plugins<pro::keybd>();
+                app::shared::base_kb_navigation(keybd, scroll, boss);
+            });
             return window;
         };
     };

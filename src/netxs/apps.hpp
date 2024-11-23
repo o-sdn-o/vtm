@@ -75,7 +75,6 @@ namespace netxs::app::shared
                                ->active()
                                ->invoke([](auto& boss)
                                 {
-                                    //boss.keybd.accept(true);
                                     closing_by_gesture(boss);
                                     closing_on_quit(boss);
                                 })
@@ -104,7 +103,6 @@ namespace netxs::app::shared
                   ->active(colors)
                   ->invoke([&](auto& boss)
                   {
-                        //boss.keybd.accept(true);
                         closing_by_gesture(boss);
                         closing_on_quit(boss);
                   });
@@ -119,13 +117,12 @@ namespace netxs::app::shared
                   ->plugin<pro::notes>(" Left+Right click to close ")
                   ->invoke([&](auto& boss)
                   {
-                      //boss.keybd.accept(true);
                       closing_by_gesture(boss);
                       closing_on_quit(boss);
                       boss.LISTEN(tier::release, e2::form::upon::vtree::attached, parent)
                       {
                           auto title = ansi::add("Empty Instance \nid: ", parent->id);
-                          boss.RISEUP(tier::preview, e2::form::prop::ui::header, title);
+                          boss.base::riseup(tier::preview, e2::form::prop::ui::header, title);
                       };
                   });
             auto object = window->attach(ui::mock::ctor())
@@ -238,12 +235,11 @@ namespace netxs::app::shared
 
             auto window = ui::cake::ctor();
             window->plugin<pro::focus>(pro::focus::mode::focused)
-                  //->plugin<pro::track>()
+                  ->plugin<pro::keybd>()
                   //->plugin<pro::acryl>()
                   ->plugin<pro::cache>()
                   ->invoke([](auto& boss)
                     {
-                        //boss.keybd.accept(true);
                         closing_on_quit(boss);
                     });
             auto object = window->attach(ui::fork::ctor(axis::Y))
@@ -261,6 +257,11 @@ namespace netxs::app::shared
                         auto sb = layers->attach(ui::fork::ctor());
                         auto vt = sb->attach(slot::_2, ui::grip<axis::Y>::ctor(scroll));
                         auto hz = test_stat_area->attach(slot::_2, ui::grip<axis::X>::ctor(scroll));
+            window->invoke([&](auto& boss)
+            {
+                auto& keybd = boss.template plugins<pro::keybd>();
+                app::shared::base_kb_navigation(keybd, scroll, boss);
+            });
             return window;
         };
 
@@ -285,12 +286,12 @@ namespace netxs::app::shared
                 //boss.LISTEN(tier::release, hids::events::mouse::button::dblclick::left, gear)
                 //{
                 //    auto outer = e2::config::plugins::sizer::outer.param();
-                //    boss.RISEUP(tier::request, e2::config::plugins::sizer::outer, outer);
+                //    boss.base::riseup(tier::request, e2::config::plugins::sizer::outer, outer);
                 //    auto actual_rect = rect{ dot_00, boss.base::size() } + outer;
                 //    if (actual_rect.hittest(gear.coord))
                 //    {
                 //        rect viewport;
-                //        gate.owner.SIGNAL(tier::request, e2::form::prop::viewport, viewport);
+                //        gate.owner.bell::signal(tier::request, e2::form::prop::viewport, viewport);
                 //        boss.base::extend(viewport);
                 //        gear.dismiss();
                 //    }
@@ -320,14 +321,14 @@ namespace netxs::app::shared
                     if (cmd.starts_with("@"))
                     {
                         static auto title_map = std::unordered_map<text, si32>{};
-                        boss.RISEUP(tier::request, e2::form::prop::ui::header, title, ());
+                        auto title = boss.base::riseup(tier::request, e2::form::prop::ui::header);
                         title += std::to_string(++title_map[title]);
-                        boss.RISEUP(tier::preview, e2::form::prop::ui::header, title);
+                        boss.base::riseup(tier::preview, e2::form::prop::ui::header, title);
                     }
-                    boss.RISEUP(tier::release, e2::config::plugins::sizer::outer, outer, (dent{  2, 2, 1, 1 }));
-                    boss.RISEUP(tier::release, e2::config::plugins::sizer::inner, inner, (dent{ -4,-4,-2,-2 }));
-                    boss.RISEUP(tier::release, e2::config::plugins::align, faux);
-                    boss.RISEUP(tier::preview, e2::form::prop::zorder, zpos::backmost);
+                    boss.base::riseup(tier::release, e2::config::plugins::sizer::outer, dent{  2, 2, 1, 1 });
+                    boss.base::riseup(tier::release, e2::config::plugins::sizer::inner, dent{ -4,-4,-2,-2 });
+                    boss.base::riseup(tier::release, e2::config::plugins::align, faux);
+                    boss.base::riseup(tier::preview, e2::form::prop::zorder, zpos::backmost);
                     parent.LISTEN(tier::release, hids::events::mouse::button::click::right, gear)
                     {
                         auto area = boss.base::area() + dent{ 2, 2, 1, 1 };
@@ -337,12 +338,12 @@ namespace netxs::app::shared
                             gear.dismiss(true);
                         }
                     };
-                    parent.LISTEN(tier::release, e2::form::state::keybd::focus::on, gear_id, boss.relyon)
+                    parent.LISTEN(tier::release, e2::form::state::focus::on, gear_id, boss.relyon)
                     {
                         if (auto gear_ptr = parent.bell::getref<hids>(gear_id))
                         {
                             auto& gear = *gear_ptr;
-                            gear.owner.SIGNAL(tier::release, e2::form::layout::jumpto, parent);
+                            gear.owner.bell::signal(tier::release, e2::form::layout::jumpto, parent);
                         }
                     };
                 };
@@ -352,7 +353,7 @@ namespace netxs::app::shared
         auto build_dtvt = [](eccc appcfg, xmls& /*config*/)
         {
             return ui::dtvt::ctor()
-                ->plugin<pro::focus>(pro::focus::mode::active)
+                ->plugin<pro::focus>(pro::focus::mode::relay)
                 ->limits(dot_11)
                 ->invoke([&](auto& boss)
                 {
@@ -369,11 +370,11 @@ namespace netxs::app::shared
                     };
                     boss.LISTEN(tier::preview, e2::config::plugins::sizer::alive, state)
                     {
-                        boss.RISEUP(tier::release, e2::config::plugins::sizer::alive, state);
+                        boss.base::riseup(tier::release, e2::config::plugins::sizer::alive, state);
                     };
                     boss.LISTEN(tier::anycast, e2::form::proceed::quit::any, fast)
                     {
-                        boss.SIGNAL(tier::preview, e2::form::proceed::quit::one, fast);
+                        boss.bell::signal(tier::preview, e2::form::proceed::quit::one, fast);
                     };
                     boss.LISTEN(tier::preview, e2::form::proceed::quit::one, fast)
                     {
@@ -406,7 +407,7 @@ namespace netxs::app::shared
                     }
                     boss.LISTEN(tier::anycast, e2::form::proceed::quit::any, fast)
                     {
-                        boss.SIGNAL(tier::preview, e2::form::proceed::quit::one, fast);
+                        boss.bell::signal(tier::preview, e2::form::proceed::quit::one, fast);
                     };
                     boss.LISTEN(tier::preview, e2::form::proceed::quit::one, fast)
                     {
@@ -418,18 +419,18 @@ namespace netxs::app::shared
                     };
                 });
             term->attach(app::shared::scroll_bars(scrl));
-            dtvt->plugin<pro::focus>(pro::focus::mode::focusable)
+            dtvt->plugin<pro::focus>(pro::focus::mode::relay)
                 ->limits(dot_11)
                 ->invoke([&](auto& boss)
                 {
                     auto& term_inst = *inst;
                     boss.LISTEN(tier::preview, e2::config::plugins::sizer::alive, state)
                     {
-                        boss.RISEUP(tier::release, e2::config::plugins::sizer::alive, state);
+                        boss.base::riseup(tier::release, e2::config::plugins::sizer::alive, state);
                     };
                     boss.LISTEN(tier::anycast, e2::form::proceed::quit::any, fast)
                     {
-                        boss.SIGNAL(tier::preview, e2::form::proceed::quit::one, fast);
+                        boss.bell::signal(tier::preview, e2::form::proceed::quit::one, fast);
                     };
                     boss.LISTEN(tier::preview, e2::form::proceed::quit::one, fast)
                     {
@@ -459,7 +460,7 @@ namespace netxs::app::shared
                     };
                     boss.LISTEN(tier::anycast, e2::form::upon::started, root)
                     {
-                        boss.SIGNAL(tier::release, e2::form::upon::started, root);
+                        boss.bell::signal(tier::release, e2::form::upon::started, root);
                     };
                     boss.LISTEN(tier::release, e2::form::global::sysstart, started, -, (order = true))
                     {
@@ -470,19 +471,19 @@ namespace netxs::app::shared
                             if (order) pro::focus::pass(t, d);
                             else       pro::focus::pass(d, t);
                             boss.roll();
-                            boss.back()->RISEUP(tier::preview, e2::form::prop::ui::footer, footer, ());
+                            boss.back()->base::riseup(tier::preview, e2::form::prop::ui::footer);
                             boss.back()->reflow();
                             boss.back()->deface();
                             order = !order;
                         }
-                        boss.bell::template expire<tier::release>(true);
+                        boss.bell::expire(tier::release, true);
                     };
                     boss.LISTEN(tier::release, e2::form::proceed::quit::any, fast, -, (count = 2))
                     {
                         if (--count == 0)
                         if (auto parent = boss.parent())
                         {
-                            parent->RISEUP(tier::release, e2::form::proceed::quit::one, fast);
+                            parent->base::riseup(tier::release, e2::form::proceed::quit::one, fast);
                         }
                     };
                 });
@@ -515,6 +516,7 @@ namespace netxs::app::shared
                 .add(app::shared::repository);
             auto window = ui::cake::ctor()
                 ->plugin<pro::focus>(pro::focus::mode::focused)
+                ->plugin<pro::keybd>()
                 ->plugin<pro::acryl>()
                 ->plugin<pro::cache>()
                 ->colors(whitedk, 0x30000000)
@@ -522,16 +524,7 @@ namespace netxs::app::shared
                 {
                     boss.LISTEN(tier::anycast, e2::form::proceed::quit::any, fast)
                     {
-                        boss.RISEUP(tier::release, e2::form::proceed::quit::one, fast);
-                    };
-                    boss.LISTEN(tier::anycast, e2::form::upon::started, window_ptr2)
-                    {
-                        boss.RISEUP(tier::request, e2::form::prop::window::instance, window_ptr, ());
-                        //todo too hacky
-                        if (auto form_ptr = std::dynamic_pointer_cast<ui::cake>(window_ptr))
-                        {
-                            form_ptr->plugins<pro::title>().live = faux;
-                        }
+                        boss.base::riseup(tier::release, e2::form::proceed::quit::one, fast);
                     };
                 });
             auto object = window->attach(ui::fork::ctor(axis::Y))
@@ -543,13 +536,14 @@ namespace netxs::app::shared
                 { menu::item{ menu::item::type::Splitter, faux, 0, std::vector<menu::item::look>{{ .label = ver }}},
                 [](auto& /*boss*/, auto& /*item*/)
                 { }},
-                { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "×", .notes = " Close ", .hover = c1 }}},
-                [](auto& boss, auto& /*item*/)
+                { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "×", .tooltip = " Close ", .hover = c1 }}},
+                [window, c1](auto& boss, auto& /*item*/)
                 {
+                    boss.template shader<tier::anycast>(cell::shaders::color(c1), e2::form::state::keybd::command::close, boss.This());
                     boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
                     {
                         auto backup = boss.This();
-                        boss.RISEUP(tier::release, e2::form::proceed::quit::one, true);
+                        boss.base::riseup(tier::release, e2::form::proceed::quit::one, true);
                         gear.dismiss(true);
                     };
                 }},
@@ -563,7 +557,7 @@ namespace netxs::app::shared
                                 ->limits({ -1,-1 }, { -1,-1 });
             static const auto data = []
             {
-                auto [days, hours, mins, secs] = datetime::breakdown(datetime::now() - os::process::id.second);
+                auto [days, hours, mins, secs, msecs] = datetime::breakdown(datetime::now() - os::process::id.second);
                 auto uptime = (days  ? std::to_string(days)  + "d " : ""s)
                             + (hours ? std::to_string(hours) + "h " : ""s)
                             + (mins  ? std::to_string(mins)  + "m " : ""s)
@@ -601,54 +595,170 @@ namespace netxs::app::shared
                     app::test::test_page(purewhite, whitelt),
                 };
             };
-            auto update = [](auto& boss)
+            auto body = data();
+            auto items = scroll->attach(ui::list::ctor());
+            auto title_grid_state = items->attach(ui::list::ctor(axis::Y)->setpad({ 0, 0, 0, 2}));
+            auto title_block = title_grid_state->attach(ui::item::ctor("Keyboard Test")->setpad({ 2, 0, 1, 0 }));
+            auto chord_block = title_grid_state->attach(ui::grid::ctor())
+                ->setpad({ 4, 5, 0, 1})
+                ->active()
+                //->template plugin<pro::focus>()
+                ->template plugin<pro::grade>();
+            auto state_block = title_grid_state->attach(ui::fork::ctor());
+            auto state_label = state_block->attach(slot::_1, ui::item::ctor("Alternate hotkey scheme:")->setpad({ 2, 1, 0, 0 }));
+            auto state_state = state_block->attach(slot::_2, ui::item::ctor(ansi::bgc(reddk).fgx(0).add("█off ")))
+                ->setpad({ 1, 1, 0, 0 })
+                ->active()
+                ->shader(cell::shaders::xlight, e2::form::state::hover)
+                ->invoke([&](auto& boss)
+                {
+                    boss.LISTEN(tier::anycast, e2::form::upon::started, root, -, (subs_ptr = ptr::shared<subs>()))
+                    {
+                        subs_ptr->clear();
+                        if (auto focusable_parent = boss.base::riseup(tier::request, e2::config::plugins::focus::owner))
+                        {
+                            focusable_parent->LISTEN(tier::release, e2::form::state::keybd::scheme, hscheme, (*subs_ptr))
+                            {
+                                //todo unify
+                                boss.set(hscheme.size() ? ansi::bgc(greendk).fgc(whitelt).add(" on █")
+                                                        : ansi::bgc(reddk).fgx(0)        .add("█off "));
+                                boss.base::reflow();
+                            };
+                        }
+                    };
+                    boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
+                    {
+                        //todo unify
+                        if (gear.hscheme != ""sv)
+                        {
+                            gear.set_hotkey_scheme("");
+                        }
+                        else
+                        {
+                            gear.set_hotkey_scheme("1");
+                        }
+                        gear.dismiss_dblclick();
+                    };
+                });
+            auto field = []
             {
+                auto f = ui::item::ctor()
+                    ->setpad({ 2, 2, 0, 0 }, { -2, 1, 0, 0 })
+                    ->active()
+                    ->colors(purewhite, 0x00)
+                    ->shader(cell::shaders::xlight, e2::form::state::hover)
+                    ->invoke([&](auto& boss)
+                    {
+                        boss.base::hidden = true;
+                        auto backup = ptr::shared<text>();
+                        boss.LISTEN(tier::release, hids::events::mouse::any, gear, -, (backup))
+                        {
+                            if (events::subevent(gear.cause, hids::events::mouse::button::down::any.id))
+                            {
+                                if (backup->empty())
+                                {
+                                    gear.capture(boss.bell::id);
+                                    *backup = boss.get_source();
+                                    gear.set_clipboard({ (si32)backup->length(), 1 }, *backup, mime::textonly);
+                                    boss.set("<copied>");
+                                }
+                            }
+                            else if (backup->size() && gear.pressed_count == 0)
+                            {
+                                gear.setfree();
+                                boss.set(*backup);
+                                backup->clear();
+                            }
+                        };
+                    });
+                return f;
+            };
+            auto label = [](auto str)
+            {
+                return ui::item::ctor(str)
+                    ->setpad({ 0, 4, 0, 0 });
+                    //->upload(str);
+            };
+            auto pressed  = std::to_array({ field(), field(), field(), field() });
+            auto released = std::to_array({ field(), field(), field(), field() });
+            auto pressed_label  = label( "pressed:")->alignment({ snap::tail, snap::both });
+            auto released_label = label("released:");
+            chord_block->attach_cells({ 5, 3 }, {           {}, label("Generic"), label("Literal"), label("Specific"), label("Scancodes"),
+                                                 pressed_label, pressed[0],       pressed[1],       pressed[2],        pressed[3],
+                                                released_label, released[0],      released[1],      released[2],       released[3] });
+            released[0]->set("<Press any keys>")->hidden = faux;;
+            auto update_ptr = ptr::shared([pressed, released](auto& boss, hids& gear, bool is_key_event)
+            {
+                //log("vkchord=%% keyid=%% hexvkchord=%% hexscchord=%% hexchchord=%%", input::key::kmap::to_string(gear.vkchord, faux),
+                //    input::key::map::data(gear.keycode).name,
+                //    utf::buffer_to_hex(gear.vkchord),
+                //    utf::buffer_to_hex(gear.scchord),
+                //    utf::buffer_to_hex(gear.chchord));
                 auto body = data();
                 auto iter = body.begin();
                 auto i = 0;
                 for (auto& rec : boss.base::subset)
                 {
-                    if (++i == 2) break;
-                    auto rec_ptr = std::static_pointer_cast<ui::post>(rec);
-                    rec_ptr->upload(*iter++, -1);
+                    ++i;
+                    if (i == 4) break;
+                    if (i == 1)
+                    {
+                        if (is_key_event && gear.vkchord.size())
+                        {
+                            auto& dst = gear.keystat ? pressed : released;
+                            auto generic = input::key::kmap::to_string(gear.vkchord, true);
+                            auto literal = input::key::kmap::to_string(gear.chchord, true);
+                            auto specific = input::key::kmap::to_string(gear.vkchord, faux);
+                            auto scancodes = input::key::kmap::to_string(gear.scchord, faux);
+                            dst[0]->set(generic);
+                            dst[1]->set(literal);
+                            dst[2]->set(specific);
+                            dst[3]->set(scancodes);
+                            if (gear.keystat == input::key::pressed)
+                            {
+                                for (auto& r : released) r->set("");
+                            }
+                            for (auto& r : pressed)  r->hidden = r->get_source().empty();
+                            for (auto& r : released) r->hidden = r->get_source().empty();
+                        }
+                    }
+                    else
+                    {
+                        auto rec_ptr = std::static_pointer_cast<ui::post>(rec);
+                        rec_ptr->upload(*iter++, -1);
+                    }
                 }
-            };
-            auto body = data();
-            auto items = scroll->attach(ui::list::ctor());
+            });
             for (auto& item : body)
             {
-                auto stats = items->subset.size() < 2;
+                auto stats = items->subset.size() < 3;
                 auto block = items->attach(ui::post::ctor())
-                    ->setpad({ 2, 2, 0, 2})
+                    ->setpad({ 2, 2, 0, 2 })
                     ->upload(item, stats ? -1 : 0)
                     ->active()
-                    ->template plugin<pro::focus>()
+                    //->template plugin<pro::focus>()
                     ->template plugin<pro::grade>();
-                    //->shader(cell::shaders::color(c3), e2::form::state::keybd::focus::count);
+                    //->shader(cell::shaders::color(c3), e2::form::state::focus::count);
                 if (stats) block->shader(cell::shaders::xlight, e2::form::state::hover);
             }
             items->invoke([&](auto& boss)
             {
-                boss.LISTEN(tier::release, hids::events::mouse::button::down::any, gear, -, (update)) //todo MS VS2019 can't capture static 'auto update =...'.
+                boss.LISTEN(tier::release, hids::events::mouse::button::down::any, gear, -, (update_ptr))
                 {
-                    update(boss);
+                    (*update_ptr)(boss, gear, faux);
                 };
             });
             window->invoke([&](auto& boss)
             {
                 auto& items_inst = *items;
-                boss.LISTEN(tier::release, hids::events::keybd::key::any, gear, -, (update)) //todo MS VS2019 can't capture static 'auto update =...'.
+                auto& keybd = boss.template plugins<pro::keybd>();
+                app::shared::base_kb_navigation(keybd, scroll, boss);
+                keybd.proc("UpdateChordPreview", [&, update_ptr](hids& gear, txts&)
                 {
-                    if (!gear.keybd::pressed) return;
-                    if (gear.chord(input::key::F10)
-                     || gear.chord(input::key::Enter)
-                     || gear.chord(input::key::Esc))
-                    {
-                        boss.SIGNAL(tier::anycast, e2::form::proceed::quit::one, true);
-                        gear.set_handled(true);
-                    }
-                    else update(items_inst);
-                };
+                    if (gear.keystat != input::key::repeated) (*update_ptr)(items_inst, gear, true);
+                });
+                keybd.template bind<tier::release>( "Any", "",  "UpdateChordPreview");
+                keybd.template bind<tier::release>( "Any", "1", "UpdateChordPreview");
             });
             inside->attach(slot::_2, ui::post::ctor())
                 ->limits({ -1, 1 })

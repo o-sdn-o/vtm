@@ -442,7 +442,7 @@ struct impl : consrv
         ui32 length;
         ui32 offset;
 
-        auto readoffset() const { return static_cast<ui32>(length ? length + sizeof(ui32) * 2 /*sizeof(drvpacket payload)*/ : 0); }
+        auto readoffset() const { return (ui32)(length ? length + sizeof(ui32) * 2 /*sizeof(drvpacket payload)*/ : 0); }
         auto sendoffset() const { return length; }
         template<class T>
         auto recv_data(fd_t condrv, T&& buffer)
@@ -548,13 +548,13 @@ struct impl : consrv
 
         auto& ref_history(text& exe)
         {
-            return inputs[utf::to_low(exe)];
+            return inputs[utf::to_lower(exe)];
         }
         auto get_history(text& exe)
         {
             auto lock = std::lock_guard{ locker };
             auto crop = text{};
-            auto iter = inputs.find(utf::to_low(exe));
+            auto iter = inputs.find(utf::to_lower(exe));
             if (iter != inputs.end())
             {
                 auto& recs = iter->second;
@@ -569,7 +569,7 @@ struct impl : consrv
         void off_history(text& exe)
         {
             auto lock = std::lock_guard{ locker };
-            auto iter = inputs.find(utf::to_low(exe));
+            auto iter = inputs.find(utf::to_lower(exe));
             if (iter != inputs.end()) inputs.erase(iter);
         }
         void add_alias(text& exe, text& src, text& dst)
@@ -577,8 +577,8 @@ struct impl : consrv
             auto lock = std::lock_guard{ locker };
             if (exe.size() && src.size())
             {
-                utf::to_low(exe);
-                utf::to_low(src);
+                utf::to_lower(exe);
+                utf::to_lower(src);
                 if (dst.size())
                 {
                     macros[exe][src] = dst;
@@ -606,8 +606,8 @@ struct impl : consrv
             auto crop = text{};
             if (exe.size() && src.size())
             {
-                utf::to_low(exe);
-                utf::to_low(src);
+                utf::to_lower(exe);
+                utf::to_lower(src);
                 if (auto exe_iter = macros.find(exe); exe_iter != macros.end())
                 {
                     auto& src_map = exe_iter->second;
@@ -634,7 +634,7 @@ struct impl : consrv
         {
             auto lock = std::lock_guard{ locker };
             auto crop = text{};
-            utf::to_low(exe);
+            utf::to_lower(exe);
             if (auto exe_iter = macros.find(exe); exe_iter != macros.end())
             {
                 auto& src_map = exe_iter->second;
@@ -659,14 +659,20 @@ struct impl : consrv
              && shadow.back() != '\t')
             {
                 auto prefix = shadow.substr(0, 3).str();
-                utf::to_low(prefix);
+                utf::to_lower(prefix);
                 if (prefix != cd_prefix) return;
                 auto crop = shadow.substr(cd_prefix.size());
                 auto path = crop;
                 utf::trim_front(path, " \t\r\n");
                 if (path && path.front() != '/')
                 {
-                    line = cd_forced + crop.str();
+                    auto utf8 = path.str();
+                    auto i =  utf8[0] == '"' ? 1u : 0u;
+                    if (utf8.size() > 1u + i && utf8[1 + i] == ':')
+                    {
+                        utf8[i] = utf::to_upper(utf8[i]); // Make drive letter upper case.
+                    }
+                    line = cd_forced + utf8;
                 }
             }
         }
@@ -674,7 +680,7 @@ struct impl : consrv
         {
             if (macros.empty() || line.empty()) return;
 
-            utf::to_low(exe);
+            utf::to_lower(exe);
             auto exe_iter = macros.find(exe);
             if (exe_iter == macros.end()) return;
 
@@ -683,7 +689,7 @@ struct impl : consrv
 
             auto rest = qiew{ line };
             auto crop = utf::take_front<faux>(rest, " \r\n");
-            auto iter = src_map.find(utf::to_low(crop));
+            auto iter = src_map.find(utf::to_lower(crop));
             if (iter == src_map.end()) return;
 
             auto tail = utf::trim_back(rest, "\r\n");
@@ -696,10 +702,10 @@ struct impl : consrv
                 if (data.size() >= 2)
                 {
                     auto s = utf::pop_front(data, 2);
-                    auto c = utf::to_low(s.back());
+                    auto c = utf::to_lower(s.back());
                     if (c >= '1' && c <= '9')
                     {
-                        auto n = static_cast<ui32>(c - '1');
+                        auto n = (ui32)(c - '1');
                         if (args.size() > n) result += args[n];
                     }
                     else switch (c)
@@ -720,7 +726,7 @@ struct impl : consrv
         auto off_aliases(text& exe)
         {
             auto lock = std::lock_guard{ locker };
-            utf::to_low(exe);
+            utf::to_lower(exe);
             if (auto exe_iter = macros.find(exe); exe_iter != macros.end())
             {
                 macros.erase(exe_iter);
@@ -736,7 +742,7 @@ struct impl : consrv
         auto count()
         {
             auto lock = std::lock_guard{ locker };
-            return static_cast<ui32>(stream.size());
+            return (ui32)stream.size();
         }
         void abort(hndl* handle_ptr)
         {
@@ -967,7 +973,7 @@ struct impl : consrv
         }
         void mouse(input::hids& gear, twod coord)
         {
-            auto state = os::nt::ms_kbstate(gear.ctlstate);
+            auto state = os::nt::ms_kbstate(gear.ctlstat);
             auto bttns = gear.m_sys.buttons & 0b00011111;
             auto moved = gear.m_sys.buttons == gear.m_sav.buttons && gear.m_sys.wheelfp == 0.f; // No events means mouse move. MSFT: "MOUSE_EVENT_RECORD::dwEventFlags: If this value is zero, it indicates a mouse button being pressed or released". Far Manager relies on this.
             auto flags = ui32{};
@@ -1060,7 +1066,8 @@ struct impl : consrv
             toWIDE.clear();
             if constexpr (isreal()) // Copy/Paste by Ctrl/Shift+Insert in cooked read mode.
             {
-                if (incook && gear.pressed && gear.keycode == input::key::Insert)
+                //todo key
+                if (incook && gear.keystat && gear.keycode == input::key::KeyInsert)
                 {
                     if (gear.meta(input::hids::anyShift))
                     {
@@ -1078,10 +1085,10 @@ struct impl : consrv
             if (toWIDE.empty()) toWIDE.push_back(0);
             auto c = toWIDE.front();
 
-            auto ctrls = os::nt::ms_kbstate(gear.ctlstate) | (gear.extflag ? ENHANCED_KEY : 0);
+            auto ctrls = os::nt::ms_kbstate(gear.ctlstat) | (gear.extflag ? ENHANCED_KEY : 0);
             if (toWIDE.size() > 1) // Surrogate pair special case (not a clipboard paste, see generate(wiew wstr, ui32 s = 0)).
             {
-                if (gear.pressed)
+                if (gear.keystat)
                 {
                     for (auto a : toWIDE)
                     {
@@ -1097,7 +1104,7 @@ struct impl : consrv
                     auto yield = gear.interpret(decckm);
                     if (yield.size()) generate(yield);
                 }
-                else generate(c, ctrls, gear.virtcod, gear.pressed, gear.scancod);
+                else generate(c, ctrls, gear.virtcod, gear.keystat, gear.scancod);
             }
 
             if (c == ansi::c0_etx)
@@ -1106,11 +1113,11 @@ struct impl : consrv
                 {
                     // Do not pop_back to provide the same behavior as Ctrl+C does in cmd.exe and in pwsh. (despite it emits one more ^C in wsl, but it's okay)
                     //stream.pop_back();
-                    if (gear.pressed) alert(os::signals::ctrl_break);
+                    if (gear.keystat) alert(os::signals::ctrl_break);
                 }
                 else
                 {
-                    if (gear.pressed)
+                    if (gear.keystat)
                     {
                         ctrl_c = true;
                         if (server.inpmod & nt::console::inmode::preprocess)
@@ -1161,7 +1168,7 @@ struct impl : consrv
             // server.uiterm.bpmode = true;
             // restore at exit
             auto& hist = ref_history(nameview);
-            auto mode = testy<bool>{ !!(server.inpmod & nt::console::inmode::insert) };
+            auto mode = !!(server.inpmod & nt::console::inmode::insert);
             auto buff = text{};
             //auto nums = utfx{};
             auto line = para{ 'C', cooked.ustr }; // Set semantic marker OSC 133;C.
@@ -1249,7 +1256,8 @@ struct impl : consrv
                                 else
                                 {
                                     burn();
-                                    mode(!mode);
+                                    mode = !mode;
+                                    //log(ansi::err("MODE CHANGED ", mode ? "1" : "0"));
                                 }
                                 break;
                             case VK_F6:     burn(); hist.save(line);               line.insert(cell{}.c0_to_txt('Z' - '@'), mode); break;
@@ -1369,6 +1377,23 @@ struct impl : consrv
                             }
                         }
                     }
+                    else if (rec.EventType == MENU_EVENT) //todo implement
+                    {
+                        if (rec.Event.MenuEvent.dwCommandId == (nt::console::event::custom | nt::console::event::paste_begin))
+                        {
+                            wcpair = {};
+                            cooked.ctrl = 0;
+                            //clip = true;
+                            //cooked.ustr += ansi::paste_begin;
+                        }
+                        else if (rec.Event.MenuEvent.dwCommandId == (nt::console::event::custom | nt::console::event::paste_end))
+                        {
+                            wcpair = {};
+                            done = true; // Update terminal viewport.
+                            //clip = faux;
+                            //cooked.ustr += ansi::paste_end;
+                        }
+                    }
                     //else if (nums && v == VK_MENU) // Alt is released after num digits input.
                     //{
                     //    server.inpenc->decode(nums, buff);
@@ -1410,11 +1435,13 @@ struct impl : consrv
                                 term.cr();
                                 term.lf(crlf);
                             }
-                            else term.move(line.caret - line.length());
-
-                            if (mode.reset())
+                            else
                             {
-                                if constexpr (isreal())
+                                term.move(line.caret - line.length());
+                            }
+                            if constexpr (isreal())
+                            {
+                                if (mode != !!(server.inpmod & nt::console::inmode::insert))
                                 {
                                     server.uiterm.cursor.toggle();
                                 }
@@ -1429,6 +1456,10 @@ struct impl : consrv
                         server.uiterm.data(data);
                     }
                     lock.lock();
+                    if (mode != !!(server.inpmod & nt::console::inmode::insert))
+                    {
+                        netxs::set_flag<nt::console::inmode::insert>(server.inpmod, mode);
+                    }
                 }
             }
             while (!done && ((void)signal.wait(lock, [&]{ return stream.size() || closed || cancel; }), !closed && !cancel));
@@ -1443,8 +1474,6 @@ struct impl : consrv
             map_cd_shim(nameview, cooked.ustr);
             cooked.save(utf16);
             if (stream.empty()) ondata.flush();
-
-            server.inpmod = (server.inpmod & ~nt::console::inmode::insert) | (mode ? nt::console::inmode::insert : 0);
         }
         template<class L>
         auto readchar(L& lock, bool& cancel, bool utf16)
@@ -2197,7 +2226,7 @@ struct impl : consrv
                 if (c == brgb) bgcx = m;
             }
         }
-        attr = static_cast<ui16>(fgcx + (bgcx << 4));
+        attr = (ui16)(fgcx + (bgcx << 4));
         if (brush.inv()) attr |= COMMON_LVB_REVERSE_VIDEO;
         if (brush.und()) attr |= COMMON_LVB_UNDERSCORE;
         if (brush.ovr()) attr |= COMMON_LVB_GRID_HORIZONTAL;
@@ -2266,7 +2295,7 @@ struct impl : consrv
         }
     }
     template<class T, class ...Args>
-    auto take_text(T&& packet, Args&& ...args)
+    auto take_text(T&& packet, Args&&... args)
     {
         auto size = (args + ...);
         if (packet.input.utf16)
@@ -2311,8 +2340,8 @@ struct impl : consrv
         {
             if (handle_ptr->link == &uiterm.target)
             {
-                     if (uiterm.target == &uiterm.normal) uiterm.update([&]{ proc(uiterm.normal); return faux; });
-                else if (uiterm.target == &uiterm.altbuf) uiterm.update([&]{ proc(uiterm.altbuf); return faux; });
+                     if (uiterm.target == &uiterm.normal) unsync |= proc(uiterm.normal);
+                else if (uiterm.target == &uiterm.altbuf) unsync |= proc(uiterm.altbuf);
                 return true;
             }
             else
@@ -2329,7 +2358,7 @@ struct impl : consrv
                         if (auto iter2 = std::find_if(client.alters.begin(), client.alters.end(), [&](auto& altbuf){ return link == &altbuf; });
                             iter2 != client.alters.end()) // Buffer exists.
                         {
-                            uiterm.update([&]{ proc(*iter2); return faux; });
+                            unsync |= proc(*iter2);
                             return true;
                         }
                     }
@@ -2624,7 +2653,7 @@ struct impl : consrv
         }
         auto count = avail / sizeof(ui32);
         auto recs = wrap<ui32>::cast(buffer, count);
-        packet.reply.count = static_cast<ui32>(joined.size());
+        packet.reply.count = (ui32)joined.size();
         log("\treply.count: ", packet.reply.count);
         if (count >= joined.size())
         {
@@ -2886,7 +2915,7 @@ struct impl : consrv
             log("\tread mode: raw ReadFile emulation");
             packet.input = { .EOFon = 1 };
         }
-        auto namesize = static_cast<ui32>(packet.input.execb * sizeof(wchr));
+        auto namesize = (ui32)(packet.input.execb * sizeof(wchr));
         if (!size_check(packet.echosz,  packet.input.affix)
          || !size_check(packet.echosz,  answer.sendoffset())) return;
         auto readstep = packet.echosz - answer.sendoffset();
@@ -3015,7 +3044,7 @@ struct impl : consrv
         auto& packet = payload::cast(upload);
         auto recs = take_buffer<INPUT_RECORD, feed::fwd>(packet);
         if (recs.size()) events.sendevents(recs, packet.input.utf16);
-        packet.reply.count = static_cast<ui32>(recs.size());
+        packet.reply.count = (ui32)recs.size();
         log("\twritten events count: ", packet.reply.count,
             "\n\t", show_page(packet.input.utf16, inpenc->codepage));
     }
@@ -3118,15 +3147,15 @@ struct impl : consrv
                 if constexpr (isreal())
                 {
                     auto active = scroll_handle.link == &uiterm.target || scroll_handle.link == uiterm.target; // Target buffer can be changed during vt execution (eg: switch to altbuf).
-                    if (!direct(packet.target, [&](auto& scrollback){ active ? uiterm.ondata(crop)
-                                                                             : uiterm.ondata(crop, &scrollback); }))
+                    if (!direct(packet.target, [&](auto& scrollback){ return active ? uiterm.ondata_direct(crop)
+                                                                                    : uiterm.ondata_direct(crop, &scrollback); }))
                     {
                         datasize = 0;
                     }
                 }
                 else
                 {
-                    uiterm.ondata(crop);
+                    unsync |= uiterm.ondata_direct(crop);
                 }
                 log("\t", show_page(packet.input.utf16, codec.codepage), ": ", ansi::hi(utf::debase<faux, faux>(crop)));
                 scroll_handle.toUTF8.erase(0, crop.size()); // Delete processed data.
@@ -3163,14 +3192,14 @@ struct impl : consrv
         {
             auto& screen = *uiterm.target;
             auto coord = std::clamp(twod{ packet.input.coorx, packet.input.coory }, dot_00, screen.panel - dot_11);
-            auto maxsz = static_cast<ui32>(screen.panel.x * (screen.panel.y - coord.y) - coord.x);
+            auto maxsz = (ui32)(screen.panel.x * (screen.panel.y - coord.y) - coord.x);
             auto saved = screen.coord;
             auto count = ui32{};
             screen.cup0(coord);
             if (packet.input.etype == type::attribute)
             {
                 auto recs = take_buffer<ui16, feed::fwd>(packet);
-                count = static_cast<ui32>(recs.size());
+                count = (ui32)recs.size();
                 if (count > maxsz) count = maxsz;
                 log(prompt, "WriteConsoleOutputAttribute",
                             "\n\tinput.coord: ", coord,
@@ -3184,6 +3213,7 @@ struct impl : consrv
                 auto success = direct(packet.target, [&](auto& scrollback)
                 {
                     scrollback._data(count, filler.pick(), cell::shaders::meta);
+                    return true;
                 });
                 if (!success)
                 {
@@ -3222,13 +3252,14 @@ struct impl : consrv
                 auto success = direct(packet.target, [&](auto& scrollback)
                 {
                     auto& line = celler.content();
-                    count = static_cast<ui32>(line.length());
+                    count = (ui32)line.length();
                     if (count > maxsz)
                     {
                         count = maxsz;
                         line.crop(maxsz);
                     }
                     scrollback._data<true>(count, line.pick(), cell::shaders::text);
+                    return true;
                 });
                 if (!success)
                 {
@@ -3245,7 +3276,7 @@ struct impl : consrv
             if (packet.input.etype == type::attribute)
             {
                 auto recs = take_buffer<ui16, feed::fwd>(packet);
-                count = static_cast<ui32>(recs.size());
+                count = (ui32)recs.size();
                 log(prompt, "WriteConsoleOutputAttribute",
                             "\n\tinput.coord: ", coord,
                             "\n\tinput.count: ", count);
@@ -3258,7 +3289,7 @@ struct impl : consrv
                 if (packet.input.etype == type::ansiOEM)
                 {
                     auto recs = take_buffer<char, feed::fwd>(packet);
-                    count = static_cast<ui32>(recs.size());
+                    count = (ui32)recs.size();
                     if (outenc->codepage != CP_UTF8)
                     {
                         toUTF8.clear();
@@ -3273,7 +3304,7 @@ struct impl : consrv
                 else
                 {
                     auto recs = take_buffer<wchr, feed::fwd>(packet);
-                    count = static_cast<ui32>(recs.size());
+                    count = (ui32)recs.size();
                     toUTF8.clear();
                     utf::to_utf(recs, toUTF8);
                     log("\tinput.data: ", ansi::hi(utf::debase<faux, faux>(toUTF8)));
@@ -3454,6 +3485,7 @@ struct impl : consrv
                 auto success = direct(packet.target, [&](auto& scrollback)
                 {
                     uiterm.write_block(scrollback, dest, crop.coor, rect{ dot_00, window_inst.panel }, cell::shaders::full); // cell::shaders::skipnuls for transparency?
+                    return true;
                 });
                 if (!success) crop = {};
             }
@@ -3482,7 +3514,7 @@ struct impl : consrv
         auto& packet = payload::cast(upload);
         if constexpr (isreal())
         {
-            if (!direct(packet.target, [&](auto& scrollback){ scrollback.brush = attr_to_brush(packet.input.color); }))
+            if (!direct(packet.target, [&](auto& scrollback){ scrollback.brush = attr_to_brush(packet.input.color); return faux; }))
             {
                 log("\tdirect()", os::unexpected);
             }
@@ -3550,7 +3582,7 @@ struct impl : consrv
                     if (count > maxsz) count = std::max(0, maxsz);
                     filler.kill();
                     filler.size(count, c);
-                    if (!direct(packet.target, [&](auto& scrollback){ scrollback._data(count, filler.pick(), cell::shaders::meta); }))
+                    if (!direct(packet.target, [&](auto& scrollback){ scrollback._data(count, filler.pick(), cell::shaders::meta); return true; }))
                     {
                         count = 0;
                     }
@@ -3598,7 +3630,7 @@ struct impl : consrv
                             (head++)->wdt(utf::matrix::vs<21,21>);
                         }
                     }
-                    if (!direct(packet.target, [&](auto& scrollback){ scrollback._data(count, filler.pick(), cell::shaders::text); }))
+                    if (!direct(packet.target, [&](auto& scrollback){ scrollback._data(count, filler.pick(), cell::shaders::text); return true; }))
                     {
                         count = 0;
                     }
@@ -3671,7 +3703,7 @@ struct impl : consrv
             return;
         }
         auto recsz = packet.input.etype == type::ansiOEM ? sizeof(char) : sizeof(ui16);
-        auto count = static_cast<si32>(avail / recsz);
+        auto count = (si32)(avail / recsz);
 
         auto coor = twod{ packet.input.coorx, packet.input.coory };
         if constexpr (isreal())
@@ -4144,14 +4176,14 @@ struct impl : consrv
                 uiterm.ctrack.color[bgcx] = brgb;
                 rgbpalette         [bgcx] = argb::swap_rb(brgb); // conhost crashes if alpha non zero.
             }
-            packet.reply.attributes = static_cast<ui16>(fgcx + (bgcx << 4));
+            packet.reply.attributes = (ui16)(fgcx + (bgcx << 4));
             if (mark.inv()) packet.reply.attributes |= COMMON_LVB_REVERSE_VIDEO;
             if (mark.und()) packet.reply.attributes |= COMMON_LVB_UNDERSCORE;
             if (mark.ovr()) packet.reply.attributes |= COMMON_LVB_GRID_HORIZONTAL;
         }
         else
         {
-            packet.reply.attributes = static_cast<ui16>(fgcx + (bgcx << 4));
+            packet.reply.attributes = (ui16)(fgcx + (bgcx << 4));
         }
         log("\treply.attributes: ", utf::to_hex_0x(packet.reply.attributes),
             "\n\treply.cursor_coor: ", caretpos,
@@ -4393,6 +4425,7 @@ struct impl : consrv
             {
                 uiterm.write_block(scrollback, filler, scrl.coor, clip, cell::shaders::full);
                 uiterm.write_block(scrollback, mirror, dest,      clip, cell::shaders::full);
+                return true;
             });
         }
         else
@@ -4875,7 +4908,7 @@ struct impl : consrv
         };
         auto& packet = payload::cast(upload);
         auto [exe] = take_text(packet);
-        utf::to_low(exe);
+        utf::to_lower(exe);
         log("\t", show_page(packet.input.utf16, inpenc->codepage),
           "\n\tinput.exe: ", ansi::hi(utf::debase<faux, faux>(exe)),
           "\n\tlimit: ", packet.input.count);
@@ -5117,7 +5150,7 @@ struct impl : consrv
     }
     si32 wait()
     {
-        allout.wait(faux);
+        allout.wait(faux); //todo set timeout or something to avoid deadlocks (far manager deadlocking here)
         auto procstat = sigt{};
         if (::GetExitCodeProcess(prochndl, &procstat) && (procstat == STILL_ACTIVE || procstat == nt::status::control_c_exit))
         {

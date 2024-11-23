@@ -511,11 +511,12 @@ namespace netxs
             }
         }
         // argb: Darken the color.
-        void shadow(byte k = 39)
+        auto shadow(byte k = 39)
         {
             chan.r = chan.r < k ? 0x00 : chan.r - k;
             chan.g = chan.g < k ? 0x00 : chan.g - k;
             chan.b = chan.b < k ? 0x00 : chan.b - k;
+            return *this;
         }
         // argb: Lighten the color.
         void bright(si32 factor = 1)
@@ -1099,7 +1100,6 @@ namespace netxs
             }
             void set_direct(view utf8, si32 w, si32 h)
             {
-                static constexpr auto hasher = std::hash<view>{};
                 auto count = utf8.size();
                 token &= rtl_mask; // Keep rtl bit.
                 if (count < limit)
@@ -1113,7 +1113,7 @@ namespace netxs
                 }
                 else
                 {
-                    token |= hasher(utf8) & ~rtl_mask; // Keep rtl bit.
+                    token |= qiew::hash{}(utf8) & ~rtl_mask; // Keep rtl bit.
                     set_jumbo();
                     mtx(w, h);
                     jumbos().add(token & token_mask, utf8);
@@ -2446,8 +2446,6 @@ namespace netxs
 
         struct szgrips
         {
-            using test = testy<twod>;
-
             twod origin; // szgrips: Grab's initial coord info.
             twod dtcoor; // szgrips: The form coor parameter change factor while resizing.
             twod sector; // szgrips: Active quadrant, x,y = {-1|+1}. Border widths.
@@ -2591,7 +2589,6 @@ namespace netxs
         }
     }
 
-    using grid = std::vector<cell>;
     using vrgb = netxs::raw_vector<irgb<si32>>;
 
     // canvas: Core grid.
@@ -2609,27 +2606,29 @@ namespace netxs
               canvas(size.x * size.y)
         { }
 
+    public:
+        using span = std::span<cell const>;
+        using body = std::vector<cell>;
+
     protected:
         si32 digest = 0; // core: Resize stamp.
         rect region; // core: Physical square of canvas relative to current basis (top-left corner of the current rendering object, see face::change_basis).
         rect client; // core: Active canvas area relative to current basis.
-        grid canvas; // core: Cell data.
+        body canvas; // core: Cell data.
         cell marker; // core: Current brush.
 
     public:
-        using span = std::span<cell const>;
-
         core()                         = default;
         core(core&&)                   = default;
         core(core const&)              = default;
         core& operator = (core&&)      = default;
         core& operator = (core const&) = default;
-        core(span body, twod size)
+        core(span cells, twod size)
             : region{ dot_00, size },
               client{ dot_00, size },
-              canvas( body.begin(), body.end() )
+              canvas( cells.begin(), cells.end() )
         {
-            assert(size.x * size.y == std::distance(body.begin(), body.end()));
+            assert(size.x * size.y == std::distance(cells.begin(), cells.end()));
         }
         core(cell const& fill, si32 length)
             : region{ dot_00, { length, 1 } },
@@ -2717,6 +2716,12 @@ namespace netxs
             canvas.resize(new_size_x, c);
             digest++;
         }
+        auto crop(si32 at, si32 length) const // core: Return 1D fragment.
+        {
+            auto fragment = core{ span{ canvas.begin() + at, canvas.begin() + at + length }, twod{ length, 1 } };
+            fragment.marker = marker;
+            return fragment;
+        }
         void push(cell const& c) // core: Push cell back.
         {
             crop(region.size.x + 1, c);
@@ -2777,13 +2782,13 @@ namespace netxs
             each([&](cell& c){ c.scan(crop); });
             return crop;
         }
-        auto copy(grid& target) const // core: Copy only grid of the canvas to the specified grid bitmap.
+        auto copy(body& target) const // core: Copy only body of the canvas to the specified body bitmap.
         {
             target = canvas;
             return region.size;
         }
         template<class Face>
-        void copy(Face& dest) const // core: Copy only grid of the canvas to the specified core.
+        void copy(Face& dest) const // core: Copy only body of the canvas to the specified core.
         {
             dest.size(region.size);
             dest.canvas = canvas;
@@ -2869,7 +2874,7 @@ namespace netxs
             canvas.swap(other.canvas);
             std::swap(region, other.region);
         }
-        auto swap(grid& target) // core: Move the canvas to the specified array and return the current layout size.
+        auto swap(body& target) // core: Move the canvas to the specified array and return the current layout size.
         {
             if (auto size = canvas.size())
             {
@@ -3017,8 +3022,8 @@ namespace netxs
         {
             assert(     canvas.size() <= si32max);
             assert(what.canvas.size() <= si32max);
-            auto full = static_cast<si32>(     canvas.size());
-            auto size = static_cast<si32>(what.canvas.size());
+            auto full = (si32)     canvas.size();
+            auto size = (si32)what.canvas.size();
             auto rest = full - from;
             auto look = [&](auto canvas_begin, auto canvas_end, auto what_begin)
             {
@@ -3044,7 +3049,7 @@ namespace netxs
 
                         if (init == stop)
                         {
-                            from = static_cast<si32>(std::distance(head, iter)) - 1;
+                            from = (si32)std::distance(head, iter) - 1;
                             return true;
                         }
                         else dest = base;
@@ -3074,7 +3079,7 @@ namespace netxs
         auto toxy(si32 offset) const // core: Convert offset to coor.
         {
             assert(canvas.size() <= si32max);
-            auto maxs = static_cast<si32>(canvas.size());
+            auto maxs = (si32)canvas.size();
             if (!maxs) return dot_00;
             offset = std::clamp(offset, 0, maxs - 1);
             auto sx = std::max(1, region.size.x);
@@ -3084,11 +3089,11 @@ namespace netxs
         {
             if (from > upto) std::swap(from, upto);
             assert(canvas.size() <= si32max);
-            auto maxs = static_cast<si32>(canvas.size());
+            auto maxs = (si32)canvas.size();
             from = std::clamp(from, 0, maxs ? maxs - 1 : 0);
             upto = std::clamp(upto, 0, maxs);
             auto size = upto - from;
-            return core{ span{ canvas.begin() + from, static_cast<size_t>(size) }, { size, 1 }};
+            return core{ span{ canvas.begin() + from, (size_t)size }, { size, 1 }};
         }
         auto line(twod p1, twod p2) const // core: Get stripe.
         {

@@ -137,24 +137,12 @@ namespace netxs::ui
             { }
 
             // link: Send an event message to the link owner.
-            template<tier Tier = tier::release, class E, class T>
-            void notify(E, T&& data)
+            template<class E, class T>
+            void notify(E, T&& data, si32 Tier = tier::release)
             {
-                owner.bell::enqueue(owner.This(), [d = data](auto& boss) mutable
+                owner.bell::enqueue(owner.This(), [Tier, d = data](auto& boss) mutable
                 {
-                    //boss.SIGNAL(Tier, E{}, d); // VS2022 17.4.1 doesn't get it for some reason (nested lambdas + static_cast + decltype(...)::type).
-                    boss.bell::template signal<Tier>(E::id, static_cast<typename E::type &&>(d));
-                });
-            }
-            void handle(s11n::xs::focusbus    lock)
-            {
-                auto& focus = lock.thing;
-                auto deed = netxs::events::makeid(hids::events::keybd::focus::bus::any.id, focus.cause);
-                if (focus.guid != ui::console::id.second || deed != hids::events::keybd::focus::bus::copy.id) // To avoid focus tree infinite looping.
-                owner.bell::enqueue(owner.This(), [d = focus, deed](auto& boss) mutable
-                {
-                    auto seed = hids::events::keybd::focus::bus::on.param({ .id = d.gear_id });
-                    boss.bell::template signal<tier::release>(deed, seed);
+                    boss.bell::signal(Tier, E::id, d);
                 });
             }
             void handle(s11n::xs::req_input_fields lock)
@@ -163,7 +151,7 @@ namespace netxs::ui
                 {
                     auto ext_gear_id = item.gear_id;
                     auto int_gear_id = owner.get_int_gear_id(ext_gear_id);
-                    owner.SIGNAL(tier::general, ui::e2::command::request::inputfields, inputfield_request, ({ .gear_id = int_gear_id, .acpStart = item.acpStart, .acpEnd = item.acpEnd })); // pro::focus retransmits as a tier::release for focused objects.
+                    auto inputfield_request = owner.bell::signal(tier::general, ui::e2::command::request::inputfields, { .gear_id = int_gear_id, .acpStart = item.acpStart, .acpEnd = item.acpEnd }); // pro::focus retransmits as a tier::release for focused objects.
                     auto field_list = inputfield_request.wait_for();
                     for (auto& f : field_list) f.coor -= owner.coor();
                     s11n::ack_input_fields.send(canal, ext_gear_id, field_list);
@@ -185,11 +173,6 @@ namespace netxs::ui
                     auto msg = utf::concat(prompt::repl, ansi::err("Not implemented: "), ansi::clr(yellowlt, utf::trim(cmd, "\r\n")));
                     s11n::logs.send(canal, ui32{}, datetime::now(), msg);
                 }
-            }
-            void handle(s11n::xs::sysfocus    lock)
-            {
-                auto& focus = lock.thing;
-                notify(e2::conio::focus, focus);
             }
             void handle(s11n::xs::syswinsz    lock)
             {
@@ -215,7 +198,7 @@ namespace netxs::ui
                 auto& item = lock.thing;
                 if (ui::console::id.first == item.id)
                 {
-                    notify<tier::general>(e2::conio::logs, item.data);
+                    notify(e2::conio::logs, item.data, tier::general);
                 }
                 else
                 {
@@ -227,14 +210,19 @@ namespace netxs::ui
                         {
                             data.add(netxs::prompt::pads, item.id, ": ", line, '\n');
                         });
-                        notify<tier::general>(e2::conio::logs, data);
+                        notify(e2::conio::logs, data, tier::general);
                     }
                 }
             }
             void handle(s11n::xs::syskeybd    lock)
             {
-                auto& keybd = lock.thing;
-                notify(e2::conio::keybd, keybd);
+                auto& item = lock.thing;
+                notify(e2::conio::keybd, item);
+            }
+            void handle(s11n::xs::sysfocus    lock)
+            {
+                auto& item = lock.thing;
+                notify(e2::conio::focus, item);
             }
             void handle(s11n::xs::sysmouse    lock)
             {
@@ -271,7 +259,7 @@ namespace netxs::ui
             void handle(s11n::xs::cwd         lock)
             {
                 auto& path = lock.thing.path;
-                notify<tier::anycast>(e2::form::prop::cwd, path);
+                notify(e2::form::prop::cwd, path, tier::anycast);
             }
             void handle(s11n::xs::sysclose    lock)
             {
@@ -438,7 +426,6 @@ namespace netxs::ui
             cell tooltip_colors; // conf: Tooltip rendering colors.
             bool tooltip_enabled; // conf: Enable tooltips.
             bool debug_overlay; // conf: Enable to show debug overlay.
-            text debug_toggle; // conf: Debug toggle shortcut.
             bool show_regions; // conf: Highlight region ownership.
             bool simple; // conf: .
             svga vtmode; // conf: .
@@ -458,7 +445,6 @@ namespace netxs::ui
                 tooltip_timeout   = config.take("/config/tooltips/timeout"         , span{ 2000ms });
                 tooltip_enabled   = config.take("/config/tooltips/enabled"         , true);
                 debug_overlay     = config.take("/config/debug/overlay"            , faux);
-                debug_toggle      = config.take("/config/debug/toggle"             , "🐞"s);
                 show_regions      = config.take("/config/debug/regions"            , faux);
                 clip_preview_glow = std::clamp(clip_preview_glow, 0, 5);
             }
@@ -623,8 +609,8 @@ namespace netxs::ui
             X(win_size     , "win size"         ) \
             X(key_code     , "key virt"         ) \
             X(key_scancode , "key scan"         ) \
-            X(key_character, "key data"         ) \
-            X(key_pressed  , "key push"         ) \
+            X(key_chord    , "key chord"        ) \
+            X(key_state    , "key state"        ) \
             X(key_payload  , "key type"         ) \
             X(ctrl_state   , "controls"         ) \
             X(k            , "k"                ) \
@@ -743,7 +729,7 @@ namespace netxs::ui
                 stress = cell{}.fgc(whitelt);
                 alerts = cell{}.fgc(argb{ 0xFF'ff'd0'd0 });
 
-                status.style.wrp(wrap::on).jet(bias::left).rlf(feed::rev).mgl(4);
+                status.style.wrp(wrap::off).jet(bias::left).rlf(feed::rev).mgl(4);
                 status.current().locus.cup(dot_00).cnl(2);
 
                 auto maxlen = 0_sz;
@@ -763,12 +749,7 @@ namespace netxs::ui
                     status[prop::frame_rate].set(stress) = std::to_string(fps);
                     boss.base::strike();
                 };
-                boss.SIGNAL(tier::general, e2::config::fps, e2::config::fps.param(-1));
-                boss.LISTEN(tier::release, e2::conio::focus, f, tokens)
-                {
-                    update(f.state);
-                    boss.base::strike();
-                };
+                boss.bell::signal(tier::general, e2::config::fps, e2::config::fps.param(-1));
                 boss.LISTEN(tier::release, e2::area, new_area, tokens)
                 {
                     update(new_area.size);
@@ -802,11 +783,17 @@ namespace netxs::ui
                     status[prop::mouse_vtwheel].set(stress) = (m.wheelfp && !m.hzwheel) ? "active" : "idle  ";
                     status[prop::ctrl_state   ].set(stress) = "0x" + utf::to_hex(m.ctlstat);
                 };
-                boss.LISTEN(tier::release, e2::conio::keybd, k, tokens)
+                boss.LISTEN(tier::release, e2::conio::focus, f, tokens)
                 {
                     shadow();
+                    status[prop::focused].set(stress) = f.state ? "focused  " : "unfocused";
+                };
+                boss.LISTEN(tier::release, e2::conio::keybd, k, tokens)
+                {
+                    static constexpr auto kstate = std::to_array({ "idle    ", "pressed ", "repeated" });
+                    shadow();
                     status[prop::last_event   ].set(stress) = "keybd";
-                    status[prop::key_pressed  ].set(stress) = k.pressed ? "pressed" : "idle";
+                    status[prop::key_state    ].set(stress) = kstate[k.keystat % 3];
                     status[prop::ctrl_state   ].set(stress) = "0x" + utf::to_hex(k.ctlstat );
                     status[prop::key_code     ].set(stress) = "0x" + utf::to_hex(k.virtcod );
                     status[prop::key_scancode ].set(stress) = "0x" + utf::to_hex(k.scancod );
@@ -815,24 +802,33 @@ namespace netxs::ui
                                                             : k.payload == keybd::type::imeanons ? "IME composition"
                                                             : k.payload == keybd::type::imeinput ? "IME input"
                                                             : k.payload == keybd::type::kblayout ? "keyboard layout" : "unknown payload";
-                    if (k.cluster.length())
+                    if (k.vkchord.length())
                     {
                         auto t = text{};
-                        for (byte c : k.cluster)
+                        if (k.vkchord.size() && k.keystat != input::key::repeated)
                         {
-                                 if (c <  0x20) t += "^" + utf::to_utf_from_code(c + 0x40);
-                            else if (c == 0x7F) t += "\\x7F";
-                            else if (c == 0x20) t += "\\x20";
-                            else                t.push_back(c);
+                            auto vkchord =     input::key::kmap::to_string(k.vkchord, faux);
+                            auto scchord =     input::key::kmap::to_string(k.scchord, faux);
+                            auto chchord =     input::key::kmap::to_string(k.chchord, faux);
+                            auto gen_vkchord = input::key::kmap::to_string(k.vkchord, true);
+                            auto gen_chchord = input::key::kmap::to_string(k.chchord, true);
+                            //log("Keyboard chords: %%  %%  %%", utf::buffer_to_hex(gear.vkchord), utf::buffer_to_hex(gear.scchord), utf::buffer_to_hex(gear.chchord),
+                            if (vkchord.size()) t += (t.size() ? "  " : "") + (vkchord == gen_vkchord ? vkchord : gen_vkchord + "  " + vkchord);
+                            if (chchord.size()) t += (t.size() ? "  " : "") + (chchord == gen_chchord ? chchord : gen_chchord + "  " + chchord);
+                            if (scchord.size()) t += (t.size() ? "  " : "") + scchord;
                         }
-                        status[prop::key_character].set(stress) = t;
+                        else if (k.cluster.length()) //todo revise
+                        {
+                            for (byte c : k.cluster)
+                            {
+                                     if (c <  0x20) t += "^" + utf::to_utf_from_code(c + 0x40);
+                                else if (c == 0x7F) t += "\\x7F";
+                                else if (c == 0x20) t += "\\x20";
+                                else                t.push_back(c);
+                            }
+                        }
+                        if (t.size()) status[prop::key_chord].set(stress) = t;
                     }
-                };
-                boss.LISTEN(tier::release, e2::conio::error, error, tokens)
-                {
-                    shadow();
-                    status[prop::last_event].set(stress) = "error";
-                    throw;
                 };
             }
         };
@@ -842,6 +838,9 @@ namespace netxs::ui
         props_t    props; // gate: Application properties.
         input_t    input; // gate: Input event handler.
         debug_t    debug; // gate: Statistics monitor.
+        //todo
+        //pro::focus focus; // gate: Focus controller.
+        pro::keybd keybd; // gate: Keyboard controller.
         diff       paint; // gate: Render.
         link       conio; // gate: Input data parser.
         bool       direct; // gate: .
@@ -853,7 +852,6 @@ namespace netxs::ui
         sptr       applet; // gate: Standalone application.
         subs       tokens; // gate: Subscription tokens.
         wptr       nexthop; // gate: .
-        hook       oneoff_focus; // gate: .
 
         void draw_foreign_names(face& parent_canvas)
         {
@@ -971,7 +969,7 @@ namespace netxs::ui
         {
             std::swap(applet, item);
             if (local) nexthop = applet;
-            applet->SIGNAL(tier::release, e2::form::upon::vtree::attached, This());
+            applet->bell::signal(tier::release, e2::form::upon::vtree::attached, This());
         }
         // gate: .
         void _rebuild_scene(bool damaged)
@@ -1096,9 +1094,9 @@ namespace netxs::ui
         // gate: Main loop.
         void launch()
         {
-            SIGNAL(tier::anycast, e2::form::upon::started, This()); // Make all stuff ready to receive input.
+            bell::signal(tier::anycast, e2::form::upon::started, This()); // Make all stuff ready to receive input.
             conio.run();
-            SIGNAL(tier::release, e2::form::upon::stopped, true);
+            bell::signal(tier::release, e2::form::upon::stopped, true);
         }
 
         //todo revise
@@ -1107,139 +1105,95 @@ namespace netxs::ui
               props{ canal, userid, vtmode, isvtm, session_id, config },
               input{ props, *this },
               debug{*this },
+              //focus{*this },
+              keybd{*this },
               paint{ canal, props.vtmode },
               conio{ canal, *this  },
-              direct{ props.vtmode == svga::dtvt },
+              direct{ !!(vtmode & (ui::console::direct | ui::console::gui)) },
               local{ true },
               yield{ faux },
               fullscreen{ faux }
         {
-            //todo revise
-            //auto simple = config.take("/config/simple", faux); // DirectVT Gateway console case.
-            config.set("/config/simple", faux);
+            keybd.proc("ToggleDebugOverlay", [&](hids& gear, txts&){ gear.set_handled(); debug ? debug.stop() : debug.start(); });
+            keybd.proc("SwitchHotkeyScheme", [&](hids& gear, txts& args)
+            {
+                gear.set_handled();
+                if (args.empty()) gear.set_hotkey_scheme("");
+                else              gear.set_hotkey_scheme(args.front());
+            });
+            auto bindings = keybd.load(config, "tui");
+            for (auto& r : bindings)
+            {
+                keybd.bind<tier::preview>(r.chord, r.scheme, r.actions);
+            }
 
             base::root(true);
             base::limits(dot_11);
 
-            LISTEN(tier::release, hids::events::focus::set, gear, oneoff_focus) // Restore all foci for the first user.
+            LISTEN(tier::preview, hids::events::focus::any, seed, tokens)
             {
-                //if (auto target = local ? applet : base::parent())
+                if (seed.nondefault_gear())
+                {
+                    auto [ext_gear_id, gear_ptr] = input.get_foreign_gear_id(seed.gear_id);
+                    if (gear_ptr)
+                    {
+                        auto deed = bell::protos(tier::preview);
+                        auto state = deed == hids::events::focus::set.id;
+                        conio.sysfocus.send(canal, ext_gear_id, state, seed.focus_type);
+                    }
+                }
+            };
+            LISTEN(tier::release, hids::events::focus::any, seed, tokens)
+            {
                 if (auto target = nexthop.lock())
                 {
-                    pro::focus::set(target, gear.id, pro::focus::solo::off, pro::focus::flip::off, true);
+                    auto deed = bell::protos(tier::release);
+                    target->bell::signal(tier::release, deed, seed);
                 }
-                oneoff_focus.reset();
             };
-            LISTEN(tier::preview, hids::events::keybd::key::post, gear, tokens) // Start of kb event propagation.
+            LISTEN(tier::preview, hids::events::keybd::scheme, gear, tokens)
             {
+                auto [ext_gear_id, gear_ptr] = input.get_foreign_gear_id(gear.id);
+                if (!gear_ptr) return;
+                conio.hotkey_scheme.send(canal, ext_gear_id, gear.hscheme);
+            };
+            //todo mimic pro::focus
+            //if (standalone)
+            {
+                LISTEN(tier::request, e2::config::plugins::focus::owner, owner_ptr, tokens)
+                {
+                    owner_ptr = This();
+                };
+            }
+            LISTEN(tier::preview, hids::events::keybd::key::post, gear, tokens, (hscheme = text{})) // Start of kb event propagation.
+            {
+                //if (standalone)
+                {
+                    //todo mimic pro::focus
+                    if (hscheme != gear.hscheme)
+                    {
+                        hscheme = gear.hscheme;
+                        bell::signal(tier::release, e2::form::state::keybd::scheme, hscheme);
+                    }
+                }
                 if (gear)
-                //if (auto target = local ? applet : base::parent())
                 if (auto target = nexthop.lock())
                 {
-                    target->SIGNAL(tier::preview, hids::events::keybd::key::post, gear);
+                    target->bell::signal(tier::preview, hids::events::keybd::key::post, gear);
                 }
             };
-            if (!direct)
+            LISTEN(tier::release, hids::events::keybd::key::any, gear, tokens) // Forward unhandled events to the outside. Return back unhandled keybd events.
             {
-                LISTEN(tier::release, hids::events::focus::set, gear) // Conio focus tracking.
+                if (gear && !gear.handled)
                 {
-                    //if (auto target = local ? applet : base::parent())
-                    if (auto target = nexthop.lock())
+                    auto [ext_gear_id, gear_ptr] = input.get_foreign_gear_id(gear.id);
+                    if (gear_ptr)
                     {
-                        target->SIGNAL(tier::release, hids::events::keybd::focus::bus::on, seed, ({ .id = gear.id }));
-                    }
-                };
-                LISTEN(tier::release, hids::events::focus::off, gear)
-                {
-                    //if (auto target = local ? applet : base::parent())
-                    if (auto target = nexthop.lock())
-                    {
-                        target->SIGNAL(tier::release, hids::events::keybd::focus::bus::off, seed, ({ .id = gear.id }));
-                    }
-                };
-            }
-
-            LISTEN(tier::release, hids::events::keybd::focus::bus::any, seed, tokens)
-            {
-                //todo use input::forward<focus>
-                if (seed.id != id_t{}) // Translate only the real foreign gear id.
-                {
-                    auto gear_it = input.gears.find(seed.id);
-                    if (gear_it == input.gears.end())
-                    {
-                        gear_it = input.gears.emplace(seed.id, bell::create<hids>(props, *this, input.xmap)).first;
-                    }
-                    auto& [_id, gear_ptr] = *gear_it;
-                    seed.id = gear_ptr->id;
-                }
-
-                auto deed = this->bell::template protos<tier::release>();
-                //if constexpr (debugmode) log(prompt::foci, text(seed.deep++ * 4, ' '), "---gate bus::any gear:", seed.id, " hub:", this->id);
-                //if (auto target = local ? applet : base::parent())
-                if (auto target = nexthop.lock())
-                {
-                    target->bell::template signal<tier::release>(deed, seed);
-                }
-                //if constexpr (debugmode) log(prompt::foci, text(--seed.deep * 4, ' '), "----------------gate");
-            };
-            LISTEN(tier::preview, hids::events::keybd::focus::cut, seed, tokens)
-            {
-                if (direct)
-                {
-                    auto [ext_gear_id, gear_ptr] = input.get_foreign_gear_id(seed.id);
-                    if (!gear_ptr) return;
-                    conio.focus_cut.send(canal, ext_gear_id);
-                }
-                else
-                {
-                    //todo revise see preview::focus::set
-                    ////if (auto target = local ? applet : base::parent())
-                    if (auto target = base::parent())
-                    //if (auto target = nexthop.lock())
-                    {
-                        target->SIGNAL(tier::release, hids::events::keybd::focus::bus::off, seed);
+                        gear.gear_id = ext_gear_id;
+                        conio.syskeybd.send(canal, gear);
                     }
                 }
             };
-            LISTEN(tier::preview, hids::events::keybd::focus::set, seed, tokens)
-            {
-                if (direct)
-                {
-                    auto [ext_gear_id, gear_ptr] = input.get_foreign_gear_id(seed.id);
-                    if (!gear_ptr) return;
-                    conio.focus_set.send(canal, ext_gear_id, seed.solo);
-                }
-                else
-                {
-                    if (seed.item)
-                    {
-                        seed.item->SIGNAL(tier::release, hids::events::keybd::focus::bus::on, seed);
-                    }
-                }
-            };
-            if (direct) // Forward unhandled events outside.
-            {
-                LISTEN(tier::release, hids::events::keybd::key::any, gear) // Return back unhandled keybd events.
-                {
-                    if (gear)
-                    {
-                        auto [ext_gear_id, gear_ptr] = input.get_foreign_gear_id(gear.id);
-                        if (gear_ptr)
-                        {
-                            conio.keybd_event.send(canal, ext_gear_id,
-                                                          gear.ctlstate,
-                                                          gear.extflag,
-                                                          gear.payload,
-                                                          gear.virtcod,
-                                                          gear.scancod,
-                                                          gear.pressed,
-                                                          gear.cluster,
-                                                          gear.handled);
-                        }
-                    }
-                };
-            }
-
             LISTEN(tier::release, e2::form::proceed::quit::any, fast, tokens)
             {
                 if constexpr (debugmode) log(prompt::gate, "Quit ", fast ? "fast" : "normal");
@@ -1261,34 +1215,25 @@ namespace netxs::ui
             LISTEN(tier::preview, e2::form::proceed::create, dest_region, tokens)
             {
                 dest_region.coor += base::coor();
-                this->RISEUP(tier::release, e2::form::proceed::create, dest_region);
+                this->base::riseup(tier::release, e2::form::proceed::create, dest_region);
             };
             LISTEN(tier::release, e2::form::proceed::onbehalf, proc, tokens)
             {
                 //todo hids
                 //proc(input.gear);
             };
-            LISTEN(tier::preview, hids::events::keybd::key::any, gear, tokens)
-            {
-                //todo unify
-                if (gear.keybd::cluster == props.debug_toggle)
-                {
-                    debug ? debug.stop()
-                          : debug.start();
-                }
-            };
             LISTEN(tier::preview, hids::events::mouse::button::click::leftright, gear, tokens)
             {
                 if (gear.clear_clipboard())
                 {
-                    this->bell::template expire<tier::release>();
+                    this->bell::expire(tier::release);
                     gear.dismiss();
                 }
             };
             LISTEN(tier::release, e2::conio::winsz, new_size, tokens)
             {
                 auto new_area = rect{ dot_00, new_size };
-                if (applet) applet->SIGNAL(tier::anycast, e2::form::upon::resized, new_area);
+                if (applet) applet->bell::signal(tier::anycast, e2::form::upon::resized, new_area);
                 auto old_size = base::size();
                 auto delta = base::resize(new_size).size - old_size;
                 if (delta && direct) paint.cancel();
@@ -1297,14 +1242,9 @@ namespace netxs::ui
             {
                 props.legacy_mode |= pointer ? ui::console::mouse : 0;
             };
-            LISTEN(tier::release, e2::conio::error, errcode, tokens)
-            {
-                log(prompt::gate, "Console error: ", errcode);
-                conio.disconnect();
-            };
             LISTEN(tier::release, e2::form::upon::stopped, fast, tokens) // Reading loop ends.
             {
-                this->SIGNAL(tier::anycast, e2::form::proceed::quit::one, fast);
+                this->bell::signal(tier::anycast, e2::form::proceed::quit::one, fast);
                 conio.disconnect();
                 paint.stop();
                 mouse.reset(); // Reset active mouse clients to avoid hanging pointers.
@@ -1319,19 +1259,14 @@ namespace netxs::ui
             {
                 conio.disconnect();
             };
-            //LISTEN(tier::general, e2::conio::logs, utf8, tokens)
-            //{
-            //    //todo application internal log output
-            //    //conio.logs.send(canal, os::process::id.first, os::process::id.second, text{ utf8 });
-            //};
             LISTEN(tier::anycast, e2::form::upon::started, item_ptr, tokens)
             {
                 if (props.debug_overlay) debug.start();
-                this->SIGNAL(tier::release, e2::form::prop::name, props.title);
+                this->bell::signal(tier::release, e2::form::prop::name, props.title);
                 //todo revise
                 if (props.title.length())
                 {
-                    this->RISEUP(tier::preview, e2::form::prop::ui::header, props.title);
+                    this->base::riseup(tier::preview, e2::form::prop::ui::header, props.title);
                 }
             };
             LISTEN(tier::request, e2::form::prop::ui::footer, f, tokens)
@@ -1360,7 +1295,7 @@ namespace netxs::ui
                 auto window_id = id_t{};
                 conio.header.send(canal, window_id, newheader);
             };
-            LISTEN(tier::release, hids::events::clipbrd, from_gear, tokens)
+            LISTEN(tier::release, hids::events::clipboard, from_gear, tokens)
             {
                 auto myid = from_gear.id;
                 auto [ext_gear_id, gear_ptr] = input.get_foreign_gear_id(myid);
@@ -1369,7 +1304,7 @@ namespace netxs::ui
                 auto& data = gear.board::cargo;
                 conio.clipdata.send(canal, ext_gear_id, data.hash, data.size, data.utf8, data.form, data.meta);
             };
-            LISTEN(tier::request, hids::events::clipbrd, from_gear, tokens)
+            LISTEN(tier::request, hids::events::clipboard, from_gear, tokens)
             {
                 auto clipdata = conio.clipdata.freeze();
                 auto myid = from_gear.id;
@@ -1405,7 +1340,7 @@ namespace netxs::ui
                     check_tooltips(now);
                 };
             }
-            if (direct /*&& !simple  todo: revise*/) // Forward unhandled events outside.
+            if (direct) // Forward unhandled events outside.
             {
                 LISTEN(tier::release, e2::form::size::minimize, gear, tokens)
                 {
@@ -1415,7 +1350,7 @@ namespace netxs::ui
                 LISTEN(tier::release, hids::events::mouse::scroll::any, gear, tokens)
                 {
                     auto [ext_gear_id, gear_ptr] = input.get_foreign_gear_id(gear.id);
-                    if (gear_ptr) conio.mouse_event.send(canal, ext_gear_id, gear.ctlstate, gear.mouse::cause, gear.coord, gear.delta.get(), gear.take_button_state(), gear.whlfp, gear.whlsi, gear.hzwhl);
+                    if (gear_ptr) conio.mouse_event.send(canal, ext_gear_id, gear.ctlstat, gear.mouse::cause, gear.coord, gear.delta.get(), gear.take_button_state(), gear.whlfp, gear.whlsi, gear.hzwhl, gear.click);
                     gear.dismiss();
                 };
                 LISTEN(tier::release, hids::events::mouse::button::any, gear, tokens, (isvtm))
@@ -1454,13 +1389,13 @@ namespace netxs::ui
                     if (forward)
                     {
                         auto [ext_gear_id, gear_ptr] = input.get_foreign_gear_id(gear.id);
-                        if (gear_ptr) conio.mouse_event.send(canal, ext_gear_id, gear.ctlstate, cause, gear.coord, gear.delta.get(), gear.take_button_state(), gear.whlfp, gear.whlsi, gear.hzwhl);
+                        if (gear_ptr) conio.mouse_event.send(canal, ext_gear_id, gear.ctlstat, cause, gear.coord, gear.delta.get(), gear.take_button_state(), gear.whlfp, gear.whlsi, gear.hzwhl, gear.click);
                         gear.dismiss();
                     }
                 };
                 LISTEN(tier::release, e2::config::fps, fps, tokens)
                 {
-                    if (fps > 0) this->SIGNAL(tier::general, e2::config::fps, fps);
+                    if (fps > 0) this->bell::signal(tier::general, e2::config::fps, fps);
                 };
                 LISTEN(tier::preview, e2::config::fps, fps, tokens)
                 {
@@ -1493,10 +1428,7 @@ namespace netxs::ui
                     if (gear_ptr) conio.maximize.send(canal, ext_gear_id);
                 };
             }
-            if (direct)
-            {
-                conio.sysstart.send(canal);
-            }
+            conio.sysstart.send(canal);
         }
         // gate: .
         void inform(rect new_area) override
@@ -1526,8 +1458,8 @@ namespace netxs::ui
 
         std::vector<bool> user_numbering; // host: .
 
-        host(xipc server, xmls config, pro::focus::mode m = pro::focus::mode::hub)
-            :  focus{ *this, m, faux },
+        host(xipc server, xmls config, si32 focus_type = pro::focus::mode::hub)
+            :  focus{ *this, focus_type, faux },
               quartz{ *this },
               config{ config },
               active{ true }
@@ -1598,7 +1530,7 @@ namespace netxs::ui
             };
             LISTEN(tier::general, e2::cleanup, counter, tokens)
             {
-                this->template router<tier::general>().cleanup(counter.ref_count, counter.del_count);
+                this->router(tier::general).cleanup(counter.ref_count, counter.del_count);
             };
             LISTEN(tier::general, hids::events::halt, gear, tokens)
             {
@@ -1652,7 +1584,7 @@ namespace netxs::ui
         {
             auto lock = bell::unique_lock();
             auto portal = ui::gate::ctor(uplink, vtmode, host::config);
-            portal->SIGNAL(tier::release, e2::form::upon::vtree::attached, base::This());
+            portal->bell::signal(tier::release, e2::form::upon::vtree::attached, base::This());
             portal->attach(applet);
             portal->base::resize(winsz);
             auto& screen = *portal;

@@ -66,15 +66,11 @@ namespace netxs::scripting
             {
                 //...
             }
-            void handle(s11n::xs::focus_cut         /*lock*/)
+            void handle(s11n::xs::sysfocus          /*lock*/)
             {
                 //...
             }
-            void handle(s11n::xs::focus_set         /*lock*/)
-            {
-                //...
-            }
-            void handle(s11n::xs::keybd_event       /*lock*/)
+            void handle(s11n::xs::syskeybd          /*lock*/)
             {
                 //...
             };
@@ -100,18 +96,25 @@ namespace netxs::scripting
         vtty engine; // scripting::host: Scripting engine instance.
 
         // scripting::host: Proceed input.
-        void ondata(view data)
+        auto ondata_direct(view data)
         {
             log<faux>(ansi::fgc(greenlt).add(data).nil());
+            return faux;
+        }
+        // scripting::host: Proceed input.
+        void ondata(view data)
+        {
+            ondata_direct(data);
         }
         // scripting::host: Cooked read input.
         void data(rich& /*data*/)
         {
-            boss.bell::trysync(active, [&]
+            if (active)
             {
+                auto lock = boss.bell::sync();
                 // It is a powershell readline echo.
                 //log<faux>(ansi::fgc(cyanlt).add(data.utf8()).nil());
-            });
+            }
         }
         // scripting::host: Shutdown callback handler.
         void onexit(si32 /*code*/, view /*msg*/ = {}, bool /*exit_after_sighup*/ = faux)
@@ -129,10 +132,11 @@ namespace netxs::scripting
         template<class P>
         void update(P api_proc)
         {
-            boss.bell::trysync(active, [&]
+            if (active)
             {
+                auto lock = boss.bell::sync();
                 api_proc();
-            });
+            }
         }
         // scripting::host: Write client data.
         template<bool Echo = true>
@@ -202,7 +206,7 @@ namespace netxs::scripting
                 if (engine)
                 {
                     write(script.cmd);
-                    owner.bell::template expire<tier::release>();
+                    owner.bell::expire(tier::release);
                 }
             };
         }

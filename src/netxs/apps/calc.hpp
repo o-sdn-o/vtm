@@ -146,19 +146,22 @@ namespace netxs::ui
                     recalc();
                     boss.deface();
                 };
-                boss.LISTEN(tier::release, hids::events::notify::mouse::enter, gear, memo)
+                boss.LISTEN(tier::release, hids::events::mouse::hover::any, gear, memo)
                 {
-                    items.add(gear);
-                };
-                boss.LISTEN(tier::release, hids::events::notify::mouse::leave, gear, memo)
-                {
-                    auto& item = items.take(gear);
-                    if (item.region.size)
+                    if (gear.cause == hids::events::mouse::hover::enter.id)
                     {
-                        item.inside = faux;
+                        items.add(gear);
                     }
-                    else items.del(gear);
-                    recalc();
+                    else if (gear.cause == hids::events::mouse::hover::leave.id)
+                    {
+                        auto& item = items.take(gear);
+                        if (item.region.size)
+                        {
+                            item.inside = faux;
+                        }
+                        else items.del(gear);
+                        recalc();
+                    }
                 };
                 engage<hids::buttons::left>();
             }
@@ -193,13 +196,13 @@ namespace netxs::ui
                 }
                 else data = " =SUM(" + ansi::itc(true).fgc(reddk).add("select cells by dragging").itc(faux).fgc(blacklt).add(")");
                 log(prompt::calc, "DATA ", data, ansi::nil());
-                boss.SIGNAL(tier::release, e2::data::utf8, data);
+                boss.bell::signal(tier::release, e2::data::utf8, data);
             }
             // pro::cell_highlight: Configuring the mouse button to operate.
             template<hids::buttons Button>
             void engage()
             {
-                boss.SIGNAL(tier::release, e2::form::draggable::_<Button>, true);
+                boss.bell::signal(tier::release, e2::form::draggable::_<Button>, true);
                 boss.LISTEN(tier::release, hids::events::mouse::move, gear, memo)
                 {
                     items.take(gear).calc(boss, gear.coord);
@@ -207,7 +210,9 @@ namespace netxs::ui
                 };
                 boss.LISTEN(tier::release, e2::form::drag::start::_<Button>, gear, memo)
                 {
-                    if (items.take(gear).grab(gear.coord, gear.meta(hids::anyCtrl)))
+                    auto& g = items.take(gear);
+                    g.calc(boss, gear.click);
+                    if (g.grab(gear.click, gear.meta(hids::anyCtrl)))
                     {
                         gear.dismiss();
                     }
@@ -331,32 +336,32 @@ namespace netxs::app::calc
             window->plugin<pro::focus>(pro::focus::mode::focused)
                   ->colors(whitelt, 0x60'00'5f'1A)
                   ->limits({ 10,7 }, { -1,-1 })
-                  //->plugin<pro::track>()
-                  ->shader(c3, e2::form::state::keybd::focus::count)
+                  ->plugin<pro::keybd>()
+                  ->shader(c3, e2::form::state::focus::count)
                   //->plugin<pro::acryl>()
                   ->plugin<pro::cache>()
                   ->invoke([&](auto& boss)
                   {
-                      //boss.keybd.accept(true);
                       boss.LISTEN(tier::anycast, e2::form::proceed::quit::any, fast)
                       {
-                          boss.RISEUP(tier::release, e2::form::proceed::quit::one, fast);
+                          boss.base::riseup(tier::release, e2::form::proceed::quit::one, fast);
                       };
                       boss.LISTEN(tier::release, e2::form::upon::vtree::attached, parent)
                       {
                           static auto i = 0; i++;
                           auto title = ansi::jet(bias::right).add("Spreadsheet\n ~/Untitled ", i, ".ods");
-                          boss.RISEUP(tier::preview, e2::form::prop::ui::header, title);
+                          boss.base::riseup(tier::preview, e2::form::prop::ui::header, title);
                       };
                   });
             auto object = window->attach(ui::fork::ctor(axis::Y))
                                 ->colors(whitelt, 0);
+                config.cd("/config/defapp");
                 auto menu = object->attach(slot::_1, app::shared::menu::demo(config));
                 auto all_rail = object->attach(slot::_2, ui::rail::ctor());
                 auto all_stat = all_rail->attach(ui::fork::ctor(axis::Y))
                                         ->limits({ -1,-1 },{ 136,102 });
-                    auto func_body_pad = all_stat->attach(slot::_1, ui::pads::ctor(dent{ 1,1 }));
-                        auto func_body = func_body_pad->attach(ui::fork::ctor(axis::Y));
+                        auto func_body = all_stat->attach(slot::_1, ui::fork::ctor(axis::Y))
+                            ->setpad({ 1,1 });
                             auto func_line = func_body->attach(slot::_1, ui::fork::ctor());
                                 auto fx_sum = func_line->attach(slot::_1, ui::fork::ctor());
                                     auto fx = fx_sum->attach(slot::_1, ui::post::ctor())
@@ -379,11 +384,11 @@ namespace netxs::app::calc
                                     auto scroll = layers->attach(ui::rail::ctor())
                                                         ->active()
                                                         ->limits({ -1,1 }, { -1,-1 });
-                                        auto grid = scroll->attach(ui::post::ctor())
-                                                          ->active()
-                                                          ->colors(0xFF000000, 0xFFffffff)
-                                                          ->plugin<pro::cell_highlight>()
-                                                          ->upload(cellatix_text);
+                                        auto sheet_body = scroll->attach(ui::post::ctor())
+                                                                ->active()
+                                                                ->colors(0xFF000000, 0xFFffffff)
+                                                                ->plugin<pro::cell_highlight>()
+                                                                ->upload(cellatix_text);
                                     auto sum = fx_sum->attach(slot::_2, ui::post::ctor())
                                                      ->colors(0, whitelt)
                                                      ->upload(ansi::bgc(whitelt).fgc(blacklt)
@@ -391,7 +396,7 @@ namespace netxs::app::calc
                                                      .fgc(blacklt).add(")"))
                                                      ->invoke([&](ui::post& boss)
                                                      {
-                                                         grid->LISTEN(tier::release, e2::data::utf8, data)
+                                                         sheet_body->LISTEN(tier::release, e2::data::utf8, data)
                                                          {
                                                             boss.upload(ansi::bgc(whitelt).fgc(blacklt).add(data));
                                                          };
@@ -422,6 +427,11 @@ namespace netxs::app::calc
                                 auto pad = plus_pad->attach(slot::_2, ui::mock::ctor())
                                                    ->limits({ 1,1 }, { 1,1 });
                     layers->attach(app::shared::scroll_bars(scroll));
+            window->invoke([&](auto& boss)
+            {
+                auto& keybd = boss.template plugins<pro::keybd>();
+                app::shared::base_kb_navigation(keybd, scroll, boss);
+            });
             return window;
         };
     }

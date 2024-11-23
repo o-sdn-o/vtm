@@ -33,7 +33,7 @@ namespace netxs::xml
     template<>
     auto take<bool>(qiew utf8) -> std::optional<bool>
     {
-        auto value = utf::to_low(utf8.str());
+        auto value = utf::to_lower(utf8.str());
         if (value.starts_with("undef")) return std::nullopt; // Use default.
         if (value.empty() || value == "1"
                           || value == "on"
@@ -99,7 +99,7 @@ namespace netxs::xml
             else if (c >= 'a' && c <= 'f') return (byte)(c - 'a' + 10);
             else                           return (byte)(0);
         };
-        auto value = utf::to_low(utf8.str());
+        auto value = utf::to_lower(utf8.str());
         auto result = argb{};
         auto shadow = view{ value };
         utf::trim_front(shadow, " ({[\"\'");
@@ -122,7 +122,7 @@ namespace netxs::xml
                 result.chan.a = 0xff;
                 return result;
             }
-            else log("%%Unknown hex color format: { %value% }, expected #rrggbbaa or #rrggbb color hex value", prompt::xml, value);
+            //log("%%Unknown hex color format: { %value% }, expected #rrggbbaa or #rrggbb color hex value", prompt::xml, value);
         }
         else if (shadow.starts_with("0x")) // hex: 0xaarrggbb
         {
@@ -143,7 +143,7 @@ namespace netxs::xml
                 result.chan.b = (tobyte(shadow[4]) << 4) + tobyte(shadow[5]);
                 return result;
             }
-            else log("%%Unknown hex color format: { %value% }, expected 0xaarrggbb or 0xrrggbb color hex value", prompt::xml, value);
+            //log("%%Unknown hex color format: { %value% }, expected 0xaarrggbb or 0xrrggbb color hex value", prompt::xml, value);
         }
         else if (utf::check_any(shadow, ",;/")) // dec: 000,000,000,000
         {
@@ -165,7 +165,7 @@ namespace netxs::xml
                     }
                 }
             }
-            log("%%Unknown hex color format: { %value% }, expected 000,000,000,000 decimal (r,g,b,a) color value", prompt::xml, value);
+            //log("%%Unknown hex color format: { %value% }, expected 000,000,000,000 decimal (r,g,b,a) color value", prompt::xml, value);
         }
         else if (auto c = utf::to_int(shadow)) // Single ANSI color value
         {
@@ -174,9 +174,21 @@ namespace netxs::xml
                 result = argb::vt256[c.value()];
                 return result;
             }
-            else log("%%Unknown ANSI 256-color value format: { %value% }, expected 0-255 decimal value", prompt::xml, value);
+            //log("%%Unknown ANSI 256-color value format: { %value% }, expected 0-255 decimal value", prompt::xml, value);
         }
         return std::nullopt;
+    }
+    template<class T>
+    auto take_or(qiew utf8, T fallback)
+    {
+        if (auto v = take<T>(utf8))
+        {
+            return v.value();
+        }
+        else
+        {
+            return fallback;
+        }
     }
 
     struct document
@@ -418,6 +430,21 @@ namespace netxs::xml
                 }
             }
 
+            auto is_quoted()
+            {
+                if (body.size() == 1)
+                {
+                    auto& value_placeholder = body.front();
+                    if (value_placeholder->kind == type::tag_value) // equal [spaces] quotes tag_value quotes
+                    if (auto quote_placeholder = value_placeholder->prev.lock())
+                    if (quote_placeholder->kind == type::quotes && quote_placeholder->utf8.size())
+                    {
+                        auto c = quote_placeholder->utf8.front();
+                        return c == '\"' || c == '\'';
+                    }
+                }
+                return faux;
+            }
             template<bool WithTemplate = faux>
             auto list(qiew path_str)
             {
@@ -467,7 +494,7 @@ namespace netxs::xml
                 utf::unescape(value);
                 return value;
             }
-            void init_value(qiew value, bool unescaped = true)
+            void init_value(qiew value, bool unescaped = true, std::optional<bool> quoted = {})
             {
                 if (body.size())
                 {
@@ -485,17 +512,17 @@ namespace netxs::xml
                         }
                         if (equal_placeholder && equal_placeholder->kind == type::equal)
                         {
-                            if (value.size())
+                            if ((value.size() && !quoted) || quoted.value())
                             {
-                                equal_placeholder->utf8 = "=";
-                                quote_placeholder->utf8 = "\"";
-                                if (value_placeholder->next) value_placeholder->next->utf8 = "\"";
+                                equal_placeholder->utf8 = "="sv;
+                                quote_placeholder->utf8 = "\""sv;
+                                if (value_placeholder->next) value_placeholder->next->utf8 = "\""sv;
                             }
                             else
                             {
-                                equal_placeholder->utf8 = "";
-                                quote_placeholder->utf8 = "";
-                                if (value_placeholder->next) value_placeholder->next->utf8 = "";
+                                equal_placeholder->utf8 = value.size() ? "="sv : ""sv;
+                                quote_placeholder->utf8 = ""sv;
+                                if (value_placeholder->next) value_placeholder->next->utf8 = ""sv;
                             }
                         }
                         else log("%%Equal sign placeholder not found", prompt::xml);
@@ -515,7 +542,7 @@ namespace netxs::xml
                     {
                         value += value_placeholder->utf8;
                     }
-                    init_value(value, faux);
+                    init_value(value, faux, node.is_quoted());
                 }
             }
             template<class T>
@@ -527,8 +554,7 @@ namespace netxs::xml
                     if (item_set.size()) // Take the first item only.
                     {
                         auto crop = item_set.front()->take_value();
-                        if (auto result = xml::take<T>(crop)) return result.value();
-                        else                                  return fallback;
+                        return xml::take_or<T>(crop, fallback);
                     }
                 }
                 if (auto defs_ptr = defs.lock()) return defs_ptr->take(attr, fallback);
@@ -598,7 +624,7 @@ namespace netxs::xml
         };
 
         static constexpr auto find_start         = "<"sv;
-        static constexpr auto rawtext_delims     = " \t\n\r/><"sv;
+        static constexpr auto rawtext_delims     = std::tuple{ " "sv, "/>"sv, ">"sv, "<"sv, "\n"sv, "\r"sv, "\t"sv };
         static constexpr auto token_delims       = " \t\n\r=*/><"sv;
         static constexpr auto view_comment_begin = "<!--"sv;
         static constexpr auto view_comment_close = "-->"sv;
@@ -821,12 +847,12 @@ namespace netxs::xml
             else if (data.starts_with(view_close_tag    )) what = type::close_tag;
             else if (data.starts_with(view_begin_tag    )) what = type::begin_tag;
             else if (data.starts_with(view_empty_tag    )) what = type::empty_tag;
+            else if (data.starts_with(view_close_inline )) what = type::close_inline;
             else if (data.starts_with(view_slash        ))
             {
                 if (last == type::token) what = type::compact;
-                else                     what = type::unknown;
+                else                     what = type::raw_text;
             }
-            else if (data.starts_with(view_close_inline )) what = type::close_inline;
             else if (data.starts_with(view_quoted_text  )) what = type::quoted_text;
             else if (data.starts_with(view_equal        )) what = type::equal;
             else if (data.starts_with(view_defaults     )
@@ -1251,7 +1277,6 @@ namespace netxs::xml
         using vect = xml::document::vect;
         using sptr = netxs::sptr<xml::document>;
         using hist = std::list<std::pair<text, text>>;
-        //using sync = std::recursive_mutex;
 
         sptr document; // settings: XML document.
         vect tempbuff; // settings: Temp buffer.
@@ -1259,7 +1284,6 @@ namespace netxs::xml
         text homepath; // settings: Current working directory.
         text backpath; // settings: Fallback path.
         hist cwdstack; // settings: Stack for saving current cwd.
-        //sync xs_mutex; // settings: Access mutex.
 
         settings() = default;
         settings(settings const&) = default;
@@ -1276,11 +1300,6 @@ namespace netxs::xml
             homelist = document->take(homepath);
         }
 
-        //todo make it thread-safe
-        //auto lock()
-        //{
-        //    return std::unique_lock{ xs_mutex };
-        //}
         auto cd(text gotopath, view fallback = {})
         {
             backpath = utf::trim(fallback, '/');
@@ -1302,6 +1321,7 @@ namespace netxs::xml
                 homepath += relative;
             }
             auto test = !!homelist.size();
+            if constexpr (debugmode)
             if (!test)
             {
                 log("%%%err%xml path not found: %path%%nil%", prompt::xml, ansi::err(), homepath, ansi::nil());
@@ -1327,7 +1347,7 @@ namespace netxs::xml
             cd(gotopath, fallback);
         }
         template<bool Quiet = faux, class T = si32>
-        auto take(text frompath, T defval = {})
+        auto take(text frompath, T defval = {}, si32 primary_value = 3) // Three levels of references (to avoid circular references).
         {
             if (frompath.empty()) return defval;
             auto crop = text{};
@@ -1353,19 +1373,32 @@ namespace netxs::xml
                 if constexpr (!Quiet) log("%%%red% xml path not found: %nil%%path%", prompt::xml, ansi::fgc(redlt), ansi::nil(), frompath);
                 return defval;
             }
+            auto is_quoted = tempbuff.back()->is_quoted();
             tempbuff.clear();
+            auto is_like_variable = [&]{ return primary_value && !is_quoted && crop.size() && (crop.front() == '/' || crop.size() < 128); };
+            if constexpr (std::is_same_v<std::decay_t<T>, text>)
+            {
+                if (is_like_variable()) // Try to find variable if it is not quoted and its len < 128.
+                {
+                    return take<Quiet>(crop.front() == '/' ? crop : "/config/set/" + crop, crop, primary_value - 1);
+                }
+            }
             if (auto result = xml::take<T>(crop)) return result.value();
-            if (crop.size())                      return take<Quiet>("/config/set/" + crop, defval);
+            if (is_like_variable())               return take<Quiet>(crop.front() == '/' ? crop : "/config/set/" + crop, defval, primary_value - 1);
             else                                  return defval;
         }
         template<class T>
         auto take(text frompath, T defval, std::unordered_map<text, T> const& dict)
         {
             if (frompath.empty()) return defval;
-            auto crop = take(frompath, ""s);
+            auto crop = take<true>(frompath, ""s);
+            if (crop.empty())
+            {
+                log("%%%red% xml path not found: %nil%%path%", prompt::xml, ansi::fgc(redlt), ansi::nil(), frompath);
+                return defval;
+            }
             auto iter = dict.find(crop);
-            return iter == dict.end() ? defval
-                                      : iter->second;
+            return iter == dict.end() ? defval : iter->second;
         }
         auto take(text frompath, cell defval)
         {

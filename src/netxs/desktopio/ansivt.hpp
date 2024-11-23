@@ -787,7 +787,7 @@ namespace netxs::ansi
                                                    p.x, csi_ccc); }
         auto& cpp(twod p) { return add("\033[2:" , p.x, ':',        // escx: Cursor percent position.
                                                    p.y, csi_ccc); }
-        auto& mgn(side n) { return add("\033[6:" , n.l, ':',        // escx: Margin (left, right, top, bottom).
+        auto& mgn(dent n) { return add("\033[6:" , n.l, ':',        // escx: Margin (left, right, top, bottom).
                                                    n.r, ':',
                                                    n.t, ':',
                                                    n.b, csi_ccc); }
@@ -899,7 +899,7 @@ namespace netxs::ansi
     auto cpx(si32 n)           { return escx{}.cpx(n);        } // ansi: Cursor horizontal percent position.
     auto cpy(si32 n)           { return escx{}.cpy(n);        } // ansi: Cursor vertical percent position.
     auto tbs(si32 n)           { return escx{}.tbs(n);        } // ansi: Tabulation step length.
-    auto mgn(side s)           { return escx{}.mgn(s);        } // ansi: Margin (left, right, top, bottom).
+    auto mgn(dent s)           { return escx{}.mgn(s);        } // ansi: Margin (left, right, top, bottom).
     auto mgl(si32 n)           { return escx{}.mgl(n);        } // ansi: Left margin.
     auto mgr(si32 n)           { return escx{}.mgr(n);        } // ansi: Right margin.
     auto mgt(si32 n)           { return escx{}.mgt(n);        } // ansi: Top margin.
@@ -1019,6 +1019,8 @@ namespace netxs::ansi
         void  sav()               { spare.set(*this);          } // mark: Save current SGR attributes.
         void  sfg(argb c)         { spare.fgc(c);              } // mark: Set default foreground color.
         void  sbg(argb c)         { spare.bgc(c);              } // mark: Set default background color.
+        auto  sfg()const          { return spare.fgc();        } // mark: Return default foreground color.
+        auto  sbg()const          { return spare.bgc();        } // mark: Return default background color.
         void  nil()               { this->set(spare);          } // mark: Restore saved SGR attributes.
         void  rfg()               { this->fgc(spare.fgc());    } // mark: Reset SGR Foreground color.
         void  rbg()               { this->bgc(spare.bgc());    } // mark: Reset SGR Background color.
@@ -1052,7 +1054,7 @@ namespace netxs::ansi
               rlfeed{ (byte)((format >> 6) & 0x03) },
               tablen{ (byte)((format >> 8) & 0xFF) }
         { }
-        bool operator==(deco const&) const = default;
+        bool operator == (deco const&) const = default;
         // deco: Return serialized deco (wo margins).
         auto format() const
         {
@@ -1187,7 +1189,7 @@ namespace netxs::ansi
             * Unicode:
             * - void task(ansi::rule const& cmd);          // Proceed curses command.
             * - void meta(deco& old, deco& new);           // Proceed new style.
-            * - void data(si32 count, grid const& proto);  // Proceed new cells.
+            * - void data(si32 count, core::body const& proto);  // Proceed new cells.
             * SGR:
             * - void nil();                          // Reset all SGR to default.
             * - void sav();                          // Set current SGR as default.
@@ -1266,24 +1268,24 @@ namespace netxs::ansi
                     ccc[ccc_cpy] = V{ F(py, q.subarg(0)); }; // fx_ccc_cpy
                     ccc[ccc_rst] = V{ F(zz, 0); }; // fx_ccc_rst
 
-                    ccc[ccc_mgn   ] = V{ p->style.mgn   (q   ); }; // fx_ccc_mgn
-                    ccc[ccc_mgl   ] = V{ p->style.mgl   (q.subarg(0)); }; // fx_ccc_mgl
-                    ccc[ccc_mgr   ] = V{ p->style.mgr   (q.subarg(0)); }; // fx_ccc_mgr
-                    ccc[ccc_mgt   ] = V{ p->style.mgt   (q.subarg(0)); }; // fx_ccc_mgt
-                    ccc[ccc_mgb   ] = V{ p->style.mgb   (q.subarg(0)); }; // fx_ccc_mgb
-                    ccc[ccc_tbs   ] = V{ p->style.tbs   (q.subarg(0)); }; // fx_ccc_tbs
-                    ccc[ccc_jet   ] = V{ p->style.jet   (static_cast<bias>(q.subarg(0))); }; // fx_ccc_jet
-                    ccc[ccc_wrp   ] = V{ p->style.wrp   (static_cast<wrap>(q.subarg(0))); }; // fx_ccc_wrp
-                    ccc[ccc_rtl   ] = V{ p->style.rtl(static_cast<rtol>(q.subarg(0)));
+                    ccc[ccc_mgn   ] = V{ p->style.mgn(q); }; // fx_ccc_mgn
+                    ccc[ccc_mgl   ] = V{ p->style.mgl(q.subarg(0)); }; // fx_ccc_mgl
+                    ccc[ccc_mgr   ] = V{ p->style.mgr(q.subarg(0)); }; // fx_ccc_mgr
+                    ccc[ccc_mgt   ] = V{ p->style.mgt(q.subarg(0)); }; // fx_ccc_mgt
+                    ccc[ccc_mgb   ] = V{ p->style.mgb(q.subarg(0)); }; // fx_ccc_mgb
+                    ccc[ccc_tbs   ] = V{ p->style.tbs(q.subarg(0)); }; // fx_ccc_tbs
+                    ccc[ccc_jet   ] = V{ p->style.jet((bias)q.subarg(0)); }; // fx_ccc_jet
+                    ccc[ccc_wrp   ] = V{ p->style.wrp((wrap)q.subarg(0)); }; // fx_ccc_wrp
+                    ccc[ccc_rtl   ] = V{ p->style.rtl((rtol)q.subarg(0));
                                          p->brush.rtl(p->style.rtl() == rtol::rtl); }; // fx_ccc_rtl
-                    ccc[ccc_rlf   ] = V{ p->style.rlf   (static_cast<feed>(q.subarg(0))); }; // fx_ccc_rlf
-                    ccc[ccc_jet_or] = V{ p->style.jet_or(static_cast<bias>(q.subarg(0))); }; // fx_ccc_or_jet
-                    ccc[ccc_wrp_or] = V{ p->style.wrp_or(static_cast<wrap>(q.subarg(0))); }; // fx_ccc_or_wrp
-                    ccc[ccc_rtl_or] = V{ p->style.rtl_or(static_cast<rtol>(q.subarg(0))); 
+                    ccc[ccc_rlf   ] = V{ p->style.rlf((feed)q.subarg(0)); }; // fx_ccc_rlf
+                    ccc[ccc_jet_or] = V{ p->style.jet_or((bias)q.subarg(0)); }; // fx_ccc_or_jet
+                    ccc[ccc_wrp_or] = V{ p->style.wrp_or((wrap)q.subarg(0)); }; // fx_ccc_or_wrp
+                    ccc[ccc_rtl_or] = V{ p->style.rtl_or((rtol)q.subarg(0)); 
                                          p->brush.rtl(p->style.rtl() == rtol::rtl); }; // fx_ccc_or_rtl
-                    ccc[ccc_rlf_or] = V{ p->style.rlf_or(static_cast<feed>(q.subarg(0))); }; // fx_ccc_or_rlf
+                    ccc[ccc_rlf_or] = V{ p->style.rlf_or((feed)q.subarg(0)); }; // fx_ccc_or_rlf
 
-                    ccc[ccc_lnk   ] = V{ p->brush.link  (static_cast<id_t>(q.subarg(0))); }; // fx_ccc_lnk
+                    ccc[ccc_lnk   ] = V{ p->brush.link((id_t)q.subarg(0)); }; // fx_ccc_lnk
 
                     ccc[ccc_nop] = nullptr;
                     ccc[ccc_idx] = nullptr;
@@ -1417,12 +1419,21 @@ namespace netxs::ansi
         {
             auto s = [&](auto const& traits, qiew utf8)
             {
+                client->defer = faux;
                 intro.execute(traits.control, utf8, client); // Make one iteration using firstcmd and return.
                 return utf8;
             };
-            auto y = [&](auto const& cluster){ client->post(cluster); };
-
-            utf::decode(s, y, utf8, client->decsg);
+            auto y = [&](auto const& cluster)
+            {
+                client->post(cluster);
+                client->defer = true;
+            };
+            auto a = [&](view plain)
+            {
+                client->ascii(plain);
+                client->defer = true;
+            };
+            utf::decode(s, y, a, utf8, client->decsg);
             client->flush();
         }
         // vt_parser: Static UTF-8/ANSI parser proc.
@@ -1686,10 +1697,11 @@ namespace netxs::ansi
         deco state{}; // parser: Parser style last state.
         mark brush{}; // parser: Parser brush.
         si32 decsg{}; // parser: DEC Special Graphics Mode.
+        bool defer{}; // parser: The last character was a cluster that could continue to grow.
 
     private:
-        grid proto_cells{}; // parser: Proto lyric.
-        si32 proto_count{}; // parser: Proto lyric length.
+        core::body proto_cells{}; // parser: Proto lyric.
+        si32       proto_count{}; // parser: Proto lyric length.
         //text debug{};
 
     public:
@@ -1722,11 +1734,18 @@ namespace netxs::ansi
             data(n * wdt, proto_cells);
             proto_cells.clear();
         }
-        void reset(cell c)
+        template<bool ResetStyle = true>
+        void reset(cell c = {})
         {
             brush.reset(c);
+            if constexpr (ResetStyle)
+            {
+                style.rst();
+                state.rst();
+            }
             proto_count = 0;
             proto_cells.clear();
+            defer = faux;
         }
         auto empty() const
         {
@@ -1740,10 +1759,29 @@ namespace netxs::ansi
                 data(len, cooked.pick());
             }
         }
-        void post(utf::frag const& cluster)
+        auto& get_ansi_marker()
         {
             static auto marker = ansi::marker{};
-
+            return marker;
+        }
+        void ascii(view plain)
+        {
+            assert(plain.length());
+            brush.txt(plain.back());
+            auto start = proto_cells.size();
+            proto_cells.resize(start + plain.length(), brush);
+            proto_count += (si32)plain.length();
+            auto iter = plain.begin();
+            auto head = proto_cells.begin() + start;
+            auto tail = std::prev(proto_cells.end());
+            while (head != tail)
+            {
+                auto& dst = *head++;
+                dst.gc.set(*iter++);
+            }
+        }
+        void post(utf::frag const& cluster)
+        {
             auto& utf8 = cluster.text;
             auto& attr = cluster.attr;
             if (auto v = attr.cmatrix)
@@ -1757,6 +1795,7 @@ namespace netxs::ansi
             }
             else
             {
+                auto& marker = get_ansi_marker();
                 if (auto set_prop = marker.setter[attr.control])
                 {
                     if (proto_cells.size())
@@ -1803,7 +1842,7 @@ namespace netxs::ansi
             flush_data();
         }
         virtual void meta(deco const& /*old_style*/) { };
-        virtual void data(si32 /*count*/, grid const& /*proto*/) { };
+        virtual void data(si32 /*count*/, core::body const& /*proto*/) { };
     };
 
     // ansi: Cursor manipulation command list.
