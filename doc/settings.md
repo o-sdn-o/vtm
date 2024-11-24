@@ -229,9 +229,9 @@ The following declarations have the same meaning:
         </taskbar>
         ...  <!-- Set of additional desktop settings. -->
     </desktop>
-    <term ... >  <!-- Built-in terminal configuration section. -->
+    <terminal ... >  <!-- Built-in terminal configuration section. -->
         ...
-    </term>
+    </terminal>
     <hotkeys>  <!-- The required key combination sequence can be generated on the Info page, accessible by clicking on the label in the lower right corner of the vtm desktop. -->
         <gui>  <!-- Native GUI window layer key bindings. -->
             <key="Key+Chord">
@@ -251,12 +251,12 @@ The following declarations have the same meaning:
             </key>
             ...
         </desktop>
-        <term>  <!-- Application specific layer key bindings. -->
+        <terminal>  <!-- Application specific layer key bindings. -->
             <key="Key+Chord">
                 <action="ActionName" data="parameter"/>
             </key>
             ...
-        </term>
+        </terminal>
     </hotkeys>
 </config>
 ```
@@ -391,10 +391,11 @@ Action                         | Arguments (`data=`)                            
 `RollFontsBackward`            |                                                        | Native GUI window   | Roll font list backward.
 `RollFontsForward`             |                                                        | Native GUI window   | Roll font list forward.
 `ToggleDebugOverlay`           |                                                        | TUI matrix          | Toggle debug overlay.
-`SwitchHotkeyScheme`           | _Scheme name_                                          | TUI matrix,<br>Window menu | Switch the hotkey scheme to the specified one.
+`SwitchHotkeyScheme`           | _`Scheme name`_                                        | TUI matrix,<br>Window menu | Switch the hotkey scheme to the specified one.
 `FocusPrevWindow`              |                                                        | Desktop             | Switch focus to the next desktop window.
 `FocusNextWindow`              |                                                        | Desktop             | Switch focus to the previous desktop window.
 `Disconnect`                   |                                                        | Desktop             | Disconnect from the desktop.
+`RunApplication`               | _`Taskbar item id`_                                    | Desktop             | Run application. Run the default application if no arguments are specified.
 `TryToQuit`                    |                                                        | Desktop             | Shut down the desktop server if no applications are running.
 `TerminalFindNext`             |                                                        | Application         | Highlight next match of selected text fragment. Clipboard content is used if no active selection.
 `TerminalFindPrev`             |                                                        | Application         | Highlight previous match of selected text fragment. Clipboard content is used if no active selection.
@@ -407,8 +408,8 @@ Action                         | Arguments (`data=`)                            
 `TerminalClipboardPaste`       |                                                        | Application         | Paste from clipboard.
 `TerminalClipboardWipe`        |                                                        | Application         | Reset clipboard.
 `TerminalClipboardFormat`      | `none` \| `text` \| `ansi` \|<br>`rich` \| `html` \| `protected` | Application | Switch terminal text selection copy format.
-`TerminalOutput`               | _Text string_                                          | Application         | Direct output the string to the terminal scrollback.
-`TerminalSendKey`              | _Text string_                                          | Application         | Simulating keypresses using the specified string.
+`TerminalOutput`               | _`Text string`_                                        | Application         | Direct output the string to the terminal scrollback.
+`TerminalSendKey`              | _`Text string`_                                        | Application         | Simulating key presses using the specified string.
 `TerminalUndo`                 |                                                        | Application         | (Win32 Cooked/ENABLE_LINE_INPUT mode only) Discard the last input.
 `TerminalRedo`                 |                                                        | Application         | (Win32 Cooked/ENABLE_LINE_INPUT mode only) Discard the last Undo command.
 `TerminalCwdSync`              |                                                        | Application         | Toggle the current working directory sync mode.
@@ -416,10 +417,11 @@ Action                         | Arguments (`data=`)                            
 `TerminalAlignMode`            | `left` \| `right` \| `center`                          | Application         | Set terminal scrollback lines aligning mode. Applied to the active selection if it is.
 `TerminalFullscreen`           |                                                        | Application         | Toggle fullscreen mode.
 `TerminalMaximize`             |                                                        | Application         | Toggle between maximized and normal window size.
+`TerminalMinimize`             |                                                        | Application         | Minimize window.
 `TerminalStdioLog`             | `on` \| `off`                                          | Application         | Toggle stdin/stdout logging to the specified state, or just toggle to another state if no arguments are specified.
 `TerminalSelectionRect`        | `on` \| `off`                                          | Application         | Toggle between linear and rectangular selection form.
 `TerminalSelectionCancel`      |                                                        | Application         | Deselect a selection.
-`TerminalSelectionOneShot`     | `text` \| `ansi` \|<br>`rich` \| `html` \| `protected` | Application         | One-shot toggle to copy text while mouse tracking is active. Keep selection if `Ctrl` key is pressed..
+`TerminalSelectionOneShot`     | `text` \| `ansi` \|<br>`rich` \| `html` \| `protected` | Application         | One-shot toggle to copy text while mouse tracking is active. Keep selection if `Ctrl` key is pressed.
 `TerminalRestart`              |                                                        | Application         | Terminate runnning console apps and restart current session.
 `TerminalQuit`                 |                                                        | Application         | Terminate runnning console apps and close terminal.
 
@@ -597,7 +599,7 @@ Notes
                     "   RightClick to set as default "
                 </tooltip>
                 <config>  <!-- The following config partially overrides the base configuration. It is valid for DirectVT apps only. -->
-                    <term>
+                    <terminal>
                         <scrollback>
                             <size=40000/>  <!-- Scrollback buffer length. -->
                             <wrap=on/>     <!-- Lines wrapping mode. -->
@@ -605,14 +607,14 @@ Notes
                         <selection>
                             <mode=/config/set/selection/mode/>  <!-- Clipboard copy format: "text" | "ansi" | "rich" | "html" | "protected" | "none" . -->
                         </selection>
-                    </term>
+                    </terminal>
                 </config>
             </item>
             <item id="Tile" label="Tile" type="tile" title="Tiling Window Manager" cmd="h1:1(Term, Term)"      tooltip=" Tiling Window Manager           \n   LeftClick to launch instance  \n   RightClick to set as default "/>
             <item id="Site" label="Site" type="site" title="\e[11:3pSite "         cmd="@" winform="maximized" tooltip=" Desktop Region Marker           \n   LeftClick to launch instance  \n   RightClick to set as default "/>  <!-- "\e[11:3p" for center alignment, cmd="@" for instance numbering -->
             <item id="Logs" label="Logs" type="dtvt" title="Logs"                  cmd="$0 -q -r term $0 -m"   tooltip=" Log Monitor                     \n   LeftClick to launch instance  \n   RightClick to set as default ">
                 <config>
-                    <term>
+                    <terminal>
                         <scrollback>
                             <size=5000/>
                             <wrap="off"/>
@@ -666,7 +668,7 @@ Notes
                             </item>
                             <item label="Reset" tooltip=" Clear scrollback and SGR-attributes " action=TerminalOutput data="\e[!p"/>
                         </menu>
-                    </term>
+                    </terminal>
                 </config>
             </item>
             <autorun item*>  <!-- Autorun specified menu items:     -->
@@ -705,7 +707,7 @@ Notes
             <offset=2,1/>     <!-- 2D offset relative to the window (in cells). Default is "2,1". -->
         </shadow>
     </desktop>
-    <term>  <!-- Base settings for the Term app. It can be partially overridden by the menu item's config subarg. -->
+    <terminal>  <!-- Base settings for the built-in terminal. It can be partially overridden by the menu item's config subarg. -->
         <sendinput=""/>  <!-- Send input on startup. E.g. sendinput="echo \"test\"\n" -->
         <cwdsync=" cd $P\n"/>  <!-- Command to sync the current working directory. When 'Sync' is active, $P (case sensitive) will be replaced with the current path received via OSC9;9 notification. Prefixed with a space to avoid touching command history. -->
         <scrollback>
@@ -772,8 +774,7 @@ Notes
                     "   Left+RightClick to clear clipboard           "
                 </tooltip>
             </item>
-            <item type="Command" action=SwitchHotkeyScheme>
-                <label=" Keys0 " data=""/>
+            <item type="Option" action=SwitchHotkeyScheme label=" Keys0 " data="">
                 <label="\e[48:2:0:128:128;38:2:0:255:0m Keys1 \e[m" data="1"/>
                 <tooltip>
                     " Toggle hotkey scheme                          \n"
@@ -825,7 +826,7 @@ Notes
                                 close:   Always close.
                                 restart: Restart session.
                                 retry:   Restart session if exit code != 0. -->
-    </term>
+    </terminal>
     <defapp>
         <menu>
             <autohide=menu/autohide/>  <!-- Link to global <config/set/menu/autohide>. -->
@@ -867,8 +868,9 @@ Notes
             <key="Ctrl+PageDown" action=FocusNextWindow/>  <!-- Switch focus to the previous desktop window. -->
             <key="Shift+F7"      action=Disconnect/>       <!-- Disconnect from the desktop. -->
             <key="F10"           action=TryToQuit/>        <!-- Shut down the desktop server if no applications are running. -->
+            <key="Alt+Shift+N"   action=RunApplication/>   <!-- Run default application. -->
         </desktop>
-        <term key*>  <!-- Application specific layer key bindings. -->
+        <terminal key*>  <!-- Application specific layer key bindings. -->
             <key="Alt+RightArrow" action=TerminalFindNext/>  <!-- Highlight next match of selected text fragment. Clipboard content is used if no active selection. -->
             <key="Alt+LeftArrow"  action=TerminalFindPrev/>  <!-- Highlight previous match of selected text fragment. Clipboard content is used if no active selection. -->
             <key="Shift+Ctrl+PageUp"       ><action=TerminalScrollViewportByPage data=" 0, 1"/></key>  <!-- Scroll viewport one page up. -->
@@ -904,10 +906,11 @@ Notes
             <key=""         action=TerminalAlignMode/>                     <!-- Toggle terminal scrollback lines aligning mode. Applied to the active selection if it is. -->
             <key=""         action=TerminalFullscreen/>                    <!-- Toggle fullscreen mode. -->
             <key=""         action=TerminalMaximize/>                      <!-- Toggle between maximized and normal window size. -->
+            <key=""         action=TerminalMinimize/>                      <!-- Minimize window. -->
             <key=""         action=TerminalStdioLog/>                      <!-- Toggle stdin/stdout logging. -->
             <key=""         action=TerminalRestart/>                       <!-- Terminate runnning console apps and restart current session. -->
             <key=""         action=TerminalQuit/>                          <!-- Terminate runnning console apps and close terminal. -->
-        </term>
+        </terminal>
     </hotkeys>
 </config>
 ```

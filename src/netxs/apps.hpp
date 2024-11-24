@@ -387,12 +387,12 @@ namespace netxs::app::shared
             auto window_clr = skin::color(tone::window_clr);
             auto window = ui::veer::ctor()
                 ->limits(dot_11)
-                ->plugin<pro::focus>(pro::focus::mode::active); // Required for standalone mode.
+                ->plugin<pro::focus>();
             auto term = ui::cake::ctor()
                 ->active(window_clr);
             auto dtvt = ui::dtvt::ctor();
             auto scrl = term->attach(ui::rail::ctor());
-            auto defclr = config.take("/config/term/colors/default", cell{}.fgc(whitelt).bgc(blackdk));
+            auto defclr = config.take("/config/terminal/colors/default", cell{}.fgc(whitelt).bgc(blackdk));
             auto inst = scrl->attach(ui::term::ctor(config))
                 ->plugin<pro::focus>(pro::focus::mode::focused)
                 ->colors(defclr.fgc(), defclr.bgc())
@@ -775,7 +775,6 @@ namespace netxs::app::shared
         app::shared::initialize info_builder{ app::info::id, build_info };
         //todo UD
         app::shared::initialize noui_builder{ "noui", build_vtty };
-        app::shared::initialize xlvt_builder{ "xlvt", build_dtty };
         app::shared::initialize shell_builder{ "shell", build_vtty };
         app::shared::initialize ansivt_builder{ "ansivt", build_vtty };
         app::shared::initialize headless_builder{ "headless", build_vtty };

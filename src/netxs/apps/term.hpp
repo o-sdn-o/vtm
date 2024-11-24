@@ -92,9 +92,9 @@ namespace netxs::app::terminal
 
     namespace attr
     {
-        static constexpr auto cwdsync   = "/config/term/cwdsync";
-        static constexpr auto borders   = "/config/term/border";
-        static constexpr auto menuitems = "/config/term/menu/item";
+        static constexpr auto cwdsync   = "/config/terminal/cwdsync";
+        static constexpr auto borders   = "/config/terminal/border";
+        static constexpr auto menuitems = "/config/terminal/menu/item";
     }
 
     using events = netxs::events::userland::terminal;
@@ -213,6 +213,7 @@ namespace netxs::app::terminal
                 X(TerminalCwdSync             ) /* */ \
                 X(TerminalFullscreen          ) /* */ \
                 X(TerminalMaximize            ) /* */ \
+                X(TerminalMinimize            ) /* */ \
                 X(TerminalRestart             ) /* */ \
                 X(TerminalSendKey             ) /* */ \
                 X(TerminalWrapMode            ) /* */ \
@@ -373,6 +374,13 @@ namespace netxs::app::terminal
                     _submit<true>(boss, item, [](auto& boss, auto& /*item*/, auto& gear)
                     {
                         boss.base::riseup(tier::preview, e2::form::size::enlarge::maximize, gear);
+                    });
+                }
+                static void TerminalMinimize(ui::item& boss, menu::item& item)
+                {
+                    _submit<true>(boss, item, [](auto& boss, auto& /*item*/, auto& gear)
+                    {
+                        boss.base::riseup(tier::release, e2::form::size::minimize, gear);
                     });
                 }
                 static void TerminalRestart(ui::item& boss, menu::item& item)
@@ -634,7 +642,7 @@ namespace netxs::app::terminal
                 };
                 list.push_back({ item, setup });
             }
-            config.cd("/config/term", "/config/defapp");
+            config.cd("/config/terminal", "/config/defapp");
             return menu::create(config, list);
         }
     }
@@ -752,7 +760,7 @@ namespace netxs::app::terminal
         window//->plugin<pro::track>()
             //->plugin<pro::acryl>()
             ->plugin<pro::cache>();
-        auto defclr = config.take("/config/term/colors/default", cell{}.fgc(whitelt).bgc(blackdk));
+        auto defclr = config.take("/config/terminal/colors/default", cell{}.fgc(whitelt).bgc(blackdk));
         auto layers = window->attach(ui::cake::ctor())
                             ->colors(window_clr)
                             ->limits(dot_11);

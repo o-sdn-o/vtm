@@ -187,9 +187,9 @@ int main(int argc, char* argv[])
                 "\n    Plain xml-data can be specified in place of <file> in the '--config <file>' option,"
                 "\n    as well as in the $VTM_CONFIG environment variable:"
                 "\n"
-                "\n      vtm -c \"<config><term><scrollback size=1000000/></term></config>\" -r term"
+                "\n      vtm -c \"<config><terminal><scrollback size=1000000/></terminal></config>\" -r term"
                 "\n      or (using compact syntax)"
-                "\n      vtm -c \"<config/term/scrollback size=1000000/>\" -r term"
+                "\n      vtm -c \"<config/terminal/scrollback size=1000000/>\" -r term"
                 "\n");
             return 0;
         }
@@ -340,7 +340,6 @@ int main(int argc, char* argv[])
         else if (shadow.starts_with(app::dtvt::id))      { aptype = app::dtvt::id;      apname = app::dtvt::name;      }
         else if (shadow.starts_with(app::dtty::id))      { aptype = app::dtty::id;      apname = app::dtty::name;      }
         //todo undocumented
-        else if (shadow.starts_with(/*UD*/"xlvt"))       { aptype = app::dtty::id;     apname = app::dtty::name;       }
         else if (shadow.starts_with(/*UD*/"headless"))   { aptype = app::teletype::id; apname = app::teletype::name;   }
         else if (shadow.starts_with(/*UD*/"noui"))       { aptype = app::teletype::id; apname = app::teletype::name;   }
         //#if defined(DEBUG)
