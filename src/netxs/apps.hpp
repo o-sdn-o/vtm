@@ -389,9 +389,10 @@ namespace netxs::app::shared
                 ->limits(dot_11)
                 ->plugin<pro::focus>();
             auto term_cake = ui::cake::ctor()
+                ->plugin<pro::focus>()
                 ->active(window_clr);
             auto dtvt = ui::dtvt::ctor()
-                ->plugin<pro::focus>(pro::focus::mode::relay, faux/*default: don't cut_scope*/, faux/*no default focus*/)
+                ->plugin<pro::focus>(pro::focus::mode::relay, faux/*no default focus*/)
                 ->limits(dot_11);
             auto scrl = term_cake->attach(ui::rail::ctor());
             auto defclr = config.take("/config/terminal/colors/default", cell{}.fgc(whitelt).bgc(blackdk));
@@ -466,8 +467,10 @@ namespace netxs::app::shared
                     {
                         if (!!started == order)
                         {
+                            auto prev_ptr = boss.back();
                             boss.roll();
-                            boss.bell::signal(tier::request, hids::events::focus::hop, { .item = boss.back() });
+                            auto next_ptr = boss.back();
+                            pro::focus::hop(prev_ptr, next_ptr);
                             boss.back()->base::riseup(tier::preview, e2::form::prop::ui::footer);
                             boss.back()->reflow();
                             boss.back()->deface();
@@ -530,10 +533,10 @@ namespace netxs::app::shared
             auto [menu_block, cover, menu_data] = menu::mini(faux, faux, 1,
             menu::list
             {
-                { menu::item{ menu::item::type::Splitter, faux, 0, std::vector<menu::item::look>{{ .label = ver }}},
+                { menu::item{ menu::type::Splitter, faux, 0, std::vector<menu::item::look>{{ .label = ver }}},
                 [](auto& /*boss*/, auto& /*item*/)
                 { }},
-                { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "×", .tooltip = " Close ", .hover = c1 }}},
+                { menu::item{ menu::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "×", .tooltip = " Close ", .hover = c1 }}},
                 [window, c1](auto& boss, auto& /*item*/)
                 {
                     boss.template shader<tier::anycast>(cell::shaders::color(c1), e2::form::state::keybd::command::close, boss.This());

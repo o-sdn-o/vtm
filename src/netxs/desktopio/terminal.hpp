@@ -53,6 +53,63 @@ namespace netxs::ui
     {
         using events = netxs::events::userland::uiterm;
 
+        #define proc_list \
+            X(Noop                        ) /* */ \
+            X(ExclusiveKeyboardMode       ) /* */ \
+            X(TerminalQuit                ) /* */ \
+            X(TerminalCwdSync             ) /* */ \
+            X(TerminalFullscreen          ) /* */ \
+            X(TerminalMaximize            ) /* */ \
+            X(TerminalMinimize            ) /* */ \
+            X(TerminalRestart             ) /* */ \
+            X(TerminalSendKey             ) /* */ \
+            X(TerminalWrapMode            ) /* */ \
+            X(TerminalAlignMode           ) /* */ \
+            X(TerminalOutput              ) /* */ \
+            X(TerminalFindNext            ) /* */ \
+            X(TerminalFindPrev            ) /* */ \
+            X(TerminalUndo                ) /* Undo/Redo for cooked read on win32 */ \
+            X(TerminalRedo                ) /* */ \
+            X(TerminalClipboardCopy       ) /* */ \
+            X(TerminalClipboardPaste      ) /* */ \
+            X(TerminalClipboardWipe       ) /* */ \
+            X(TerminalClipboardFormat     ) /* */ \
+            X(TerminalSelectionRect       ) /* Linear/Rectangular */ \
+            X(TerminalSelectionCancel     ) /* */ \
+            X(TerminalSelectionOneShot    ) /* One-shot toggle to copy text while mouse tracking is active */ \
+            X(TerminalScrollViewportByPage) /* */ \
+            X(TerminalScrollViewportByCell) /* */ \
+            X(TerminalScrollViewportToTop ) /* */ \
+            X(TerminalScrollViewportToEnd ) /* */ \
+            X(TerminalViewportCopy        ) /* */ \
+            X(TerminalStdioLog            ) /* */ \
+            X(TerminalLogStart            ) /* */ \
+            X(TerminalLogPause            ) /* */ \
+            X(TerminalLogStop             ) /* */ \
+            X(TerminalLogAbort            ) /* */ \
+            X(TerminalLogRestart          ) /* */ \
+            X(TerminalVideoRecStart       ) /* */ \
+            X(TerminalVideoRecStop        ) /* */ \
+            X(TerminalVideoRecPause       ) /* */ \
+            X(TerminalVideoRecAbort       ) /* */ \
+            X(TerminalVideoRecRestart     ) /* */ \
+            X(TerminalVideoPlay           ) /* */ \
+            X(TerminalVideoPause          ) /* */ \
+            X(TerminalVideoStop           ) /* */ \
+            X(TerminalVideoForward        ) /* */ \
+            X(TerminalVideoBackward       ) /* */ \
+            X(TerminalVideoHome           ) /* */ \
+            X(TerminalVideoEnd            ) /* */
+
+        struct action
+        {
+            #define X(_proc) static constexpr auto _proc = #_proc;
+            proc_list
+            #undef X
+        };
+
+        #undef proc_list
+
         struct commands
         {
             struct erase
@@ -420,7 +477,7 @@ namespace netxs::ui
                         if (!focused && owner.ime_on) owner.ime_on = faux;
                     }
                 };
-                owner.bell::signal(tier::request, e2::form::state::keybd::check, state);
+                state = owner.bell::signal(tier::request, e2::form::state::focus::count);
             }
 
             operator bool () { return state; }
@@ -1204,6 +1261,7 @@ namespace netxs::ui
                 return boxed;
             }
 
+            //virtual text get_current_line()                                             = 0;
             virtual cell cell_under_cursor()                                            = 0;
             virtual void scroll_region(si32 top, si32 end, si32 n, bool use_scrollback) = 0;
             virtual bool recalc_pads(dent& oversz)                                      = 0;
@@ -2493,6 +2551,26 @@ namespace netxs::ui
                 auto c = canvas[coor];
                 return c;
             }
+            //text get_current_line() override
+            //{
+            //    auto crop = escx{};
+            //    auto cy = std::clamp(coord.y, 0, panel.y - 1);
+            //    auto p1 = twod{ 0, cy };
+            //    auto p2 = twod{ panel.x, cy };
+            //    auto stripe = canvas.line(p1, p2);
+            //    auto brush_state = cell{};
+            //    if (owner.selmod == mime::textonly
+            //     || owner.selmod == mime::safetext
+            //     || owner.selmod == mime::disabled)
+            //    {
+            //        utf::trim(crop.s11n<faux, true, faux>(stripe, brush_state));
+            //    }
+            //    else
+            //    {
+            //        crop.s11n<true, true, faux>(stripe, brush_state);
+            //    }
+            //    return crop;
+            //}
 
             // alt_screen: Start text selection.
             void selection_create(twod coor, bool mode) override
@@ -5051,6 +5129,23 @@ namespace netxs::ui
                 auto c = curln.length() && batch.caret <= curln.length() ? curln.at(std::clamp(batch.caret, 0, curln.length() - 1)) : parser::brush;
                 return c;
             }
+            //text get_current_line() override
+            //{
+            //    auto crop = escx{};
+            //    auto& stripe = batch.current();
+            //    auto brush_state = cell{};
+            //    if (owner.selmod == mime::textonly
+            //     || owner.selmod == mime::safetext
+            //     || owner.selmod == mime::disabled)
+            //    {
+            //        utf::trim(crop.s11n<faux, true, faux>(stripe, brush_state));
+            //    }
+            //    else
+            //    {
+            //        crop.s11n<true, true, faux>(stripe, brush_state);
+            //    }
+            //    return crop;
+            //}
 
             // scroll_buf: Calc grip position by coor.
             auto selection_coor_to_grip(twod coor, grip::type role = grip::base)
@@ -7179,7 +7274,7 @@ namespace netxs::ui
             if (onesht != mime::disabled && !ctrl_pressed) selection_oneshot(mime::disabled);
             if (ctrl_pressed || selection_cancel()) // Keep selection if Ctrl is pressed.
             {
-                base::expire(tier::release);
+                bell::expire(tier::release);
                 return true;
             }
             return faux;
@@ -7254,7 +7349,7 @@ namespace netxs::ui
                 console.selection_follow(gear.coord, go_on);
                 selection_extend(gear);
                 gear.dismiss();
-                base::expire(tier::release);
+                bell::expire(tier::release);
             }
             else selection_cancel();
         }
@@ -7262,7 +7357,7 @@ namespace netxs::ui
         {
             target->selection_byword(gear.coord);
             gear.dismiss();
-            base::expire(tier::release);
+            bell::expire(tier::release);
             base::deface();
         }
         void selection_tplclk(hids& gear)
@@ -7272,7 +7367,7 @@ namespace netxs::ui
             else if (clicks == 4) target->selection_bymark(gear.coord);
             else if (clicks == 5) target->selection_selall();
             gear.dismiss();
-            base::expire(tier::release);
+            bell::expire(tier::release);
             base::deface();
         }
         void selection_create(hids& gear)
@@ -7744,36 +7839,35 @@ namespace netxs::ui
             publish_property(ui::term::events::search::status, [&](auto& v){ v = target->selection_button(); });
             selection_selmod(config.def_selmod);
 
-            chords.proc("TerminalScrollViewportByPage", [&](hids& gear, txts& args){ if (target != &normal) return; gear.set_handled(); base::riseup(tier::preview, e2::form::upon::scroll::bypage::v, { .vector = args.size() ? xml::take_or<twod>(args.front(), dot_00) : dot_00 }); });
-            chords.proc("TerminalScrollViewportByCell", [&](hids& gear, txts& args){ if (target != &normal) return; gear.set_handled(); base::riseup(tier::preview, e2::form::upon::scroll::bystep::v, { .vector = args.size() ? xml::take_or<twod>(args.front(), dot_00) : dot_00 }); });
-            chords.proc("TerminalScrollViewportToTop",  [&](hids& gear, txts&){ if (target != &normal) return; gear.set_handled(); base::riseup(tier::preview, e2::form::upon::scroll::to_top::y); });
-            chords.proc("TerminalScrollViewportToEnd",  [&](hids& gear, txts&){ if (target != &normal) return; gear.set_handled(); base::riseup(tier::preview, e2::form::upon::scroll::to_end::y); });
-            chords.proc("TerminalFindPrev",             [&](hids& gear, txts&){ gear.set_handled(); selection_search(gear, feed::rev); });
-            chords.proc("TerminalFindNext",             [&](hids& gear, txts&){ gear.set_handled(); selection_search(gear, feed::fwd); });
-            chords.proc("TerminalCwdSync",              [&](hids& gear, txts&){ gear.set_handled(); base::riseup(tier::preview, ui::term::events::toggle::cwdsync, true); });
-            chords.proc("TerminalQuit",                 [&](hids& gear, txts&){ gear.set_handled(); exec_cmd(commands::ui::sighup);    });
-            chords.proc("TerminalRestart",              [&](hids& gear, txts&){ gear.set_handled(); exec_cmd(commands::ui::restart);   });
-            //todo use wptr for gear when enqueueing
-            chords.proc("TerminalFullscreen",           [&](hids& gear, txts&){ gear.set_handled(); bell::enqueue(This(), [&](auto& /*boss*/){ base::riseup(tier::preview, e2::form::size::enlarge::fullscreen, gear); }); }); // Refocus-related operations require execution outside of keyboard events.
-            chords.proc("TerminalMaximize",             [&](hids& gear, txts&){ gear.set_handled(); bell::enqueue(This(), [&](auto& /*boss*/){ base::riseup(tier::preview, e2::form::size::enlarge::maximize,   gear); }); });
-            chords.proc("TerminalMinimize",             [&](hids& gear, txts&){ gear.set_handled(); bell::enqueue(This(), [&](auto& /*boss*/){ base::riseup(tier::release, e2::form::size::minimize, gear); }); });
-            chords.proc("TerminalUndo",                 [&](hids& gear, txts&){ gear.set_handled(); exec_cmd(commands::ui::undo);      });
-            chords.proc("TerminalRedo",                 [&](hids& gear, txts&){ gear.set_handled(); exec_cmd(commands::ui::redo);      });
-            chords.proc("TerminalClipboardCopy",        [&](hids& gear, txts&){ gear.set_handled(); copy(gear);                        });
-            chords.proc("TerminalClipboardPaste",       [&](hids& gear, txts&){ gear.set_handled(); paste(gear);                       });
-            chords.proc("TerminalClipboardWipe",        [&](hids& gear, txts&){ gear.set_handled(); gear.clear_clipboard();            });
-            chords.proc("TerminalClipboardFormat",      [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) exec_cmd(commands::ui::togglesel); else set_selmod((si32)netxs::get_or(xml::options::format, args.front(), mime::textonly)); });
-            chords.proc("TerminalViewportCopy",         [&](hids& gear, txts&){ gear.set_handled(); prnscrn(gear);                     });
-            chords.proc("TerminalSelectionCancel",      [&](hids& gear, txts&){ if (!selection_active()) return; gear.set_handled(); exec_cmd(commands::ui::deselect); });
-            chords.proc("TerminalSelectionRect",        [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) exec_cmd(commands::ui::toggleselalt); else set_selalt(xml::take_or<bool>(args.front(), faux)); });
-            chords.proc("TerminalSelectionOneShot",     [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) set_oneshot(mime::textonly); else set_oneshot(netxs::get_or(xml::options::format, args.front(), mime::textonly)); });
-            chords.proc("TerminalStdioLog",             [&](hids& gear, txts& args){ gear.set_handled(); set_log(args.size() ? xml::take_or<bool>(args.front(), !io_log) : !io_log); ondata<true>();  });
-            chords.proc("TerminalSendKey",              [&](hids& gear, txts& args){ gear.set_handled(); if (args.size()) data_out(args.front()); });
-            chords.proc("TerminalOutput",               [&](hids& gear, txts& args){ gear.set_handled(); if (args.size()) data_in(args.front()); });
-            chords.proc("TerminalAlignMode",            [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) exec_cmd(commands::ui::togglejet); else set_align((si32)netxs::get_or(xml::options::align, args.front(), bias::none)); });
-            chords.proc("TerminalWrapMode",             [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) exec_cmd(commands::ui::togglewrp); else set_wrapln(1 + (si32)!xml::take_or<bool>(args.front(), true)); });
-            chords.proc("ExclusiveKeyboardMode",        [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) exec_cmd(commands::ui::toggleraw); else set_rawkbd(1 + (si32)!xml::take_or<bool>(args.front(), true)); });
-            auto bindings = chords.load(xml_config, "terminal");
+            chords.proc(action::TerminalScrollViewportByPage, [&](hids& gear, txts& args){ if (target != &normal) return; gear.set_handled(); base::riseup(tier::preview, e2::form::upon::scroll::bypage::v, { .vector = args.size() ? xml::take_or<twod>(args.front(), dot_00) : dot_00 }); });
+            chords.proc(action::TerminalScrollViewportByCell, [&](hids& gear, txts& args){ if (target != &normal) return; gear.set_handled(); base::riseup(tier::preview, e2::form::upon::scroll::bystep::v, { .vector = args.size() ? xml::take_or<twod>(args.front(), dot_00) : dot_00 }); });
+            chords.proc(action::TerminalScrollViewportToTop,  [&](hids& gear, txts&){ if (target != &normal) return; gear.set_handled(); base::riseup(tier::preview, e2::form::upon::scroll::to_top::y); });
+            chords.proc(action::TerminalScrollViewportToEnd,  [&](hids& gear, txts&){ if (target != &normal) return; gear.set_handled(); base::riseup(tier::preview, e2::form::upon::scroll::to_end::y); });
+            chords.proc(action::TerminalFindPrev,             [&](hids& gear, txts&){ gear.set_handled(); selection_search(gear, feed::rev); });
+            chords.proc(action::TerminalFindNext,             [&](hids& gear, txts&){ gear.set_handled(); selection_search(gear, feed::fwd); });
+            chords.proc(action::TerminalCwdSync,              [&](hids& gear, txts&){ gear.set_handled(); base::riseup(tier::preview, ui::term::events::toggle::cwdsync, true); });
+            chords.proc(action::TerminalQuit,                 [&](hids& gear, txts&){ gear.set_handled(); exec_cmd(commands::ui::sighup);    });
+            chords.proc(action::TerminalRestart,              [&](hids& gear, txts&){ gear.set_handled(); exec_cmd(commands::ui::restart);   });
+            chords.proc(action::TerminalFullscreen,           [&](hids& gear, txts&){ gear.set_handled(); bell::enqueue(This(), [&, gear_id = gear.id](auto& /*boss*/){ if (auto gear_ptr = bell::getref<hids>(gear_id)) base::riseup(tier::preview, e2::form::size::enlarge::fullscreen, *gear_ptr); }); }); // Refocus-related operations require execution outside of keyboard events.
+            chords.proc(action::TerminalMaximize,             [&](hids& gear, txts&){ gear.set_handled(); bell::enqueue(This(), [&, gear_id = gear.id](auto& /*boss*/){ if (auto gear_ptr = bell::getref<hids>(gear_id)) base::riseup(tier::preview, e2::form::size::enlarge::maximize, *gear_ptr); }); });
+            chords.proc(action::TerminalMinimize,             [&](hids& gear, txts&){ gear.set_handled(); bell::enqueue(This(), [&, gear_id = gear.id](auto& /*boss*/){ if (auto gear_ptr = bell::getref<hids>(gear_id)) base::riseup(tier::release, e2::form::size::minimize, *gear_ptr); }); });
+            chords.proc(action::TerminalUndo,                 [&](hids& gear, txts&){ gear.set_handled(); exec_cmd(commands::ui::undo);      });
+            chords.proc(action::TerminalRedo,                 [&](hids& gear, txts&){ gear.set_handled(); exec_cmd(commands::ui::redo);      });
+            chords.proc(action::TerminalClipboardCopy,        [&](hids& gear, txts&){ if (selection_active()) { copy(gear); gear.set_handled(); } else if (auto v = ipccon.get_current_line()) { _copy(gear, v.value()); gear.set_handled(); }});
+            chords.proc(action::TerminalClipboardPaste,       [&](hids& gear, txts&){ gear.set_handled(); paste(gear);                       });
+            chords.proc(action::TerminalClipboardWipe,        [&](hids& gear, txts&){ gear.set_handled(); gear.clear_clipboard();            });
+            chords.proc(action::TerminalClipboardFormat,      [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) exec_cmd(commands::ui::togglesel); else set_selmod((si32)netxs::get_or(xml::options::format, args.front(), mime::textonly)); });
+            chords.proc(action::TerminalViewportCopy,         [&](hids& gear, txts&){ gear.set_handled(); prnscrn(gear);                     });
+            chords.proc(action::TerminalSelectionCancel,      [&](hids& gear, txts&){ if (!selection_active()) return; gear.set_handled(); exec_cmd(commands::ui::deselect); });
+            chords.proc(action::TerminalSelectionRect,        [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) exec_cmd(commands::ui::toggleselalt); else set_selalt(xml::take_or<bool>(args.front(), faux)); });
+            chords.proc(action::TerminalSelectionOneShot,     [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) set_oneshot(mime::textonly); else set_oneshot(netxs::get_or(xml::options::format, args.front(), mime::textonly)); });
+            chords.proc(action::TerminalStdioLog,             [&](hids& gear, txts& args){ gear.set_handled(); set_log(args.size() ? xml::take_or<bool>(args.front(), !io_log) : !io_log); ondata<true>();  });
+            chords.proc(action::TerminalSendKey,              [&](hids& gear, txts& args){ gear.set_handled(); if (args.size()) data_out(args.front()); });
+            chords.proc(action::TerminalOutput,               [&](hids& gear, txts& args){ gear.set_handled(); if (args.size()) data_in(args.front()); });
+            chords.proc(action::TerminalAlignMode,            [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) exec_cmd(commands::ui::togglejet); else set_align((si32)netxs::get_or(xml::options::align, args.front(), bias::none)); });
+            chords.proc(action::TerminalWrapMode,             [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) exec_cmd(commands::ui::togglewrp); else set_wrapln(1 + (si32)!xml::take_or<bool>(args.front(), true)); });
+            chords.proc(action::ExclusiveKeyboardMode,        [&](hids& gear, txts& args){ gear.set_handled(); if (args.empty()) exec_cmd(commands::ui::toggleraw); else set_rawkbd(1 + (si32)!xml::take_or<bool>(args.front(), true)); });
+            auto bindings = pro::keybd::load(xml_config, "terminal");
             chords.bind(bindings);
 
             LISTEN(tier::general, e2::timer::tick, timestamp) // Update before world rendering.
@@ -8057,11 +8151,11 @@ namespace netxs::ui
                     auto owner_ptr = owner.This();
                     if (f.state)
                     {
-                        pro::focus::set(owner_ptr, f.gear_id, f.focus_type);
+                        owner.bell::signal(tier::request, hids::events::focus::add, { .gear_id = f.gear_id, .focus_type = f.focus_type });
                     }
                     else
                     {
-                        pro::focus::off(owner_ptr, f.gear_id);
+                        owner.bell::signal(tier::request, hids::events::focus::rem, { .gear_id = f.gear_id });
                     }
                 }
             }
@@ -8076,7 +8170,7 @@ namespace netxs::ui
                     {
                         auto& gear = *gear_ptr;
                         k.syncto(gear);
-                        owner.base::riseup(tier::release, hids::events::keybd::key::post, gear);
+                        owner.base::riseup(tier::release, hids::events::keybd::key::post, gear, true);
                     }
                 }
             };
@@ -8421,11 +8515,11 @@ namespace netxs::ui
                 gear.m_sys.enabled = hids::stat::halt;
                 stream.sysmouse.send(*this, gear.m_sys);
             };
-            LISTEN(tier::release, hids::events::focus::any, seed)
+            LISTEN(tier::release, hids::events::focus::set::any, seed)
             {
                 auto deed = this->bell::protos(tier::release);
-                auto state = deed == hids::events::focus::set.id;
-                stream.sysfocus.send(*this, seed.gear_id, state, seed.focus_type);
+                auto state = deed == hids::events::focus::set::on.id;
+                stream.sysfocus.send(*this, seed.gear_id, state, seed.focus_type, seed.treeid, seed.digest);
             };
             LISTEN(tier::preview, hids::events::keybd::key::any, gear)
             {

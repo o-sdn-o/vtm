@@ -24,7 +24,7 @@ namespace netxs::app
 
 namespace netxs::app::shared
 {
-    static const auto version = "v0.9.99.54";
+    static const auto version = "v0.9.99.56";
     static const auto repository = "https://github.com/directvt/vtm";
     static const auto usr_config = "~/.config/vtm/settings.xml"s;
     static const auto sys_config = "/etc/vtm/settings.xml"s;
@@ -144,9 +144,8 @@ namespace netxs::app::shared
         keybd.proc("ScrollCharRight" , [&](hids& gear, txts&){ gear.set_handled(); scroll_inst.base::riseup(tier::preview, e2::form::upon::scroll::bystep::x, { .vector = {-3, 0 }}); });
         keybd.proc("ScrollTop"       , [&](hids& gear, txts&){ gear.set_handled(); scroll_inst.base::riseup(tier::preview, e2::form::upon::scroll::to_top::y); });
         keybd.proc("ScrollEnd"       , [&](hids& gear, txts&){ gear.set_handled(); scroll_inst.base::riseup(tier::preview, e2::form::upon::scroll::to_end::y); });
-        //todo use sptr for gear when enqueueing (dangling reference)
-        keybd.proc("ToggleMaximize"  , [&](hids& gear, txts&){ gear.set_handled(); scroll_inst.bell::enqueue(boss.This(), [&](auto& /*boss*/){ scroll_inst.base::riseup(tier::preview, e2::form::size::enlarge::maximize,   gear); }); }); // Refocus-related operations require execution outside of keyboard eves.
-        keybd.proc("ToggleFullscreen", [&](hids& gear, txts&){ gear.set_handled(); scroll_inst.bell::enqueue(boss.This(), [&](auto& /*boss*/){ scroll_inst.base::riseup(tier::preview, e2::form::size::enlarge::fullscreen, gear); }); });
+        keybd.proc("ToggleMaximize"  , [&](hids& gear, txts&){ gear.set_handled(); scroll_inst.bell::enqueue(boss.This(), [&, gear_id = gear.id](auto& /*boss*/){ if (auto gear_ptr = boss.bell::getref<hids>(gear_id)) scroll_inst.base::riseup(tier::preview, e2::form::size::enlarge::maximize,   *gear_ptr); }); }); // Refocus-related operations require execution outside of keyboard eves.
+        keybd.proc("ToggleFullscreen", [&](hids& gear, txts&){ gear.set_handled(); scroll_inst.bell::enqueue(boss.This(), [&, gear_id = gear.id](auto& /*boss*/){ if (auto gear_ptr = boss.bell::getref<hids>(gear_id)) scroll_inst.base::riseup(tier::preview, e2::form::size::enlarge::fullscreen, *gear_ptr); }); });
 
         keybd.bind( "Esc", "DropAutoRepeat"    , true);
         keybd.bind( "Esc", "WindowClosePreview", true);
@@ -194,30 +193,30 @@ namespace netxs::app::shared
     {
         namespace attr
         {
-            static constexpr auto brand = "type";
-            static constexpr auto label = "label";
-            static constexpr auto tooltip = "tooltip";
-            static constexpr auto route = "action";
-            static constexpr auto data = "data";
+            static constexpr auto menuitem = "menu/item";
+            static constexpr auto type     = "type";
+            static constexpr auto label    = "label";
+            static constexpr auto tooltip  = "tooltip";
+            static constexpr auto action   = "action";
+            static constexpr auto data     = "data";
         }
         namespace type
         {
-            static const auto Command  = "Command"s;
-            static const auto Splitter = "Splitter"s;
-            static const auto Option   = "Option"s;
-            static const auto Repeat   = "Repeat"s;
+            static constexpr auto _counter = __COUNTER__ + 1;
+            static constexpr auto Splitter = __COUNTER__ - _counter;
+            static constexpr auto Command  = __COUNTER__ - _counter;
+            static constexpr auto Option   = __COUNTER__ - _counter;
+            static constexpr auto Repeat   = __COUNTER__ - _counter;
         }
+
+        static auto type_options = std::unordered_map<text, si32>
+            {{ "Splitter", menu::type::Splitter },
+             { "Command",  menu::type::Command  },
+             { "Option",   menu::type::Option   },
+             { "Repeat",   menu::type::Repeat   }};
 
         struct item
         {
-            enum type
-            {
-                Splitter,
-                Command,
-                Option,
-                Repeat,
-            };
-
             struct look
             {
                 text label{};
@@ -231,7 +230,7 @@ namespace netxs::app::shared
             using umap = std::unordered_map<ui64, si32>;
             using list = std::vector<look>;
 
-            type brand{};
+            si32 type{};
             bool alive{};
             si32 taken{}; // Active label index.
             list views{};
@@ -270,6 +269,7 @@ namespace netxs::app::shared
             }
         };
 
+        using action_map_t = std::unordered_map<text, std::function<void(ui::item&, menu::item&)>, qiew::hash, qiew::equal>;
         using link = std::tuple<item, std::function<void(ui::item&, item&)>>;
         using list = std::list<link>;
 
@@ -333,7 +333,7 @@ namespace netxs::app::shared
             {
                 auto control = std::vector<link>
                 {
-                    { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "—", .tooltip = " Minimize " }}},//, .hover = c2 }}}, //toto too funky
+                    { menu::item{ menu::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "—", .tooltip = " Minimize " }}},//, .hover = c2 }}}, //toto too funky
                     [](auto& boss, auto& /*item*/)
                     {
                         boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
@@ -342,7 +342,7 @@ namespace netxs::app::shared
                             gear.dismiss();
                         };
                     }},
-                    { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "□", .tooltip = " Maximize " }}},//, .hover = c6 }}},
+                    { menu::item{ menu::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "□", .tooltip = " Maximize " }}},//, .hover = c6 }}},
                     [](auto& boss, auto& /*item*/)
                     {
                         boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
@@ -351,7 +351,7 @@ namespace netxs::app::shared
                             gear.dismiss();
                         };
                     }},
-                    { menu::item{ menu::item::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "×", .tooltip = " Close ", .hover = c1 }}},
+                    { menu::item{ menu::type::Command, true, 0, std::vector<menu::item::look>{{ .label = "×", .tooltip = " Close ", .hover = c1 }}},
                     [c1](auto& boss, auto& /*item*/)
                     {
                         boss.template shader<tier::anycast>(cell::shaders::color(c1), e2::form::state::keybd::command::close);
@@ -454,17 +454,61 @@ namespace netxs::app::shared
             auto slimsize = config.take("menu/slim"    , true);
             return mini(autohide, slimsize, 0, menu_items);
         };
+        const auto load = [](xmls& config, action_map_t const& proc_map)
+        {
+            auto list = menu::list{};
+            auto defs = menu::item::look{};
+            auto menudata = config.list(menu::attr::menuitem);
+            for (auto data_ptr : menudata)
+            {
+                auto item = menu::item{};
+                auto& data = *data_ptr;
+                auto action = data.take(menu::attr::action, ""s);
+                item.type = data.take(menu::attr::type, menu::type::Command, type_options);
+                defs.tooltip = data.take(menu::attr::tooltip, ""s);
+                defs.data = data.take(menu::attr::data, ""s);
+                item.alive = !action.empty() && item.type != menu::type::Splitter;
+                for (auto label : data.list(menu::attr::label))
+                {
+                    item.views.push_back(
+                    {
+                        .label = label->take_value(),
+                        .tooltip = label->take(menu::attr::tooltip, defs.tooltip),
+                        .data = label->take(menu::attr::data, defs.data),
+                    });
+                }
+                if (item.views.empty()) continue; // Menu item without label.
+                auto setup = [action, &proc_map](ui::item& boss, menu::item& item)
+                {
+                    if (item.type == menu::type::Option)
+                    {
+                        boss.LISTEN(tier::release, hids::events::mouse::button::click::left, gear)
+                        {
+                            item.taken = (item.taken + 1) % item.views.size();
+                        };
+                    }
+                    auto iter = proc_map.find(action);
+                    if (iter != proc_map.end())
+                    {
+                        auto& initproc = iter->second;
+                        initproc(boss, item);
+                    }
+                };
+                list.push_back({ item, setup });
+            }
+            return menu::create(config, list);
+        };
         const auto demo = [](xmls& config)
         {
             //auto highlight_color = skin::color(tone::highlight);
             //auto c3 = highlight_color;
             auto items = list
             {
-                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("F").nil().add("ile"), .tooltip = " File menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
-                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("E").nil().add("dit"), .tooltip = " Edit menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
-                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("V").nil().add("iew"), .tooltip = " View menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
-                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("D").nil().add("ata"), .tooltip = " Data menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
-                { item{ item::type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("H").nil().add("elp"), .tooltip = " Help menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
+                { item{ type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("F").nil().add("ile"), .tooltip = " File menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
+                { item{ type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("E").nil().add("dit"), .tooltip = " Edit menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
+                { item{ type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("V").nil().add("iew"), .tooltip = " View menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
+                { item{ type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("D").nil().add("ata"), .tooltip = " Data menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
+                { item{ type::Command, true, 0, std::vector<item::look>{{ .label = ansi::und(true).add("H").nil().add("elp"), .tooltip = " Help menu item " }}}, [&](auto& /*boss*/, auto& /*item*/){ }},
             };
             auto [menu, cover, menu_data] = create(config, items);
             return menu;
