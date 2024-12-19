@@ -455,8 +455,10 @@ Tiling Window Manager is a window container that organizes the workspace into mu
             <item action=TileEqualizeSplitRatio label=">|<" tooltip=" Equalize split ratio "/>
             <item action=TileSetManagerTitle    label='"…"' tooltip=" Set tiling window manager title using clipboard data "/>
             <item action=TileClosePane          label="×"   tooltip=" Close active application "/>
-            <!-- <item action=TileFocusPrevPane      label="<"   tooltip=" Focus the previous pane or splitting grip "/> -->
-            <!-- <item action=TileFocusNextPane      label=">"   tooltip=" Focus the next pane or splitting grip "/> -->
+            <!-- <item action=TileFocusPrev      label="<"   tooltip=" Focus the previous pane or the split grip "/> -->
+            <!-- <item action=TileFocusNext      label=">"   tooltip=" Focus the next pane or the split grip "/> -->
+            <!-- <item action=TileFocusPrevPane  label="<-"  tooltip=" Focus the previous pane "/> -->
+            <!-- <item action=TileFocusNextPane  label="->"  tooltip=" Focus the next pane "/> -->
         </menu>
     </tile>
     <hotkeys>  <!-- The required key combination sequence can be generated on the Info page, accessible by clicking on the label in the lower right corner of the vtm desktop. -->
@@ -468,23 +470,29 @@ Tiling Window Manager is a window container that organizes the workspace into mu
             <key="Alt+Shift+N"   action=RunApplication/>   <!-- Run default application. -->
         </desktop>
         <tile key*>
-            <key="Ctrl+PageUp"   action=TileFocusPrevPane     />  <!-- Focus the previous pane or splitting grip. -->
-            <key="Ctrl+PageDown" action=TileFocusNextPane     />  <!-- Focus the next pane or splitting grip. -->
-            <key="Alt+Shift+N"   action=TileRunApplicatoin    />  <!-- Launch application instances in active empty slots. The app to run can be set by RightClick on the taskbar. -->
-            <key="Alt+Shift+A"   action=TileSelectAllPanes    />  <!-- Select all panes. -->
-            <key="Alt+Shift+'|'">
-                <action=DropAutoRepeat/>         <!-- Don't autorepeat the split action. -->
-                <action=TileSplitHorizontally/>  <!-- Split active panes horizontally. -->
-            </key>
-            <key="Alt+Shift+Minus">
-                <action=DropAutoRepeat/>       <!-- Don't autorepeat the split action. -->
-                <action=TileSplitVertically/>  <!-- Split active panes vertically. -->
-            </key>
-            <key="Alt+Shift+R"   action=TileSplitOrientation  />  <!-- Change split orientation. -->
-            <key="Alt+Shift+S"   action=TileSwapPanes         />  <!-- Swap two or more panes. -->
-            <key="Alt+Shift+E"   action=TileEqualizeSplitRatio/>  <!-- Equalize split ratio. -->
-            <key="Alt+Shift+F2"  action=TileSetManagerTitle   />  <!-- Set tiling window manager title using clipboard data. -->
-            <key="Alt+Shift+W"   action=TileClosePane         />  <!-- Close active application. -->
+            <key="Ctrl+PageUp"     action=TileFocusPrev         />  <!-- Focus the previous pane or the split grip. -->
+            <key="Ctrl+PageDown"   action=TileFocusNext         />  <!-- Focus the next pane or the split grip. -->
+            <key=""                action=TileFocusPrevPane     />  <!-- Focus the previous pane. -->
+            <key=""                action=TileFocusNextPane     />  <!-- Focus the next pane. -->
+            <key="Alt+Shift+N"     action=TileRunApplicatoin    />  <!-- Launch application instances in active empty slots. The app to run can be set by RightClick on the taskbar. -->
+            <key="Alt+Shift+A"     action=TileSelectAllPanes    />  <!-- Select all panes. -->
+            <key="Alt+Shift+'|'"   action=TileSplitHorizontally />  <!-- Split active panes horizontally. -->
+            <key="Alt+Shift+Minus" action=TileSplitVertically   />  <!-- Split active panes vertically. -->
+            <key="Alt+Shift+R"     action=TileSplitOrientation  />  <!-- Change split orientation. -->
+            <key="Alt+Shift+S"     action=TileSwapPanes         />  <!-- Swap two or more panes. -->
+            <key="Alt+Shift+E"     action=TileEqualizeSplitRatio/>  <!-- Equalize split ratio. -->
+            <key="Alt+Shift+F2"    action=TileSetManagerTitle   />  <!-- Set tiling window manager title using clipboard data. -->
+            <key="Alt+Shift+W"     action=TileClosePane         />  <!-- Close active application. -->
+            <grips key*>
+                <key="LeftArrow" ><action=TileMoveGrip   data="-1, 0"/></key>  <!-- Move the split grip to the left. -->
+                <key="RightArrow"><action=TileMoveGrip   data=" 1, 0"/></key>  <!-- Move the split grip to the right. -->
+                <key="UpArrow"   ><action=TileMoveGrip   data=" 0,-1"/></key>  <!-- Move the split grip up. -->
+                <key="DownArrow" ><action=TileMoveGrip   data=" 0, 1"/></key>  <!-- Move the split grip down. -->
+                <key="'-'"       ><action=TileResizeGrip data="-1"   /></key>  <!-- Decrease the split grip width. -->
+                <key="Shift+'+' | NumpadPlus"><action=TileResizeGrip data="1"/></key>  <!-- Increase the split grip width. -->
+                <key="Shift+Tab" action=TileFocusPrevGrip/>  <!-- Focus the next split grip. -->
+                <key="Tab"       action=TileFocusNextGrip/>  <!-- Focus the previous split grip. -->
+            </grips>
         </tile>
     </hotkeys>
 </config>

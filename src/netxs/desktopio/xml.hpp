@@ -10,6 +10,7 @@ namespace netxs::xml
     template<class T>
     auto take(qiew utf8) -> std::optional<T>
     {
+        utf::trim_front(utf8);
         if (utf8.starts_with("0x"))
         {
             utf8.remove_prefix(2);
@@ -21,6 +22,7 @@ namespace netxs::xml
     template<>
     auto take<fp32>(qiew utf8) -> std::optional<fp32>
     {
+        utf::trim_front(utf8);
         return utf8 ? utf::to_int<fp32>(utf8)
                     : std::nullopt;
     }
@@ -32,6 +34,7 @@ namespace netxs::xml
     template<>
     auto take<bool>(qiew utf8) -> std::optional<bool>
     {
+        utf::trim_front(utf8);
         auto value = utf::to_lower(utf8.str());
         if (value.starts_with("undef")) return std::nullopt; // Use default.
         if (value.empty() || value == "1"
@@ -63,6 +66,32 @@ namespace netxs::xml
             {
                 return twod{ x.value(), y.value() };
             }
+        }
+        return std::nullopt;
+    }
+    template<>
+    auto take<dent>(qiew utf8) -> std::optional<dent>
+    {
+        utf::trim_front(utf8, " ({[\"\'");
+        if (utf8)
+        if (auto l = utf::to_int(utf8))
+        {
+            utf::trim_front(utf8, " ,.x/:;");
+            if (auto r = utf::to_int(utf8))
+            {
+                utf::trim_front(utf8, " ,.x/:;");
+                if (auto t = utf::to_int(utf8))
+                {
+                    utf::trim_front(utf8, " ,.x/:;");
+                    if (auto b = utf::to_int(utf8))
+                    {
+                        return dent{ l.value(), r.value(), t.value(), b.value() };
+                    }
+                    else return dent{ l.value(), r.value(), t.value() };
+                }
+                else return dent{ l.value(), r.value() };
+            }
+            else return dent{ l.value() };
         }
         return std::nullopt;
     }
