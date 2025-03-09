@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 #include "ansivt.hpp"
-#include "logger.hpp"
 
 #pragma once
 
@@ -83,16 +82,16 @@ namespace netxs::directvt
         #pragma pack(push,1)
         struct marker
         {
-            static constexpr auto initial = char{ '\xFF' };
+            static constexpr auto initial = (byte)'\xFF';
 
             using sz_t = le_t<netxs::sz_t>;
             using type = le_t<netxs::twod::type>;
 
-            char mark_FF;
+            byte mark_FF;
             sz_t cfgsize;
             type winx_sz;
             type winy_sz;
-            char mark_FE;
+            byte mark_FE;
 
             marker()
             { }
@@ -126,8 +125,8 @@ namespace netxs::directvt
         {
             using D = std::remove_cv_t<std::remove_reference_t<T>>;
             if constexpr (std::is_same_v<D, char>
-                       || std::is_same_v<D, byte>
-                       || std::is_same_v<D, type>)
+                       || std::is_same_v<D, int8>
+                       || std::is_same_v<D, byte>)
             {
                 block.text::push_back((char)data);
             }
@@ -173,9 +172,10 @@ namespace netxs::directvt
             {
                 // Four letters type encoding.
                 #define type_id_list \
-                    X(char) \
                     X(bool) \
                     X(text) \
+                    X(char) \
+                    X(int8) \
                     X(byte) \
                     X(ui16) \
                     X(ui32) \

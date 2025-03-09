@@ -300,9 +300,9 @@ Hotkey                       | Description
             <item type="Command" action=TerminalMinimize       label="Minimize"/>
             <item type="Command" action=Noop                   label="Noop"/>
 
-            <item type="Option" action=TerminalCwdSync>
-                <label="Sync"                     data="off" tooltip=" CWD sync is off "/>
-                <label="\e[38:2:0:255:0mSync\e[m" data="on"  tooltip=" CWD sync is on                          \n Make sure your shell has OSC9;9 enabled "/>
+            <item type="Option" action=AlwaysOnTopApplet>
+                <label="OnTop"                     data="off" tooltip=" AlwaysOnTop off "/>
+                <label="\e[38:2:0:255:0mOnTop\e[m" data="on"  tooltip=" AlwaysOnTop on "/>
             </item>
 
             <item action=TerminalSendKey tooltip=" Simulate keypresses ">
@@ -342,6 +342,8 @@ Hotkey                       | Description
     </terminal>
     <events>  <!-- The required key combination sequence can be generated on the Info page, accessible by clicking on the label in the lower right corner of the vtm desktop. The 'key*' statement here is to clear all previous bindings and start a new list. -->
         <terminal key*>  <!-- Terminal key bindings. -->
+            <key="Esc"                   script="vtm.gear.SetHandled()"/> <!-- Do nothing. We use the Esc key as a modifier. Its press+release events will only be sent after the key is physically released, and only if no other keys were pressed along with Esc. -->
+            <key="-Esc"                  script="vtm.terminal.ClearSelection(); vtm.terminal.KeyEvent({ virtcod=0x1b, scancod=1, keystat=1, cluster='\\u{1b}' }, { virtcod=0x1b, scancod=1, keystat=0 })"/> <!-- Clear selection if it is and send Esc press and release events. -->
             <key="Alt+Shift+B" preview   script=ExclusiveKeyboardMode/>
             <key="Alt+RightArrow"        script=TerminalFindNext/>
             <key="Alt+LeftArrow"         script=TerminalFindPrev/>
@@ -363,7 +365,6 @@ Hotkey                       | Description
             <key=""                      script=TerminalClipboardWipe/>
             <key=""                      script=TerminalClipboardFormat/>
             <key=""                      script=TerminalSelectionRect/>
-            <key="Esc" preview           script=TerminalSelectionCancel/>
             <key=""                      script=TerminalSelectionOneShot/>
             <key=""                      script=TerminalUndo/>
             <key=""                      script=TerminalRedo/>
