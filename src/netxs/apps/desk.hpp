@@ -12,7 +12,6 @@ namespace netxs::app::desk
     struct spec
     {
         text   menuid{};
-        text    alias{};
         bool   hidden{}; // Hide existing item on taskbar.
         bool    fixed{}; // Item can't be updated by the new instance (see desk::events::exec).
         text    label{};
@@ -157,7 +156,11 @@ namespace netxs::app::desk
                     };
                 });
             auto app_label = item_area->attach(slot::_1, ui::item::ctor(ansi::add(utf8).mgl(0).wrp(wrap::off).jet(bias::left)))
+                ->active()
                 ->setpad({ tall + 1, 0, tall, tall })
+                ->template plugin<pro::notes>(" Running application          \n"
+                                              "   LeftClick to activate      \n"
+                                              "   DoubleLeftClick to fly to  ")
                 ->flexible()
                 ->drawdots()
                 ->shader(cF, e2::form::state::focus::count, data_src);
@@ -393,7 +396,7 @@ namespace netxs::app::desk
             return apps;
         };
 
-        auto build = [](eccc usrcfg, xmls& config)
+        auto build = [](eccc usrcfg, settings& config)
         {
             auto tall = si32{ skin::globals().menuwide };
             auto inactive_color  = skin::globals().inactive;
@@ -401,17 +404,17 @@ namespace netxs::app::desk
             auto cA = inactive_color;
             auto c1 = danger_color;
 
-            auto menu_bg_color = config.take("/config/desktop/taskbar/colors/bground", cell{}.fgc(whitedk).bgc(0x60202020));
-            auto menu_min_conf = config.take("/config/desktop/taskbar/width/folded",   si32{ 5  });
-            auto menu_max_conf = config.take("/config/desktop/taskbar/width/expanded", si32{ 32 });
+            auto menu_bg_color = config.settings::take("/config/desktop/taskbar/colors/bground", cell{}.fgc(whitedk).bgc(0x60202020));
+            auto menu_min_conf = config.settings::take("/config/desktop/taskbar/width/folded",   si32{ 5  });
+            auto menu_max_conf = config.settings::take("/config/desktop/taskbar/width/expanded", si32{ 32 });
             auto bttn_min_size = twod{ 31, 1 + tall * 2 };
             auto bttn_max_size = twod{ -1, 1 + tall * 2 };
 
             auto window = ui::fork::ctor(axis::Y, 0, 0, 1);
-            auto panel_top = config.take("/config/desktop/panel/height", 1);
-            auto panel_env = config.take("/config/desktop/panel/env", ""s);
-            auto panel_cwd = config.take("/config/desktop/panel/cwd", ""s);
-            auto panel_cmd = config.take("/config/desktop/panel/cmd", ""s);
+            auto panel_top = config.settings::take("/config/desktop/panel/height", 1);
+            auto panel_env = config.settings::take("/config/desktop/panel/env", ""s);
+            auto panel_cwd = config.settings::take("/config/desktop/panel/cwd", ""s);
+            auto panel_cmd = config.settings::take("/config/desktop/panel/cmd", ""s);
             auto panel = window->attach(slot::_1, ui::cake::ctor());
             if (panel_cmd.size())
             {

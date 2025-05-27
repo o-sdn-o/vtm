@@ -144,7 +144,7 @@ namespace netxs::ui
             {
                 auto cmd = eccc{ .cmd = lock.thing.utf8 };
                 notify(e2::command::run, cmd);
-                auto msg = utf::concat(prompt::repl, ansi::clr(yellowlt, utf::trim(cmd.cmd, "\r\n")));
+                auto msg = utf::concat(prompt::repl, ansi::clr(yellowlt, utf::get_trimmed(cmd.cmd, "\r\n")));
                 s11n::logs.send(canal, ui32{}, datetime::now(), msg);
             }
             void handle(s11n::xs::syswinsz    lock)
@@ -404,25 +404,25 @@ namespace netxs::ui
             svga vtmode; // conf: .
             si32 clip_prtscrn_mime; // conf: Print-screen copy encoding format.
 
-            void read(xmls& config)
+            void read(settings& config)
             {
-                clip_preview_clrs = config.take("/config/clipboard/preview/color"  , cell{}.bgc(bluedk).fgc(whitelt));
-                clip_preview_time = config.take("/config/clipboard/preview/timeout", span{ 3s });
-                clip_preview_alfa = config.take("/config/clipboard/preview/alpha"  , byte{ 0xFF });
-                clip_preview_glow = config.take("/config/clipboard/preview/shadow" , 3);
-                clip_preview_show = config.take("/config/clipboard/preview/enabled", true);
-                clip_preview_size = config.take("/config/clipboard/preview/size"   , twod{ 80,25 });
-                clip_prtscrn_mime = config.take("/config/clipboard/format"         , mime::htmltext, xml::options::format);
-                dblclick_timeout  = config.take("/config/timings/dblclick"         , span{ 500ms });
-                tooltip_colors    = config.take("/config/tooltips/color"           , cell{}.bgc(0xFFffffff).fgc(0xFF000000));
-                tooltip_timeout   = config.take("/config/tooltips/timeout"         , span{ 2000ms });
-                tooltip_enabled   = config.take("/config/tooltips/enabled"         , true);
-                debug_overlay     = config.take("/config/debug/overlay"            , faux);
-                show_regions      = config.take("/config/debug/regions"            , faux);
+                clip_preview_clrs = config.settings::take("/config/clipboard/preview/color"  , cell{}.bgc(bluedk).fgc(whitelt));
+                clip_preview_time = config.settings::take("/config/clipboard/preview/timeout", span{ 3s });
+                clip_preview_alfa = config.settings::take("/config/clipboard/preview/alpha"  , byte{ 0xFF });
+                clip_preview_glow = config.settings::take("/config/clipboard/preview/shadow" , 3);
+                clip_preview_show = config.settings::take("/config/clipboard/preview/enabled", true);
+                clip_preview_size = config.settings::take("/config/clipboard/preview/size"   , twod{ 80,25 });
+                clip_prtscrn_mime = config.settings::take("/config/clipboard/format"         , mime::htmltext, xml::options::format);
+                dblclick_timeout  = config.settings::take("/config/timings/dblclick"         , span{ 500ms });
+                tooltip_colors    = config.settings::take("/config/tooltips/color"           , cell{}.bgc(0xFFffffff).fgc(0xFF000000));
+                tooltip_timeout   = config.settings::take("/config/tooltips/timeout"         , span{ 2000ms });
+                tooltip_enabled   = config.settings::take("/config/tooltips/enabled"         , true);
+                debug_overlay     = config.settings::take("/config/debug/overlay"            , faux);
+                show_regions      = config.settings::take("/config/debug/regions"            , faux);
                 clip_preview_glow = std::clamp(clip_preview_glow, 0, 5);
             }
 
-            props_t(pipe& /*canal*/, view userid, si32 mode, bool isvtm, si32 session_id, xmls& config)
+            props_t(pipe& /*canal*/, view userid, si32 mode, bool isvtm, si32 session_id, settings& config)
             {
                 read(config);
                 legacy_mode = mode;
@@ -431,8 +431,8 @@ namespace netxs::ui
                     this->session_id  = session_id;
                     os_user_id        = utf::concat("[", userid, ":", session_id, "]");
                     title             = os_user_id;
-                    background_color  = config.take("/config/desktop/background/color", cell{}.fgc(whitedk).bgc(0xFF000000));
-                    auto utf8_tile    = config.take("/config/desktop/background/tile", ""s);
+                    background_color  = config.settings::take("/config/desktop/background/color", cell{}.fgc(whitedk).bgc(0xFF000000));
+                    auto utf8_tile    = config.settings::take("/config/desktop/background/tile", ""s);
                     if (utf8_tile.size())
                     {
                         auto block = page{ utf8_tile };
@@ -606,13 +606,18 @@ namespace netxs::ui
             {
                 auto& gear = *gear_ptr;
                 if (gear.mouse_disabled) continue;
-                if (auto tooltip_page_sptr = gear.tooltip.get_render())
+                auto [tooltip_page_sptr, tooltip_offset] = gear.tooltip.get_render_sptr_and_offset();
+                if (tooltip_page_sptr)
                 {
                     auto& tooltip_page = *tooltip_page_sptr;
-                    auto full_area = full;
-                    full_area.coor = std::max(dot_00, twod{ gear.coord } - twod{ 4, tooltip_page.size() + 1 });
-                    full_area.size.x = dot_mx.x; // Prevent line wrapping.
-                    canvas.full(full_area);
+                    auto fs_area = full;
+                    auto page_area = full;
+                    page_area.coor = tooltip_offset + twod{ gear.coord };
+                    page_area.size = tooltip_page.limits();
+                    fs_area.size = std::max(dot_00, fs_area.size - page_area.size);
+                    page_area.coor = fs_area.clamp(page_area.coor);
+                    page_area.size.x = dot_mx.x; // Prevent line wrapping.
+                    canvas.full(page_area);
                     canvas.cup(dot_00);
                     canvas.output(tooltip_page, cell::shaders::color(props.tooltip_colors));
                 }
@@ -627,9 +632,10 @@ namespace netxs::ui
             {
                 auto& gear = *gear_ptr;
                 if (gear.mouse_disabled) continue;
-                if (auto v = gear.tooltip.get())
+                if (auto v = gear.tooltip.get_fresh_qiew())
                 {
-                    list.thing.push(ext_gear_id, v.value());
+                    auto tooltip_qiew = v.value();
+                    list.thing.push(ext_gear_id, tooltip_qiew, props.tooltip_colors.fgc(), props.tooltip_colors.bgc());
                 }
             }
             list.thing.sendby<true>(canal);
@@ -744,7 +750,7 @@ namespace netxs::ui
         }
 
         //todo revise
-        gate(xipc uplink, si32 vtmode, xmls& config, view userid = {}, si32 session_id = 0, bool isvtm = faux)
+        gate(xipc uplink, si32 vtmode, settings& config, view userid = {}, si32 session_id = 0, bool isvtm = faux)
             : canal{ *uplink },
               props{ canal, userid, vtmode, isvtm, session_id, config },
               paint{ canal, props.vtmode },
@@ -759,8 +765,10 @@ namespace netxs::ui
             base::plugin<pro::focus>();
             base::plugin<pro::keybd>();
             auto& luafx = bell::indexer.luafx;
-            auto script_list = config.list("/config/events/gate/script");
+            auto gate_context = config.settings::push_context("/config/events/gate/");
+            auto script_list = config.settings::take_ptr_list_for_name("script");
             auto bindings = input::bindings::load(config, script_list);
+            //config.settings::pop_context();
             input::bindings::keybind(*this, bindings);
             base::add_methods(basename::gate,
             {
