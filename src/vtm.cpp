@@ -215,7 +215,7 @@ int main(int argc, char* argv[])
 
     rungui = rungui && (whoami == type::runapp
                      || whoami == type::client);
-    os::dtvt::initialize(rungui);
+    os::dtvt::initialize(rungui, true);
 
     if (os::dtvt::vtmode & ui::console::redirio && (whoami == type::runapp || whoami == type::client))
     {
@@ -224,7 +224,7 @@ int main(int argc, char* argv[])
     auto denied = faux;
     auto syslog = os::tty::logger();
     auto userid = os::env::user();
-    auto prefix = vtpipe.length() ? vtpipe : utf::concat(os::path::ipc_prefix, os::process::elevated ? "!-" : "-", userid.second);;
+    auto prefix = vtpipe.length() ? vtpipe : utf::concat(os::path::ipc_prefix, os::process::elevated ? "!-" : "-", userid.second);
     auto prefix_log = prefix + os::path::log_suffix;
     auto failed = [&](auto cause)
     {

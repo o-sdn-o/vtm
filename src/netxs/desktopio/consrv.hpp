@@ -1168,6 +1168,15 @@ struct impl : consrv
 
             do
             {
+                if (worker.queue.size() > 1) // Do not interfere with other event waiters.
+                {
+                    cooked.ustr.clear();
+                    //if (cooked.ustr.empty())
+                    //{
+                    //    cooked.ustr.push_back('\0');
+                    //}
+                    break;
+                }
                 auto coor = line.caret;
                 auto last = line.length();
                 auto pops = 0_sz;
@@ -1497,7 +1506,18 @@ struct impl : consrv
                         }
                     }
                 }
-                stream.clear(); // Don't try to catch the next events (we are too fast for IME input; ~1ms between events from IME).
+                if (worker.queue.size() == 1) // Clear the queue if we are the one requester.
+                {
+                    stream.clear(); // Don't try to catch the next events (we are too fast for IME input; ~1ms between events from IME).
+                }
+                else // Do not interfere with other event waiters.
+                {
+                    if (cooked.ustr.empty())
+                    {
+                        cooked.ustr.push_back('\0');
+                    }
+                    break;
+                }
             }
             while (cooked.ustr.empty() && ((void)signal.wait(lock, [&]{ return stream.size() || closed || cancel; }), !closed && !cancel));
 

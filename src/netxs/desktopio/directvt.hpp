@@ -136,7 +136,7 @@ namespace netxs::directvt
                             || std::is_same_v<D, dent>
                             || std::is_same_v<D, rect>)
             {
-                auto le_data = netxs::letoh(data);
+                auto le_data = letoh(data);
                 block += view{ (char*)&le_data, sizeof(le_data) };
             }
             else if constexpr (std::is_same_v<D, argb>)
@@ -291,7 +291,6 @@ namespace netxs::directvt
                 }
                 else if constexpr (std::is_same_v<D, time>)
                 {
-                    using span = decltype(time{}.time_since_epoch());
                     using data_type = decltype(span{}.count());
                     if (data.size() < sizeof(data_type))
                     {
@@ -301,6 +300,23 @@ namespace netxs::directvt
                     }
                     auto temp = netxs::aligned<data_type>(data.data());
                     auto crop = time{ span{ temp }};
+                    if constexpr (!PeekOnly)
+                    {
+                        data.remove_prefix(sizeof(data_type));
+                    }
+                    return crop;
+                }
+                else if constexpr (std::is_same_v<D, span>)
+                {
+                    using data_type = decltype(span{}.count());
+                    if (data.size() < sizeof(data_type))
+                    {
+                        log(prompt::dtvt, "Corrupted datetime duration data");
+                        if constexpr (!PeekOnly) data.remove_prefix(data.size());
+                        return D{};
+                    }
+                    auto temp = netxs::aligned<data_type>(data.data());
+                    auto crop = span{ temp };
                     if constexpr (!PeekOnly)
                     {
                         data.remove_prefix(sizeof(data_type));
@@ -615,8 +631,8 @@ namespace netxs::directvt
             using cond = std::condition_variable_any;
             using Lock = std::unique_lock<utex>;
 
-            utex mutex; // wrapper: Accesss mutex.
-            cond synch; // wrapper: Accesss notificator.
+            utex mutex; // wrapper: Access mutex.
+            cond synch; // wrapper: Access notificator.
             Base thing; // wrapper: Protected object.
             flag alive{ true }; // wrapper: Connection status.
 
@@ -1247,10 +1263,16 @@ namespace netxs::directvt
                     {
                         auto c = cache;
                         c.draw_cursor();
+                        auto& fgc = c.inv() ? c.bgc() : c.fgc();
+                        if (fgc == 0xFF'000000 && cluster == " ")
+                        {
+                            auto [cursor_bgc, cursor_fgc] = c.cursor_color();
+                            fgc = cursor_bgc;
+                        }
                         c.scan_attr<Mode>(state, stream::block);
                     }
                     else cache.scan_attr<Mode>(state, stream::block);
-                    stream::block += cluster;
+                    utf::filter_non_control(cluster, stream::block); //stream::block += cluster;
                 };
                 auto print_rtl = [&](cell const& cache, view cluster)
                 {
@@ -1258,6 +1280,12 @@ namespace netxs::directvt
                     {
                         auto c = cache;
                         c.draw_cursor();
+                        auto& fgc = c.inv() ? c.bgc() : c.fgc();
+                        if (fgc == 0xFF'000000 && cluster == " ")
+                        {
+                            auto [cursor_bgc, cursor_fgc] = c.cursor_color();
+                            fgc = cursor_bgc;
+                        }
                         c.scan_attr<Mode>(state, stream::block);
                     }
                     else cache.scan_attr<Mode>(state, stream::block);
@@ -1678,7 +1706,7 @@ namespace netxs::directvt
                                 {
                                     auto utf8 = c.txt<svga::vt_2D>(); // svga::vt_2D: To include STX if it is.
                                     auto [w, h, x, y] = c.whxy();
-                                    if (x == 0 || y == 0) // Stripes are unexpected here.
+                                    if (x == 0 || y == 0 || utf8.empty()) // Skip stripes and nulls.
                                     {
                                         print(c, " "sv);
                                         coord.x++;

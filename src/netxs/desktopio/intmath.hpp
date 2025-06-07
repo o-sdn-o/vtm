@@ -166,7 +166,7 @@ namespace netxs
         return value.type() == typeid(T) ? std::any_cast<T>(value)
                                          : fallback;
     }
-    template<ui32 FieldMask>
+    template<ui64 FieldMask>
     static constexpr si32 field_offset()
     {
         auto mask = FieldMask;
@@ -204,34 +204,9 @@ namespace netxs
     template<class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     constexpr auto swap_bytes(T i)
     {
-        T r;
-        auto src = (byte*)&i;
-        auto dst = (byte*)&r;
-        if constexpr (sizeof(T) == 2)
-        {
-            dst[0] = src[1];
-            dst[1] = src[0];
-        }
-        else if constexpr (sizeof(T) == 4)
-        {
-            dst[0] = src[3];
-            dst[1] = src[2];
-            dst[2] = src[1];
-            dst[3] = src[0];
-        }
-        else if constexpr (sizeof(T) == 8)
-        {
-            dst[0] = src[7];
-            dst[1] = src[6];
-            dst[2] = src[5];
-            dst[3] = src[4];
-            dst[4] = src[3];
-            dst[5] = src[2];
-            dst[6] = src[1];
-            dst[7] = src[0];
-        }
-        else assert(faux);
-        return r;
+        auto r = std::bit_cast<std::array<byte, sizeof(T)>>(i);
+        std::ranges::reverse(r);
+        return std::bit_cast<T>(r);
     }
     static constexpr auto endian_BE = std::endian::native == std::endian::big;
     static constexpr auto endian_LE = std::endian::native == std::endian::little;
@@ -1273,7 +1248,7 @@ namespace netxs
         if (w <= r1) // All pixels on a line have the same average value.
         {
             auto s_end = s_ptr + s_hop;
-            auto d_end = d_ptr + d_hop;;
+            auto d_end = d_ptr + d_hop;
             while (true)
             {
                 auto accum = Accum_t{};

@@ -1036,7 +1036,7 @@ namespace netxs::gui
                     else if (codepoint.cdpoint == utf::vs08_code) img_alignment.y = snap::center;
                     else if (codepoint.cdpoint == utf::vs09_code) img_alignment.y = snap::tail;
                 }
-                else
+                else if (utf::non_control(codepoint.cdpoint))
                 {
                     codepoints.push_back(codepoint);
                 }
@@ -1263,7 +1263,7 @@ namespace netxs::gui
                     else if (src == 255) dst = fgc;
                     else
                     {
-                        auto f_dst = irgb{ dst }.sRGB2Linear();;
+                        auto f_dst = irgb{ dst }.sRGB2Linear();
                         dst = f_dst.blend_nonpma(f_fgc, src).linear2sRGB();
                     }
                 };
@@ -1287,7 +1287,7 @@ namespace netxs::gui
             }
             else
             {
-                if (c.blk())
+                if (c.blk() && !c.hid())
                 {
                     target_ptr = &blink_canvas;
                     blink_canvas.clip(placeholder);
@@ -1296,6 +1296,7 @@ namespace netxs::gui
                 }
                 else netxs::onrect(canvas, placeholder, cell::shaders::full(bgc));
             }
+            if (c.hid()) return;
             auto& target = *target_ptr;
             if (auto u = c.und())
             {
@@ -2516,10 +2517,14 @@ namespace netxs::gui
         void draw_grid(layer& s, auto& facedata, bool apply_contour = true) //todo just output ui::core
         {
             auto canvas = layer_get_bits(s, true);
-            fill_grid(canvas, facedata, shadow_dent.corner());
             if (apply_contour)
             {
+                fill_grid(canvas, facedata, shadow_dent.corner());
                 netxs::misc::contour(canvas); // 1ms
+            }
+            else
+            {
+                fill_grid(canvas, facedata, dot_00);
             }
             s.strike<true>(canvas.area());
         }
