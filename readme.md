@@ -37,4 +37,4 @@ It can wrap any console application and be nested indefinitely, forming a text-b
 - [Command-line options](doc/command-line-options.md)
 - [User interface](doc/user-interface.md)
 - [Settings](doc/settings.md)
-- [VT2D: Unicode character Geometry Modifiers](doc/character_geometry.md)
+- [VT2D](doc/character_geometry.md)
