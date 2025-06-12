@@ -22,7 +22,7 @@ namespace netxs::app
 
 namespace netxs::app::shared
 {
-    static const auto version = "v2025.06.08";
+    static const auto version = "v2025.06.12a";
     static const auto repository = "https://github.com/directvt/vtm";
     static const auto usr_config = "~/.config/vtm/settings.xml"s;
     static const auto sys_config = "/etc/vtm/settings.xml"s;
@@ -441,7 +441,28 @@ namespace netxs::app::shared
             }
             auto scrlarea = menufork->attach(menuslot, ui::cake::ctor());
             auto scrlrail = scrlarea->attach(ui::rail::ctor(axes::X_only, axes::all));
-            auto scrllist = scrlrail->attach(ui::list::ctor(axis::X));
+            auto scrllist = scrlrail->attach(ui::list::ctor(axis::X))
+                ->invoke([&](auto& boss)
+                {
+                    boss.LISTEN(tier::release, e2::postrender, parent_canvas) // Draw a shadow to split button groups.
+                    {
+                        auto clip = parent_canvas.clip();
+                        auto full = parent_canvas.full();
+                        if (clip.coor.x + clip.size.x < full.coor.x + full.size.x)
+                        {
+                            auto vert_line = clip;
+                            vert_line.coor.x += vert_line.size.x - 1;
+                            vert_line.size.x = 1;
+                            parent_canvas.fill(vert_line, cell::shaders::shadow(ui::pro::ghost::x3y1_x3y2_x3y3));
+                        }
+                        if (clip.coor.x > full.coor.x)
+                        {
+                            auto vert_line = clip;
+                            vert_line.size.x = 1;
+                            parent_canvas.fill(vert_line, cell::shaders::shadow(ui::pro::ghost::x1y1_x1y2_x1y3));
+                        }
+                    };
+                });
 
             auto scrlcake = ui::cake::ctor();
             auto scrlhint = scrlcake->attach(underlined_hz_scrollbar(scrlrail));
@@ -823,6 +844,7 @@ namespace netxs::app::shared
 
     auto get_gui_config(settings& config)
     {
+        os::dtvt::wheelrate = config.settings::take("/config/timings/wheelrate", 3);
         auto gui_config = gui_config_t{ .winstate = config.settings::take("/config/gui/winstate", winstate::normal, app::shared::win::options),
                                         .aliasing = config.settings::take("/config/gui/antialiasing", faux),
                                         .blinking = config.settings::take("/config/gui/blinkrate", span{ 400ms }),
@@ -844,6 +866,7 @@ namespace netxs::app::shared
     auto get_tui_config(settings& config, ui::skin& g)
     {
         using namespace std::chrono;
+        os::dtvt::wheelrate = config.settings::take("/config/timings/wheelrate", 3);
         g.window_clr     = config.settings::take("/config/colors/window"     , cell{ whitespace });
         g.winfocus       = config.settings::take("/config/colors/focus"      , cell{ whitespace });
         g.brighter       = config.settings::take("/config/colors/brighter"   , cell{ whitespace });
@@ -873,11 +896,6 @@ namespace netxs::app::shared
         g.max_value      = config.settings::take("/config/desktop/windowmax"        , twod{ 3000, 2000  });
         g.macstyle       = config.settings::take("/config/desktop/macstyle"         , faux);
         g.menuwide       = config.settings::take("/config/desktop/taskbar/wide"     , faux);
-        g.shadow_enabled = config.settings::take("/config/desktop/shadow/enabled", true);
-        g.shadow_bias    = config.settings::take("/config/desktop/shadow/bias"   , 0.37f);
-        g.shadow_blur    = config.settings::take("/config/desktop/shadow/blur"   , 3);
-        g.shadow_opacity = config.settings::take("/config/desktop/shadow/opacity", 105.5f);
-        g.shadow_offset  = config.settings::take("/config/desktop/shadow/offset" , dot_21);
         if (g.maxfps <= 0) g.maxfps = 60;
     }
     void splice(xipc client, gui_config_t& gc)

@@ -781,10 +781,10 @@ Notes
         <format="html"/>  <!-- Default clipboard format for screenshots: "text" | "ansi" | "rich" | "html" | "protected" . -->
     </clipboard>
     <colors>  <!-- Along with fgc, bgc and txt, other SGR attributes (boolean) are allowed here: itc: italic, bld: bold, und: underline, inv: reverse, ovr: overline, blk: blink. -->
-        <window   fgc=whitelt   bgc=#40404080         />  <!-- Base desktop window color. -->
+        <window   fgc=whitelt   bgc= #40404080        />  <!-- Base desktop window color. -->
         <focus    fgc=purewhite bgc=bluelt            />  <!-- Focused item tinting. -->
         <brighter fgc=purewhite bgc=purewhite alpha=60/>  <!-- Brighter. -->
-        <shadower               bgc=#202020B4         />  <!-- Dimmer. -->
+        <shadower               bgc= #202020B4        />  <!-- Dimmer. -->
         <warning  fgc=whitelt   bgc=yellowdk          />  <!-- "Warning" color. -->
         <danger   fgc=whitelt   bgc=purered           />  <!-- "Danger" color. -->
         <action   fgc=whitelt   bgc=greenlt           />  <!-- "Action" color. -->
@@ -806,6 +806,7 @@ Notes
         <repeat_delay  = 500ms/>  <!-- Repeat delay. -->
         <repeat_rate   = 30ms />  <!-- Repeat rate. -->
         <dblclick      = 500ms/>  <!-- Mouse double click threshold. -->
+        <wheelrate     = 3    />  <!-- Lines per mouse wheel step (for Unix-like platforms). -->
     </timings>
     <desktop>  <!-- Desktop client settings. -->
         <viewport coor=0,0/>  <!-- Viewport position for the first connected user. At runtime, this value is temporarily replaced with the next disconnecting user's viewport coordinates to restore the viewport position on reconnection. -->
@@ -825,17 +826,6 @@ Notes
                     "   LeftClick to launch instance \n"
                     "   RightClick to set as default "
                 </tooltip>
-                <config>  <!-- The following config partially overrides the base configuration. It is valid for DirectVT apps only. -->
-                    <terminal>
-                        <scrollback>
-                            <size=100000/>  <!-- Scrollback buffer length. -->
-                            <wrap=true/>    <!-- Lines wrapping mode. -->
-                        </scrollback>
-                        <selection>
-                            <mode=/Terminal/selection/mode/>  <!-- Clipboard copy format: "text" | "ansi" | "rich" | "html" | "protected" | "none" . -->
-                        </selection>
-                    </terminal>
-                </config>
             </item>
             <item id="Tile" label="Window Manager"  type="tile" title="Window Manager" cmd="h1:1(Term, Term)"      tooltip=" \e[1mTiling Window Manager\e[m           \n   LeftClick to launch instance  \n   RightClick to set as default  "/>
             <item id="Site" label="Viewport Marker" type="site" title="Site "          cmd="@" winform="maximized" tooltip=" \e[1mDesktop Viewport Marker\e[m         \n   LeftClick to launch instance  \n   RightClick to set as default  "/>  <!-- cmd="@" is a directive for numbering instances. -->
@@ -872,7 +862,7 @@ Notes
             </width>
             <timeout=250ms/>  <!-- Taskbar collaplse timeout after mouse leave. -->
             <colors>
-                <bground  fgc=whitedk bgc=#202020C0  />  <!-- Set the bgc color non-transparent (alpha to FF) to disable acrylics in taskbar. -->
+                <bground  fgc=whitedk bgc= #202020C0 />  <!-- Set the bgc color non-transparent (alpha to FF) to disable acrylics in taskbar. -->
                 <focused  fgc=puregreen              />  <!-- Focused taskbar item color. -->
                 <selected fgc=whitelt                />  <!-- Default taskbar item color. -->
                 <active   fgc=whitelt                />  <!-- Running taskbar item color. -->
@@ -886,15 +876,9 @@ Notes
             <height=1/>  <!-- Desktop space reserved on top. -->
         </panel>
         <background>  <!-- Desktop background. -->
-            <color fgc=whitedk bgc=0x80000000/>  <!-- Desktop background color. -->
-            <tile=""/>                           <!-- Truecolor ANSI-art with gradients can be used here. -->
+            <color fgc=whitedk bgc= #00007f80/>  <!-- Desktop background color. -->
+            <tile=""/>                           <!-- Truecolor ANSI-art can be used here. -->
         </background>
-        <shadow enabled=0>  <!-- Desktop window shadows (TUI mode). -->
-            <blur=3/>         <!-- Blur radius (in cells). Default is "3". -->
-            <bias=0.37/>      <!-- Shadow contour bias [0.0 - 1.0]. Default is "0.37". -->
-            <opacity=105.5/>  <!-- Opacity level (alpha) [0.0 - 255.0]. Default is "105.5". -->
-            <offset=2,1/>     <!-- 2D offset relative to the window (in cells). Default is "2,1". -->
-        </shadow>
     </desktop>
     <terminal>  <!-- Base settings for the built-in terminal. It can be partially overridden by the menu item's config subarg. -->
         <sendinput=""/>  <!-- Send input on startup. E.g. sendinput="echo \"test\"\n" -->
@@ -928,7 +912,7 @@ Notes
             <color15 = whitelt    />
             <default fgc=whitedk bgc=pureblack/>  <!-- Default/current colors (SGR49/39). -->
             <bground = DefaultColor/>  <!-- Independent background color of the scrollback canvas. Set to 0x00ffffff(or =DefaultColor) to sync with SGR49 (default background). -->
-            <match fx="color" fgc=whitelt bgc=#007F00/>  <!-- Color of the selected text occurrences. Set an fx to use cell::shaders: "xlight" | "color" | "invert" | "reverse". -->
+            <match fx="color" fgc=whitelt bgc= #007F00/>  <!-- Color of the selected text occurrences. Set an fx to use cell::shaders: "xlight" | "color" | "invert" | "reverse". -->
             <selection>
                 <text      fx="color"  fgc=whitelt bgc=bluelt/>  <!-- Highlighting of the selected text in plaintext mode. -->
                 <protected fx="color"  fgc=whitelt bgc=bluelt/>  <!-- Note: The bgc and fgc attributes only apply to the fx=color shader. -->
@@ -1135,7 +1119,7 @@ Notes
                 <on="release: e2::form::prop::zorder" source="applet"/>
                 local is_topmost=vtm()                   -- Use event arguments to get the current state.
                 -- local is_topmost=vtm.applet.ZOrder()  -- or ask the object iteslf for the current state.
-                vtm.item.Label(is_topmost==1 and "\\x1b[38:2:0:255:0m▀ \\x1b[m" or "  ")
+                vtm.item.Label(is_topmost==1 and "\e[2:247;38:2:0:255:0m▀\e[2:239m \e[m" or "  ")
                 vtm.item.Tooltip(is_topmost==1 and " AlwaysOnTop on " or " AlwaysOnTop off ")
                 vtm.item.Deface()
             </script>
@@ -1154,7 +1138,7 @@ Notes
                 "   Match clipboard data if no selection  "
             </tooltip>
         </FindNext>
-        <ExclusiveKeyboard label="   Desktop   " script=OnLeftClick|ExclusiveKeyboardMode>
+        <ExclusiveKeyboard label="  Exclusive  " script=OnLeftClick|ExclusiveKeyboardMode>
             <tooltip>
                 " \e[1mToggle exclusive keyboard mode\e[m              \n"
                 "   Exclusive keyboard mode allows keystrokes \n"
@@ -1164,21 +1148,22 @@ Notes
                 <on="release: terminal::events::rawkbd" source="terminal"/>
                 local m=vtm()                                    -- Use event arguments to get the current state.
                 -- local m=vtm.terminal.ExclusiveKeyboardMode()  -- or ask the terminal instance iteslf for the current state.
-                vtm.item.Label(m==1 and "\e[48:2:0:128:128;38:2:0:255:0m  Exclusive  \e[m" or "   Desktop   ")
+                vtm.item.Label(m==1 and "\e[2:247m \e[2:231;38:2:0:255:0m Exclusive \e[2:239m \e[m" or "  Exclusive  ")
                 vtm.item.Tooltip(m==1 and " ExclusiveKeyboardMode on " or " ExclusiveKeyboardMode off ")
                 vtm.item.Deface()
             </script>
         </ExclusiveKeyboard>
-        <WrapMode label="  Wrap  " script=OnLeftClick|TerminalWrapMode>
+        <WrapMode label=" NoWrap " script=OnLeftClick|TerminalWrapMode>
             <tooltip>
-                " Wrapping text lines on/off      \n"
-                "   Applied to selection if it is "
+                " \e[1mText line wrapping mode\e[m  \n"
+                " Text wrapping on         "
             </tooltip>
             <script>
                 <on="release: terminal::events::layout::wrapln" source="terminal"/>
                 local m=vtm()                           -- Use event arguments to get the current state.
                 -- local m=vtm.terminal.LineWrapMode()  -- or ask the terminal instance iteslf for the current state.
-                vtm.item.Label(m==1 and "\e[38:2:0:255:0m  Wrap  \e[m" or "  Wrap  ")
+                vtm.item.Label(m~=1 and "\e[2:247m \e[2:231;38:2:0:255:0mNoWrap\e[2:239m \e[m" or " NoWrap ")
+                vtm.item.Tooltip(m~=1 and " \e[1mText line wrapping mode\e[m  \\n Text wrapping off        " or " \e[1mText line wrapping mode\e[m  \\n Text wrapping on         ")
                 vtm.item.Deface()
             </script>
         </WrapMode>
@@ -1209,7 +1194,7 @@ Notes
                 <on="release: terminal::events::io_log" source="terminal"/>
                 local m=vtm()                      -- Use event arguments to get the current state.
                 -- local m=vtm.terminal.LogMode()  -- or ask the terminal instance iteslf for the current state.
-                vtm.item.Label(m==1 and "\e[38:2:0:255:0m  Log  \e[m" or "  Log  ")
+                vtm.item.Label(m==1 and "\e[2:247m \e[2:231;38:2:0:255:0m Log \e[2:239m \e[m" or "  Log  ")
                 vtm.item.Deface()
             </script>
         </StdioLog>
