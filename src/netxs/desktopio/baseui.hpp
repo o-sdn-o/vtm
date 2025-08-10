@@ -5,7 +5,6 @@
 
 #include "richtext.hpp"
 #include "events.hpp"
-#include "xml.hpp"
 
 namespace netxs
 {
@@ -532,6 +531,91 @@ namespace netxs::ui
     //todo reimplement
     struct skin
     {
+        text NsTextbasedDesktopEnvironment;
+
+        text NsInfo_label;
+        text NsInfo_tooltip;
+        text NsInfo_title;
+        text NsInfoKeybdTest;
+        text NsInfoKeybdMode;
+        text NsInfoKeybdToggle_on;
+        text NsInfoKeybdToggle_off;
+        text NsInfo_pressed;
+        text NsInfo_released;
+        text NsInfo_pressanykeys;
+        text NsInfoGeneric;
+        text NsInfoLiteral;
+        text NsInfoSpecific;
+        text NsInfoScancodes;
+        text NsInfo_copied;
+        text NsInfoStatus;
+        text NsInfoSystem;
+        text NsInfoYes;
+        text NsInfoNo;
+        text NsInfoUptime_d;
+        text NsInfoUptime_h;
+        text NsInfoUptime_m;
+        text NsInfoUptime_s;
+
+        text NsInfoSF;
+        text NsInfoSubcellSize;
+        text NsInfoLatin;
+        text NsInfoCJK;
+        text NsInfoThai;
+        text NsInfoGeorgian;
+        text NsInfoDevanagari;
+        text NsInfoArabic;
+        text NsInfoHebrew;
+        text NsInfoEmoji;
+        text NsInfoBoxDrawing;
+        text NsInfoLargeTypePieces;
+        text NsInfoStyledUnderline;
+        text NsInfoSingleOverline;
+        text NsInfoDoubleUnderline;
+        text NsInfoSingleUnderline;
+        text NsInfoDashedUnderline;
+        text NsInfoDottedUnderline;
+        text NsInfoWavyUnderline;
+        text NsInfoWhiteSingleUnderline;
+        text NsInfoWhiteWavyUnderline;
+        text NsInfoRedSingleUnderline;
+        text NsInfoRedWavyUnderline;
+        text NsInfoFontStyle;
+        text NsInfoNormal;
+        text NsInfoBlinking;
+        text NsInfoBold;
+        text NsInfoItalic;
+        text NsInfoCharacterWidth;
+        text NsInfoVariationSelectors;
+        text NsInfoLongestWord;
+        text NsInfoRotationFlipandMirror;
+        text NsInfoCharacterMatrix;
+        text NsInfoCharacterHalves;
+        text NsInfosRGBBlending;
+        text NsInfoPressCtrlCaps;
+
+        text NsTaskbar_tooltip;
+        text NsTaskbarGrips_tooltip;
+        text NsUserList_tooltip;
+        text NsAdmins_label;
+        text NsUsers_label;
+        text NsUser_tooltip;
+        text NsToggle_tooltip;
+        text NsDisconnect_label;
+        text NsShutdown_label;
+        text NsDisconnect_tooltip;
+        text NsShutdown_tooltip;
+
+        text NsTaskbarAppsClose_tooltip;
+        text NsTaskbarAppsApp_tooltip;
+        text NsTaskbarApps_deftooltip;
+        text NsTaskbarApps_toggletooltip;
+        text NsTaskbarApps_groupclosetooltip;
+
+        text NsMinimizeWindow_tooltip;
+        text NsMaximizeWindow_tooltip;
+        text NsCloseWindow_tooltip;
+
         poly winfocus;
         poly brighter;
         poly shadower;
@@ -773,7 +857,7 @@ namespace netxs::ui
             }
             return parent_ptr;
         }
-        // base: Fire an event for all nested objects (except those with base::master == true).
+        // base: Fire an event for the owner and then for all nested objects (except those with base::master == true).
         void broadcast(si32 Tier, hint event, auto&& param, bool forced = true)
         {
             auto lock = bell::sync();
@@ -806,7 +890,10 @@ namespace netxs::ui
                 auto root_ptr = gettop();
                 root_ptr->broadcast(Tier, event, param, faux);
             }
-            else bell::_signal(Tier, event, param);
+            else
+            {
+                bell::_signal(Tier, event, param);
+            }
         }
         // base: Fire an event.
         // Usage example:

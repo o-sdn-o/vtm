@@ -41,6 +41,9 @@
 #include <unordered_set>
 #include <utility> // std::cmp_equal
 #include <vector>
+#include <variant>
+#include <ranges>  // std::views::reverse
+#include <regex>
 
 #ifndef faux
     #define faux (false)
@@ -66,6 +69,7 @@ namespace netxs
     using many = std::vector<std::any>;
 
     constexpr size_t operator ""_sz (unsigned long long i) { return static_cast<size_t>(i); }
+    static constexpr auto pi = 3.14159265358979323846;
     static constexpr auto bytemin = std::numeric_limits<byte>::min();
     static constexpr auto bytemax = std::numeric_limits<byte>::max();
     static constexpr auto int8min = std::numeric_limits<int8>::min();
@@ -95,10 +99,10 @@ namespace netxs
         = faux;
         #endif
 
-    static auto _k0 = 0; // LCtrl+Wheel.
-    static auto _k1 = 0; // Alt+Wheel.
-    static auto _k2 = 0; // LCtrl+Alt+Wheel.
-    static auto _k3 = 0; // RCtrl+Wheel.
+    [[maybe_unused]] static auto _k0 = 0; // LCtrl+Wheel.
+    [[maybe_unused]] static auto _k1 = 0; // Alt+Wheel.
+    [[maybe_unused]] static auto _k2 = 0; // LCtrl+Alt+Wheel.
+    [[maybe_unused]] static auto _k3 = 0; // RCtrl+Wheel.
 
     struct noop
     {
@@ -281,6 +285,12 @@ namespace netxs
         { }
     };
 
+    // intmath: Converting from radians to degrees.
+    template<class T>
+    T rad2deg(T rad)
+    {
+        return rad * (180.0 / netxs::pi);
+    }
     // intmath: Summ and return TRUE in case of unsigned integer overflow and store result in accum.
     template<class T1, class T2>
     constexpr bool sum_overflow(T1& accum, T2 delta)

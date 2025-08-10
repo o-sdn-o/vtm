@@ -128,10 +128,30 @@ namespace netxs::events
     si32 luna::vtmlua_vtm_subindex(lua_State* lua)
     {
         // Stack:
-        //      1. object_ptr.
+        //      1. lua's object_ptr.
         //      2. fx name.
         ::lua_pushcclosure(lua, luna::vtmlua_call_method, 2);
         return 1;
+    }
+    si32 luna::vtmlua_cfg_subindex(lua_State* lua)
+    {
+        // Stack:
+        //      1. ptr to settings&.
+        //      2. settings path.
+        auto v = text{};
+        if (auto config_ptr = (settings*)::lua_touserdata(lua, 1))
+        {
+            auto len = size_t{};
+            auto ptr = ::lua_tolstring(lua, 2, &len);
+            auto frompath = qiew{ ptr, len };
+            if (auto item_ptr = config_ptr->find_context_ptr(frompath))
+            {
+                v = config_ptr->take_value(item_ptr);
+                ::lua_pushlstring(lua, v.data(), v.size());
+                return 1;
+            }
+        }
+        return 0;
     }
     si32 luna::vtmlua_run_with_indexer(lua_State* lua, auto proc)
     {
@@ -234,7 +254,14 @@ namespace netxs::events
         {
             auto object_name = luna::vtmlua_torawstring(lua, 2);
             auto& source_ctx = indexer.context_ref.get();
-            if (auto target_ptr = indexer.get_target(source_ctx, object_name))
+            if (object_name == "config")
+            {
+                log("object_name=", object_name);
+                ::lua_pushlightuserdata(lua, &indexer.config); // Push address of the config instance.
+                ::luaL_setmetatable(lua, "cfg_submetaindex"); // Set the cfg_submetaindex for table at -1.
+                return 1;
+            }
+            else if (auto target_ptr = indexer.get_target(source_ctx, object_name))
             {
                 //if constexpr (debugmode) log("       selected: ", netxs::events::script_ref::to_string(target_ptr->scripting_context));
                 ::lua_pushlightuserdata(lua, target_ptr); // Push object ptr.
@@ -434,6 +461,12 @@ namespace netxs::events
                                                                 { nullptr, nullptr }});
         ::luaL_newmetatable(lua, "vtm_submetaindex"); // Create a new metatable in registry and push it to the stack.
         ::luaL_setfuncs(lua, vtm_submetaindex.data(), 0); // Assign metamethods for the table which at the top of the stack.
+
+        // Define sub-vtm.config.* redirecting metatable.
+        static auto cfg_submetaindex = std::to_array<luaL_Reg>({{ "__index", luna::vtmlua_cfg_subindex },
+                                                                { nullptr, nullptr }});
+        ::luaL_newmetatable(lua, "cfg_submetaindex"); // Create a new metatable in registry and push it to the stack.
+        ::luaL_setfuncs(lua, cfg_submetaindex.data(), 0); // Assign metamethods for the table which at the top of the stack.
     }
     luna::~luna()
     {
@@ -2992,13 +3025,10 @@ namespace netxs::ui
                         state = m_buttons[i] ? "pressed" : "idle   ";
                     }
 
-                    if constexpr (debugmode)
-                    {
-                        status[prop::k] = utf::concat(netxs::_k0, " ",
-                                                      netxs::_k1, " ",
-                                                      netxs::_k2, " ",
-                                                      netxs::_k3);
-                    }
+                    status[prop::k] = utf::concat(netxs::_k0, " ",
+                                                  netxs::_k1, " ",
+                                                  netxs::_k2, " ",
+                                                  netxs::_k3);
                     status[prop::mouse_wheeldt] = m.wheelfp ? (m.wheelfp < 0 ? ""s : " "s) + std::to_string(m.wheelfp) : " -- "s;
                     status[prop::mouse_wheelsi] = m.wheelsi ? (m.wheelsi < 0 ? ""s : " "s) + std::to_string(m.wheelsi) : m.wheelfp ? " 0 "s : " -- "s;
                     status[prop::mouse_hzwheel] = m.hzwheel ? "active" : "idle  ";
@@ -3420,7 +3450,7 @@ namespace netxs::ui
             LISTEN(tier::preview, e2::form::layout::swarp, warp)
             {
                 adaptive = true; // Adjust the grip ratio on coming resize.
-                this->bell::passover();
+                bell::passover();
             };
             LISTEN(tier::release, e2::render::any, parent_canvas)
             {
@@ -3536,7 +3566,7 @@ namespace netxs::ui
                     auto split = xpose(griparea.coor + delta).x;
                     auto limit = xpose(base::size() - griparea.size).x;
                     fraction = netxs::divround(max_ratio * split, limit);
-                    this->base::reflow();
+                    base::reflow();
                 };
             }
             item_ptr->base::signal(tier::release, e2::form::upon::vtree::attached, This());
@@ -4061,7 +4091,7 @@ namespace netxs::ui
             }
             base::resize(twod{ initial_width, 0 });
             base::reflow();
-            return this->This();
+            return postfx::This();
         }
         // post: .
         auto& get_source() const
@@ -4118,7 +4148,7 @@ namespace netxs::ui
             return twod{ !!(Axes & axes::X_only), !!(Axes & axes::Y_only) };
         }
         // rail: .
-        bool empty() //todo VS2019 requires bool
+        auto empty()
         {
             return base::subset.empty() || !base::subset.back();
         }
@@ -4152,7 +4182,7 @@ namespace netxs::ui
             LISTEN(tier::preview, e2::form::upon::scroll::any, info) // Receive scroll parameters from external sources.
             {
                 auto delta = dot_00;
-                switch (this->bell::protos())
+                switch (bell::protos())
                 {
                     case e2::form::upon::scroll::bycoor::v.id: delta = { scinfo.window.coor - info.window.coor };        break;
                     case e2::form::upon::scroll::bycoor::x.id: delta = { scinfo.window.coor.x - info.window.coor.x, 0 }; break;
@@ -4303,7 +4333,7 @@ namespace netxs::ui
                 master->LISTEN(tier::release, e2::form::upon::scroll::bycoor::any, master_scinfo, fasten)
                 {
                     auto backup_scinfo = master_scinfo;
-                    this->base::signal(tier::preview, e2::form::upon::scroll::bycoor::_<Axis>, backup_scinfo);
+                    base::signal(tier::preview, e2::form::upon::scroll::bycoor::_<Axis>, backup_scinfo);
                 };
             }
             else fasten.clear();
@@ -4470,7 +4500,7 @@ namespace netxs::ui
                 scinfo.region = block;
                 scinfo.window.coor =-coord; // Viewport.
                 scinfo.window.size = frame; //
-                this->base::signal(tier::release, e2::form::upon::scroll::bycoor::any, scinfo);
+                base::signal(tier::release, e2::form::upon::scroll::bycoor::any, scinfo);
             };
             return object;
         }
@@ -4483,7 +4513,7 @@ namespace netxs::ui
                 base::remove(object);
                 scinfo.region = {};
                 scinfo.window.coor = {};
-                this->base::signal(tier::release, e2::form::upon::scroll::bycoor::any, scinfo); // Reset dependent scrollbars.
+                base::signal(tier::release, e2::form::upon::scroll::bycoor::any, scinfo); // Reset dependent scrollbars.
                 fasten.clear();
             }
             else base::clear();
@@ -4508,22 +4538,26 @@ namespace netxs::ui
 
     namespace drawfx
     {
-        static constexpr auto xlight = [](auto& boss, auto& canvas, auto handle, auto object_len, auto handle_len, auto region_len, auto wide)
+        static constexpr auto visible = [](auto master_len, auto master_box, auto master_pos)
         {
-            if (object_len && handle_len != region_len) // Show only if it is oversized.
+            return master_pos || master_box < master_len; // Show scrollbars only if the master is larger than the viewport or is not at the origin.
+        };
+        static constexpr auto xlight = [](auto& boss, auto& canvas, auto scrollbar_grip, auto master_len, auto master_box, auto master_pos, auto wide)
+        {
+            if (ui::drawfx::visible(master_len, master_box, master_pos))
             {
                 if (wide) // Draw full scrollbar on mouse hover
                 {
                     canvas.fill([&](cell& c){ c.link(boss.bell::id).xlight(); });
                 }
-                canvas.fill(handle, [&](cell& c){ c.link(boss.bell::id).xlight(); });
+                canvas.fill(scrollbar_grip, [&](cell& c){ c.link(boss.bell::id).xlight(); });
             }
         };
-        static constexpr auto underline = [](auto& /*boss*/, auto& canvas, auto handle, auto object_len, auto handle_len, auto region_len, auto /*wide*/)
+        static constexpr auto underline = [](auto& /*boss*/, auto& canvas, auto scrollbar_grip, auto master_len, auto master_box, auto master_pos, auto /*wide*/)
         {
-            if (object_len && handle_len != region_len) // Show only if it is oversized.
+            if (ui::drawfx::visible(master_len, master_box, master_pos))
             {
-                canvas.fill(handle, cell::shaders::underlight);
+                canvas.fill(scrollbar_grip, cell::shaders::underlight);
             }
         };
     }
@@ -4552,26 +4586,33 @@ namespace netxs::ui
             si32& master_len = master_inf.region     [Axis]; // math: Master len.
             si32& master_pos = master_inf.window.coor[Axis]; // math: Master viewport pos.
             si32& master_box = master_inf.window.size[Axis]; // math: Master viewport len.
-            si32  scroll_len = 0; // math: Scrollbar len.
-            si32  scroll_pos = 0; // math: Scrollbar grip pos.
-            si32  scroll_box = 0; // math: Scrollbar grip len.
-            si32  m          = 0; // math: Master max pos.
-            si32  s          = 0; // math: Scroll max pos.
-            fp64  r          = 1; // math: Scroll/master len ratio.
+            si32  scroll_len = 1; // math: Scrollbar cellular len.
+            si32  scroll_pos = 0; // math: Scrollbar grip cellular position.
+            si32  scroll_box = 0; // math: Scrollbar grip cellular len.
+            fp64  scroll_air = 0; // math: Scrollbar grip exact position.
+            si32  m          = 0; // math: Master max cellular pos.
+            si32  s          = 0; // math: Scroll max cellular pos.
+            fp64  r          = 1; // math: Scroll/master length ratio.
 
             si32  cursor_pos = 0; // math: Mouse cursor position.
+            bool  captured = faux; // math: .
+            fp64  grip_origin = 0;
 
+            // math: Adjust the scroll grip cellular position.
+            void sync_grip_cellular_pos()
+            {
+                scroll_pos = std::min((si32)std::round(master_pos * r), scroll_len - 1); // Don't place the grip behind the scrollbar.
+                if (scroll_pos == s && master_pos < m) scroll_pos = std::max(0, s - 1); // Place the grip one step back from the bottom unless master_pos is at the bottom.
+                if (scroll_pos == 0 && master_pos > 0) scroll_pos = std::min(1, s); // Never place the grip on top unless master_pos is on top.
+            }
             // math: Calc scroll to master metrics.
             void s_to_m()
             {
-                auto scroll_center = scroll_pos + scroll_box / 2.0;
-                auto master_center = scroll_len ? scroll_center / r
-                                                : 0;
-                master_pos = (si32)std::round(master_center - master_box / 2.0);
-
+                master_pos = (si32)std::round(scroll_air / r);
                 // Reset to extreme positions.
-                if (scroll_pos == 0 && master_pos > 0) master_pos = 0;
-                if (scroll_pos == s && master_pos < m) master_pos = m;
+                     if (scroll_air == 0 && master_pos > 0) master_pos = 0;
+                else if (scroll_air == s && master_pos < m) master_pos = m;
+                sync_grip_cellular_pos();
             }
             // math: Calc master to scroll metrics.
             void m_to_s()
@@ -4579,37 +4620,45 @@ namespace netxs::ui
                 if (master_box == 0) return;
                 if (master_len == 0) master_len = master_box;
                 r = (fp64)scroll_len / master_len;
-                auto master_middle = master_pos + master_box / 2.0;
-                auto scroll_middle = master_middle * r;
-                scroll_box = std::max(1, (si32)(master_box * r));
-                scroll_pos = (si32)std::round(scroll_middle - scroll_box / 2.0);
-
-                // Don't place the grip behind the scrollbar.
-                if (scroll_pos >= scroll_len) scroll_pos = scroll_len - 1;
-
-                // Extreme positions are always closed last.
+                scroll_box = std::min(scroll_len, (si32)std::ceil(master_box * r)); // Do std::ceil(master_box) to eliminate gaps between consecutive grip positions when paging.
+                if (scroll_box == scroll_len && scroll_len < master_len)            //
+                {
+                    scroll_box = std::max(1, scroll_box - 1);
+                }
                 s = scroll_len - scroll_box;
                 m = master_len - master_box;
-
-                if (scroll_len > 2) // Two-row hight is not suitable for this type of aligning.
-                {
-                    if (scroll_pos == 0 && master_pos > 0) scroll_pos = 1;
-                    if (scroll_pos == s && master_pos < m) scroll_pos = s - 1;
-                }
+                r = m ? (fp64)std::max(1, s) / m : 1; // Recalc the ratio because the box sizes are not proportional due to std::max(std::ceil()).
+                if (!captured) scroll_air = master_pos * r;
+                sync_grip_cellular_pos();
             }
             void update(rack const& scinfo)
             {
-                master_inf = scinfo;
-                m_to_s();
+                if (master_inf != scinfo)
+                {
+                    master_inf = scinfo;
+                    m_to_s();
+                }
             }
             void resize(twod new_size)
             {
-                scroll_len = new_size[Axis];
+                scroll_len = std::max(1, new_size[Axis]);
                 m_to_s();
             }
-            void stepby(si32 delta)
+            void stepby(fp2d delta)
             {
-                scroll_pos = std::clamp(scroll_pos + delta, 0, s);
+                static constexpr auto Sixa = !Axis; // Orthogonal axis.
+                auto d1 = std::abs(delta[Axis]);
+                auto d2 = std::abs(delta[Sixa]);
+                if (d1 >= d2) scroll_air = grip_origin + delta[Axis];
+                else          scroll_air = grip_origin + delta[Sixa] * r; // Allows precise (1:1) scrolling using the orthogonal axis.
+                s_to_m();
+            }
+            void stepbyline(si32 delta)
+            {
+                auto step = delta * r;
+                auto prev_scroll_air = scroll_air;
+                scroll_air = std::clamp(scroll_air + step, 0.0, (fp64)s);
+                grip_origin += scroll_air - prev_scroll_air;
                 s_to_m();
             }
             void commit(rect& handle)
@@ -4653,11 +4702,12 @@ namespace netxs::ui
         math calc; // grip: Scrollbar calculator.
         bool on_pager = faux; // grip: .
         fp2d drag_origin; // grip: Drag origin.
+        fp2d gear_coord; // grip: Gear coord tracker.
 
         template<auto Event>
         void send()
         {
-            if (auto master = this->boss.lock())
+            if (auto master = boss.lock())
             {
                 master->base::signal(tier::preview, Event, calc.master_inf);
             }
@@ -4668,26 +4718,6 @@ namespace netxs::ui
             auto lims = Axis == axis::X ? twod{ -1, width }
                                         : twod{ width, -1 };
             base::limits(lims, lims);
-        }
-        void giveup(hids& gear)
-        {
-            if (on_pager)
-            {
-                gear.dismiss();
-            }
-            else
-            {
-                if (gear.captured(bell::id))
-                {
-                    if (gear.cause == input::key::RightDragCancel)
-                    {
-                        send<e2::form::upon::scroll::cancel::_<Axis>>();
-                    }
-                    base::deface();
-                    gear.setfree();
-                    gear.dismiss();
-                }
-            }
         }
         void pager(si32 dir)
         {
@@ -4725,12 +4755,37 @@ namespace netxs::ui
             base::on(tier::mouserelease, input::key::MouseWheel, [&](hids& gear)
             {
                 if (gear.meta(hids::anyCtrl)) return; // Ctrl+Wheel is reserved for zooming.
-                if (gear.whlsi) pager(gear.whlsi > 0 ? 1 : -1);
+                if (gear.whlsi)
+                {
+                    auto delta = gear.whlsi > 0 ? 1 : -1;
+                    if (gear.captured(bell::id)) // Allow precise scrolling of text line by line using the mouse wheel while holding down the mouse button.
+                    {
+                        calc.stepbyline(-delta);
+                        send<e2::form::upon::scroll::bycoor::_<Axis>>();
+                    }
+                    else
+                    {
+                        pager(delta);
+                    }
+                }
                 gear.dismiss();
             });
             base::on(tier::mouserelease, input::key::MouseMove, [&](hids& gear)
             {
-                calc.cursor_pos = twod{ gear.coord }[Axis];
+                if (gear.captured(bell::id))
+                {
+                    if (on_pager)
+                    {
+                        calc.cursor_pos = twod{ gear.coord }[Axis];
+                    }
+                    else if (gear_coord(gear.coord))
+                    {
+                        auto delta = gear.coord - drag_origin;
+                        calc.stepby(delta);
+                        send<e2::form::upon::scroll::bycoor::_<Axis>>();
+                    }
+                    gear.dismiss();
+                }
             });
             base::on(tier::mouserelease, input::key::LeftDoubleClick, [&](hids& gear)
             {
@@ -4738,15 +4793,22 @@ namespace netxs::ui
             });
             base::on(tier::mouserelease, input::key::MouseDown, [&](hids& gear)
             {
-                if (!on_pager)
-                if (gear.cause == input::key::LeftDown || gear.cause == input::key::RightDown)
-                if (auto dir = calc.inside(twod{ gear.coord }[Axis]))
+                if (!gear.captured(bell::id) && gear.capture(bell::id))
                 {
-                    if (gear.capture(bell::id))
+                    auto dir = calc.inside(twod{ gear.coord }[Axis]);
+                    if (dir == 0) // Inside the grip.
+                    {
+                        drag_origin = gear.coord;
+                        gear_coord = gear.coord;
+                        calc.m_to_s();
+                        calc.grip_origin = calc.scroll_air;
+                        calc.captured = true;
+                    }
+                    else // Outside the grip.
                     {
                         on_pager = true;
+                        calc.cursor_pos = twod{ gear.coord }[Axis];
                         pager_repeat();
-                        gear.dismiss();
                         timer.actify(activity::pager_first, skin::globals().repeat_delay, [&](auto)
                         {
                             if (pager_repeat())
@@ -4760,89 +4822,35 @@ namespace netxs::ui
                         });
                     }
                 }
+                gear.dismiss();
             });
             base::on(tier::mouserelease, input::key::MouseUp, [&](hids& gear)
             {
-                if (on_pager && gear.captured(bell::id))
+                if (gear.captured(bell::id) && gear.pressed_count == 0)
                 {
-                    if (gear.cause == input::key::LeftUp || gear.cause == input::key::RightUp)
+                    if (on_pager)
                     {
-                        gear.setfree();
-                        gear.dismiss();
                         on_pager = faux;
                         timer.pacify(activity::pager_first);
                         timer.pacify(activity::pager_next);
                     }
+                    calc.captured = faux;
+                    gear.setfree();
+                    gear.dismiss();
+                    base::deface();
                 }
             });
-            base::on(tier::mouserelease, input::key::RightUp, [&](hids& gear)
+            LISTEN(tier::general, input::events::halt, gear)
             {
-                //if (!gear.captured(bell::id)) //todo why?
+                if (gear.captured(bell::id))
                 {
-                    send<e2::form::upon::scroll::cancel::_<Axis>>();
+                    calc.captured = faux;
+                    on_pager = faux;
+                    base::deface();
+                    gear.setfree();
                     gear.dismiss();
                 }
-            });
-            base::on(tier::mouserelease, input::key::MouseDragStart, [&](hids& gear)
-            {
-                if (on_pager)
-                {
-                    gear.dismiss();
-                }
-                else
-                {
-                    if (gear.capture(bell::id))
-                    {
-                        drag_origin = gear.coord;
-                        gear.dismiss();
-                    }
-                }
-            });
-            base::on(tier::mouserelease, input::key::MouseDragPull, [&](hids& gear)
-            {
-                if (on_pager)
-                {
-                    gear.dismiss();
-                }
-                else
-                {
-                    if (gear.captured(bell::id))
-                    {
-                        if (auto delta = (twod{ gear.coord } - twod{ drag_origin })[Axis])
-                        {
-                            drag_origin = gear.coord;
-                            calc.stepby(delta);
-                            send<e2::form::upon::scroll::bycoor::_<Axis>>();
-                            gear.dismiss();
-                        }
-                    }
-                }
-            });
-            base::on(tier::mouserelease, input::key::MouseDragCancel, [&](hids& gear)
-            {
-                giveup(gear);
-            });
-            bell::dup_handler(tier::general, input::events::halt.id);
-            base::on(tier::mouserelease, input::key::MouseDragStop, [&](hids& gear)
-            {
-                if (on_pager)
-                {
-                    gear.dismiss();
-                }
-                else
-                {
-                    if (gear.captured(bell::id))
-                    {
-                        if (gear.cause == input::key::RightDragStop)
-                        {
-                            send<e2::form::upon::scroll::cancel::_<Axis>>();
-                        }
-                        base::deface();
-                        gear.setfree();
-                        gear.dismiss();
-                    }
-                }
-            });
+            };
             LISTEN(tier::release, e2::form::state::mouse, hovered)
             {
                 auto apply = [&](auto active)
@@ -4881,16 +4889,12 @@ namespace netxs::ui
             //});
             LISTEN(tier::release, e2::render::any, parent_canvas)
             {
-                auto region = parent_canvas.clip();
-                auto object = parent_canvas.full();
-                auto handle = region;
-                calc.commit(handle);
-                auto& handle_len = handle.size[Axis];
-                auto& region_len = region.size[Axis];
-                auto& object_len = object.size[Axis];
-                handle.trimby(region);
-                handle_len = std::max(1, handle_len);
-                drawfx(*this, parent_canvas, handle, object_len, handle_len, region_len, wide);
+                auto visible_region = parent_canvas.clip();
+                auto scrollbar_rect = parent_canvas.full();
+                auto scrollbar_grip = scrollbar_rect;
+                calc.commit(scrollbar_grip);
+                scrollbar_grip.trimby(visible_region);
+                drawfx(*this, parent_canvas, scrollbar_grip, calc.master_len, calc.master_box, calc.master_pos, wide);
             };
         }
         grip(sptr boss_ptr)

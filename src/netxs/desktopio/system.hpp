@@ -48,8 +48,12 @@
     #include <syslog.h>     // syslog, daemonize
 
     #include <sys/types.h>
-    #include <sys/stat.h>
+    #include <sys/stat.h>   // ::chmod()
     #include <fcntl.h>      // ::splice()
+
+    #if __has_include(<features.h>)
+        #include <features.h> // __GLIBC__
+    #endif
 
     #if defined(__linux__)
         #include <sys/vt.h> // ::console_ioctl()
@@ -59,6 +63,7 @@
             #include <sys/kd.h>     // ::console_ioctl()
         #endif
         #include <linux/keyboard.h> // ::keyb_ioctl()
+        #include <linux/input.h>    // mouse button codes: BTN_LEFT ...
     #endif
 
     #if defined(__APPLE__)
@@ -1255,7 +1260,9 @@ namespace netxs::os
             auto platform = "Linux"s;
             if constexpr (!debugmode)
             {
+                #ifdef __GLIBC__
                 ::fedisableexcept(FE_ALL_EXCEPT);
+                #endif
             }
             #elif defined(__BSD__)
             auto platform = "BSD"s;
@@ -3788,8 +3795,9 @@ namespace netxs::os
             }
             return std::max(dot_11, winsz);
         }
-        auto initialize(bool rungui = faux, bool check_vtm = faux)
+        auto initialize(bool rungui = faux, bool check_vtm = faux, bool interactive = faux)
         {
+            rungui &= interactive;
             auto term = text{};
 
             #if defined(_WIN32)
@@ -4002,15 +4010,22 @@ namespace netxs::os
                     dtvt::vtmode |= nt16 ? ui::console::nt | ui::console::nt16
                                          : ui::console::nt;
                 }
-                #elif defined(__linux__)
-                    if (os::linux_console) dtvt::vtmode |= ui::console::mouse;
                 #endif
                 auto colorterm = os::env::get("COLORTERM");
                 term = text{ dtvt::vtmode & ui::console::nt16 ? "Windows Console" : "" };
                 if (term.empty()) term = os::env::get("TERM");
                 if (term.empty()) term = os::env::get("TERM_PROGRAM");
                 if (term.empty()) term = "xterm-compatible";
-                if (colorterm != "truecolor" && colorterm != "24bit")
+                #if defined(__linux__)
+                    auto tty_name = text(os::pipebuf, '\0');
+                    ok(::ttyname_r(os::stdout_fd, tty_name.data(), tty_name.size()), "::ttyname_r(os::stdout_fd)", os::unexpected);
+                    log("%%Pseudoterminal %pts%", prompt::tty, tty_name.data());
+                    if (interactive && (term == "linux" || os::linux_console || colorterm == "kmscon"))
+                    {
+                        dtvt::vtmode |= ui::console::mouse;
+                    }
+                #endif
+                if (colorterm != "truecolor" && colorterm != "24bit" &&  colorterm != "kmscon")
                 {
                     auto vt16colors = { // https://github.com//termstandard/colors
                         "ansi",
@@ -4070,6 +4085,10 @@ namespace netxs::os
                             {
                                 vtm_env = "1";
                             }
+                            else if (answer && answer.back() == 'u' && colorterm == "kmscon") // Detect an old kmscon which is limited to 256 colors (It replies: "60;1;6;9;15cu").
+                            {
+                                dtvt::vtmode |= ui::console::vt256;
+                            }
                             lock.notify();
                         }};
                         if (lock.wait_for(1s) == faux)
@@ -4083,8 +4102,14 @@ namespace netxs::os
                         }
                         reading_thread.join();
                     }
-                    dtvt::vtmode |= vtm_env.empty() ? ui::console::vtrgb
-                                                    : ui::console::vt_2D;
+                    if (vtm_env.size())
+                    {
+                        dtvt::vtmode |= ui::console::vt_2D;
+                    }
+                    else if (!(dtvt::vtmode & (ui::console::nt16 | ui::console::vt16 | ui::console::vt256))) // Fallback to vtrgb mode.
+                    {
+                        dtvt::vtmode |= ui::console::vtrgb;
+                    }
                 }
             }
             if (term.size())
@@ -4095,7 +4120,7 @@ namespace netxs::os
                                               : dtvt::vtmode & ui::console::vt256 ? "xterm 256-color"
                                               : dtvt::vtmode & ui::console::vtrgb ? "xterm truecolor"
                                                                                   : "xterm VT2D (truecolor with 2D Character Geometry support)");
-                log(prompt::os, "Mouse mode: ", dtvt::vtmode & ui::console::mouse ? "PS/2"
+                log(prompt::os, "Mouse mode: ", dtvt::vtmode & ui::console::mouse ? "Kernel input device"
                                               : dtvt::vtmode & ui::console::nt    ? "Win32 Console API"
                                                                                   : "VT-style");
             }
@@ -4690,6 +4715,130 @@ namespace netxs::os
                 }
             });
         }
+        #if defined(__linux__)
+    }
+}
+        #include "lixx.hpp" // libinput++
+        namespace netxs::lixx
+        {
+            static auto li = lixx::libinput_sptr{};
+            // lixx: .
+            auto initialize()
+            {
+                li = ptr::shared<libinput_t>();
+                return li;
+            }
+            // lixx: .
+            void uninitialize()
+            {
+                li.reset();
+            }
+            // lixx: Attach mouse devices to the lixx context.
+            auto attach_mouse()
+            {
+                log("%%Attaching mouse devices", prompt::os);
+                auto count = 0;
+                lixx::li->enumerate_active_devices([&](auto device)
+                {
+                    if (device->libinput_device_has_capability(LIBINPUT_DEVICE_CAP_POINTER))
+                    {
+                        count++;
+                        log("\tadded device: %% (%%)", device->ud_device.devpath, device->ud_device.devname);
+                        auto rc = device->libinput_device_config_tap_set_enabled(LIBINPUT_CONFIG_TAP_ENABLED) == LIBINPUT_CONFIG_STATUS_SUCCESS;
+                        log("\t  LIBINPUT_CONFIG_TAP_ENABLED: ", rc);
+                        rc = device->libinput_device_config_scroll_set_method(LIBINPUT_CONFIG_SCROLL_2FG) == LIBINPUT_CONFIG_STATUS_SUCCESS;// | LIBINPUT_CONFIG_SCROLL_EDGE));
+                        log("\t   LIBINPUT_CONFIG_SCROLL_2FG: ", rc);
+                        //rc = device->libinput_device_config_accel_set_profile(LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE);
+                        //log("\t    SET_ACCELLERATION_PROFILE: ", rc);
+                        rc = device->libinput_device_config_accel_set_speed(0.5) == LIBINPUT_CONFIG_STATUS_SUCCESS; // Pointer acceleration [-1.0, 1.0].
+                        log("\t    SET_POINTER_ACCELLERATION: ", rc);
+                        log("\t                          DPI: ", device->dpi);
+                    }
+                    else
+                    {
+                        device->remove_device();
+                    }
+                    return true;
+                });
+                return count;
+            }
+            // lixx: Set mouse device access permissions for all users.
+            auto set_mouse_access(bool enabled)
+            {
+                if (!os::process::elevated)
+                {
+                    log("System-wide operations require elevated privileges.");
+                    return true;
+                }
+                auto udev_rules_file = os::fs::path{ "/etc/udev/rules.d/85-mouse.vtm.rules" };
+                if (enabled)
+                {
+                    auto f = std::ofstream{ udev_rules_file };
+                    if (f.is_open()) // Opens in default write mode, creates if not exists, truncates if exists.
+                    {
+                        auto rules = "# Allow all users direct access to pointing devices\n"
+                                     "ACTION==\"add\", SUBSYSTEM==\"input\", KERNEL==\"event*\" ENV{ID_INPUT_MOUSE}==\"1\",         MODE=\"0666\"\n"
+                                     "ACTION==\"add\", SUBSYSTEM==\"input\", KERNEL==\"event*\" ENV{ID_INPUT_POINTINGSTICK}==\"1\", MODE=\"0666\"\n"
+                                     "ACTION==\"add\", SUBSYSTEM==\"input\", KERNEL==\"event*\" ENV{ID_INPUT_TOUCHPAD}==\"1\",      MODE=\"0666\""s;
+                        f << rules;
+                        f.close();
+                        log("Udev rules successfuly added to: %%", udev_rules_file);
+                        utf::replace_all(rules, "\n", "\n  ");
+                        log("  ", rules);
+                        auto reload_command = "udevadm control --reload-rules";
+                        log("Trigger to reload udev rules:\n  ", reload_command);
+                        if (0 == ::system(reload_command)) log("    Udev rules successfuly reloaded");
+                        else                               log("    Failed to reload udev rules (%%)", errno);
+                    }
+                    else
+                    {
+                        log("Failed to create file: %%", udev_rules_file);
+                    }
+                }
+                else
+                {
+                    auto code = std::error_code{};
+                    if (os::fs::exists(udev_rules_file, code))
+                    {
+                        auto done = os::fs::remove(udev_rules_file, code);
+                        if (done) log("File %file% has been removed.", udev_rules_file);
+                        else      log("Failed to remove file: %%", udev_rules_file);
+                    }
+                }
+                auto count = 0;
+                initialize();
+                auto access = enabled ? 0666 : 0660;
+                lixx::li->enumerate_active_devices([&](auto device)
+                {
+                    if (device->libinput_device_has_capability(LIBINPUT_DEVICE_CAP_POINTER))
+                    {
+                        count++;
+                        auto& dev_path = device->ud_device.devpath;
+                        auto& dev_name = device->ud_device.devname;
+                        if (-1 != ::chmod(dev_path.data(), access))
+                        {
+                            log("    Set access bits %access% for '%%' (%%)", utf::to_oct<4>(access), dev_path, dev_name);
+                        }
+                        else
+                        {
+                            log("    Failed to set access bits %access% for '%%' (%%)", utf::to_oct<4>(access), dev_path, dev_name);
+                        }
+                    }
+                    return true;
+                });
+                if (!count)
+                {
+                    log("No mouse devices found");
+                }
+                uninitialize();
+                return !count;
+            }
+        }
+namespace netxs::os
+{
+    namespace tty
+    {
+        #endif
         void direct(auto& extio)
         {
             auto& intio = *dtvt::client;
@@ -4994,110 +5143,64 @@ namespace netxs::os
                 auto micefd = os::invalid_fd;
                 auto buffer = text(os::pipebuf, '\0');
                 auto sig_fd = os::signals::fd{};
-                #if defined(__linux__)
-                auto ttynum = si32{ 0 };
-                #endif
                 auto get_kb_state = []
                 {
                     auto state = si32{ 0 };
                     #if defined(__linux__)
                         auto shift_state = si32{ 6 /*TIOCL_GETSHIFTSTATE*/ };
-                        ::ioctl(os::stdin_fd, TIOCLINUX, &shift_state);
-                        auto lalt   = shift_state & (1 << KG_ALT   );
-                        auto ralt   = shift_state & (1 << KG_ALTGR );
-                        auto ctrl   = shift_state & (1 << KG_CTRL  );
-                        auto rctrl  = shift_state & (1 << KG_CTRLR );
-                        auto lctrl  = shift_state & (1 << KG_CTRLL ) || (!rctrl && ctrl);
-                        auto shift  = shift_state & (1 << KG_SHIFT );
-                        auto rshift = shift_state & (1 << KG_SHIFTR);
-                        auto lshift = shift_state & (1 << KG_SHIFTL) || (!rshift && shift);
-                        if (lalt  ) state |= input::hids::LAlt;
-                        if (ralt  ) state |= input::hids::RAlt;
-                        if (lctrl ) state |= input::hids::LCtrl;
-                        if (rctrl ) state |= input::hids::RCtrl;
-                        if (lshift) state |= input::hids::LShift;
-                        if (rshift) state |= input::hids::RShift;
-                        auto led_state = si32{};
-                        ::ioctl(os::stdin_fd, KDGKBLED, &led_state);
-                        // CapsLock can always be 0 due to poorly coded drivers.
-                        if (led_state & LED_NUM) state |= input::hids::NumLock;
-                        if (led_state & LED_CAP) state |= input::hids::CapsLock;
-                        if (led_state & LED_SCR) state |= input::hids::ScrlLock;
-                    #endif
-                    return state;
-                };
-                ok(::ttyname_r(os::stdout_fd, buffer.data(), buffer.size()), "::ttyname_r(os::stdout_fd)", os::unexpected);
-                auto tty_name = view(buffer.data());
-                if (!os::linux_console)
-                {
-                    log(prompt::tty, "Pseudoterminal ", tty_name);
-                }
-                #if defined(__linux__)
-                else // Trying to get direct access to a PS/2 mouse.
-                {
-                    log("%%Linux console %tty%", prompt::tty, tty_name);
-                    // PS/2 Mouse Commands (https://wiki.osdev.org/PS/2_Mouse)
-                    // Byte     Data    Desc
-                    // 0xe6     None    Set scaling 1:1
-                    // 0xe7     None    Set scaling 2:1
-                    // 0xe8     Byte    Set resolution
-                    //                  Byte   Resolution
-                    //                  00     1 count/mm
-                    //                  01     2 count/mm
-                    //                  02     4 count/mm
-                    //                  03     8 count/mm
-                    // 0xe9     None    Status request
-                    // 0xea     None    Set Stream Mode
-                    // 0xeb     None    Read data
-                    // 0xec     None    Reset Wrap Mode
-                    // 0xee     None    Set Wrap Mode
-                    // 0xf0     None    Set Remote Mode
-                    // 0xf2     None    Get mouse ID.
-                    // 0xf3     Rate    Set sample rate: 10, 20, 40, 60, 80 (0x50), 100 (0x64), 200 (0xc8).
-                    // 0xf4     None    Data reporting On
-                    // 0xf5     None    Data reporting Off
-                    // 0xf6     None    Set defaults
-                    // 0xfe     None    Resend
-                    // 0xff     None    Reset (after the power-on test the mouse sends its ID) 
-                    auto imps2_wheel = "\xf3\xc8\xf3\x64\xf3\x50"sv; // This magic sequence enables the mouse wheel.
-                    auto mouse_device = "/dev/input/mice";
-                    auto mouse_shadow = "/dev/input/mice.vtm";
-                    auto fd = ::open(mouse_device, O_RDWR);
-                    if (fd == -1)
-                    {
-                        fd = ::open(mouse_shadow, O_RDWR);
-                    }
-                    if (fd == -1)
-                    {
-                        log("%%Error opening %mouse_device% and %mouse_shadow%, error %code%%desc%", prompt::tty, mouse_device, mouse_shadow, errno, errno == 13 ? " - permission denied" : "");
-                    }
-                    else if (io::send(fd, imps2_wheel))
-                    {
-                        auto ack = char{};
-                        io::recv(fd, &ack, sizeof(ack));
-                        micefd = fd;
-                        auto tty_word = tty_name.find("tty", 0);
-                        if (tty_word != text::npos)
+                        if (-1 != ::ioctl(os::stdin_fd, TIOCLINUX, &shift_state))
                         {
-                            auto tty_number = tty_name.substr(tty_word + 3/*skip tty letters*/);
-                            if (auto cur_tty = utf::to_int(tty_number))
-                            {
-                                ttynum = cur_tty.value();
-                            }
-                        }
-                        if (ack == '\xfa')
-                        {
-                            log(prompt::tty, "ImPS/2 mouse connected");
+                            _k0 = shift_state;
+                            _k1 = 0;
+                            auto lalt   = shift_state & (1 << KG_ALT   );
+                            auto ralt   = shift_state & (1 << KG_ALTGR );
+                            auto ctrl   = shift_state & (1 << KG_CTRL  );
+                            auto rctrl  = shift_state & (1 << KG_CTRLR );
+                            auto lctrl  = shift_state & (1 << KG_CTRLL ) || (!rctrl && ctrl);
+                            auto shift  = shift_state & (1 << KG_SHIFT );
+                            auto rshift = shift_state & (1 << KG_SHIFTR);
+                            auto lshift = shift_state & (1 << KG_SHIFTL) || (!rshift && shift);
+                            if (lalt  ) state |= input::hids::LAlt;
+                            if (ralt  ) state |= input::hids::RAlt;
+                            if (lctrl ) state |= input::hids::LCtrl;
+                            if (rctrl ) state |= input::hids::RCtrl;
+                            if (lshift) state |= input::hids::LShift;
+                            if (rshift) state |= input::hids::RShift;
                         }
                         else
                         {
-                            log(prompt::tty, "Unknown PS/2 mouse connected, ack: ", utf::to_hex_0x((int)ack));
+                            _k0 = -1;
+                            _k1 = errno;
                         }
-                    }
-                    else
+                        auto led_state = si32{ 0 };
+                        if (-1 != ::ioctl(os::stdin_fd, KDGKBLED, &led_state))
+                        {
+                            _k2 = led_state;
+                            _k3 = 0;
+                            // CapsLock can always be 0 due to poorly coded drivers.
+                            if (led_state & LED_NUM) state |= input::hids::NumLock;
+                            if (led_state & LED_CAP) state |= input::hids::CapsLock;
+                            if (led_state & LED_SCR) state |= input::hids::ScrlLock;
+                        }
+                        else
+                        {
+                            _k2 = -1;
+                            _k3 = errno;
+                        }
+                    #endif
+                    return state;
+                };
+                #if defined(__linux__)
+                if (dtvt::vtmode & ui::console::mouse) // Trying to get direct mouse access.
+                {
+                    if (auto li = lixx::initialize())
                     {
-                        log(prompt::tty, "No PS/2 mouse detected");
-                        os::close(fd);
+                        auto dev_count = lixx::attach_mouse();
+                        micefd = li->libinput_get_fd();
+                        if (!dev_count)
+                        {
+                            log("%%No mouse devices found", prompt::os);
+                        }
                     }
                 }
                 #endif
@@ -5574,7 +5677,7 @@ namespace netxs::os
                                         break;
                                     //todo impl ext mouse buttons 129-131
                                 }
-                                if (!(dtvt::vtmode & ui::console::vt_2D)) // Don't accelerate the mouse wheel if we are already inside the vtm.
+                                if (!(dtvt::vtmode & ui::console::vt_2D) && dtvt::wheelrate) // Don't accelerate the mouse wheel if we are already inside the vtm.
                                 {
                                     m.wheelfp *= dtvt::wheelrate;
                                 }
@@ -5654,35 +5757,124 @@ namespace netxs::os
                     else alive = faux;
                 };
                 static constexpr auto scale = twod{ 8, 16 }; // Linux VGA cell size.
-                auto m_proc = [&, mcoord = w.winsize * scale / 2/*centrify mouse coord*/]() mutable
+                auto m_proc = [&, mcoord = fp2d{ w.winsize * scale / 2 }/*centrify mouse coord*/,
+                                  whlacc = fp2d{},
+                                  timecod = time{},
+                                  dev_map = std::unordered_map<arch, si32>{}]() mutable
                 {
-                    auto data = io::recv(micefd, buffer);
-                    auto size = data.size();
-                    if (size == 4 /* ImPS/2 */
-                     || size == 3 /* PS/2 compatibility mode */)
-                    {
                     #if defined(__linux__)
-                        auto vt_state = ::vt_stat{};
-                        ::ioctl(os::stdout_fd, VT_GETSTATE, &vt_state);
-                        if (vt_state.v_active == ttynum) // Proceed current active tty only.
+                    using namespace netxs::lixx;
+                    lixx::li->libinput_dispatch();
+                    while (true)
+                    {
+                        auto& e = lixx::li->libinput_get_event();
+                        if (e.type == LIBINPUT_EVENT_NONE) break;
+                        auto wheelfp = fp2d{};
+                        auto wheelsi = twod{};
+                        auto device = e.li_device;
+                        if (e.type == LIBINPUT_EVENT_POINTER_MOTION_ABSOLUTE) // Generic PS/2 mouse.
                         {
                             auto limit = w.winsize * scale;
-                            auto bttns = data[0] & 7;
-                            mcoord.x  += data[1];
-                            mcoord.y  -= data[2];
-                            mcoord = std::clamp(mcoord, dot_00, limit - dot_11);
-                            k.ctlstat = get_kb_state();
-                            m.wheelfp = size == 4 ? -data[3] * dtvt::wheelrate : 0;
-                            m.wheelsi = m.wheelfp;
-                            m.coordxy = { mcoord / scale };
+                            mcoord = e.libinput_event_pointer_get_absolute_xy_transformed(limit);
+                        }
+                        else if (e.type == LIBINPUT_EVENT_POINTER_MOTION) // Touchpads and USB mouses.
+                        {
+                            auto limit = fp2d{ w.winsize * scale };
+                            mcoord += e.libinput_event_pointer_get_ds();
+                            mcoord = std::clamp(mcoord, fp2d{}, limit - dot_11);
+                        }
+                        else if (e.type == LIBINPUT_EVENT_POINTER_BUTTON)
+                        {
+                            auto button = e.libinput_event_pointer_get_button();
+                            auto i = -1;
+                            switch (button)
+                            {
+                                case BTN_LEFT:    i = 0; break;
+                                case BTN_RIGHT:   i = 1; break;
+                                case BTN_MIDDLE:  i = 2; break;
+                                case BTN_SIDE:    i = 3; break;
+                                case BTN_EXTRA:   i = 4; break;
+                                case BTN_FORWARD: i = 5; break;
+                                case BTN_BACK:    i = 6; break;
+                                case BTN_TASK:    i = 7; break;
+                            }
+                            if (i != -1)
+                            {
+                                auto dev_ptr = e.libinput_event_get_device();
+                                auto pressed = e.libinput_event_pointer_get_button_state();
+                                auto& state = dev_map[(arch)dev_ptr.get()];
+                                state = (state & ~(1 << i)) | (pressed << i);
+                            }
+                        }
+                        else
+                        {
+                            if (e.type == LIBINPUT_EVENT_POINTER_SCROLL_WHEEL)
+                            {
+                                wheelfp = -e.libinput_event_pointer_get_scroll_value_v120() / 120.0;
+                                if (dtvt::wheelrate) wheelfp *= dtvt::wheelrate;
+                            }
+                            else if (e.type == LIBINPUT_EVENT_POINTER_SCROLL_FINGER)
+                            {
+                                wheelfp = e.libinput_event_pointer_get_scroll_value();
+                            }
+                            if (wheelfp)
+                            {
+                                if (whlacc.x * wheelfp.x < 0) whlacc.x = {}; // Reset accum if direction has changed.
+                                if (whlacc.y * wheelfp.y < 0) whlacc.y = {};
+                                whlacc += wheelfp;
+                                wheelsi = whlacc;
+                                whlacc -= wheelsi;
+                            }
+                        }
+                        auto bttns = 0;
+                        for (auto& [id, state] : dev_map)
+                        {
+                            bttns |= state;
+                        }
+                        if (lixx::li->current_tty_is_active()) // Proceed only if the current tty is active.
+                        {
+                            auto kbmod = get_kb_state();
+                            if (k.ctlstat != kbmod)
+                            {
+                                k.ctlstat = kbmod;
+                                m.ctlstat = kbmod;
+                            }
+                            m.coordxy = mcoord / scale;
                             m.buttons = bttns;
                             m.ctlstat = k.ctlstat;
-                            m.timecod = datetime::now();
-                            m.changed++;
-                            mouse(m);
+                            if (wheelfp)
+                            {
+                                if (wheelfp.x)
+                                {
+                                    m.wheelfp = wheelfp.x;
+                                    m.wheelsi = wheelsi.x;
+                                    m.hzwheel = true;
+                                    m.timecod = e.stamp;
+                                    m.changed++;
+                                    mouse(m);
+                                }
+                                if (wheelfp.y)
+                                {
+                                    m.wheelfp = wheelfp.y;
+                                    m.wheelsi = wheelsi.y;
+                                    m.hzwheel = faux;
+                                    m.timecod = e.stamp;
+                                    m.changed++;
+                                    mouse(m);
+                                }
+                            }
+                            else
+                            {
+                                m.wheelfp = {};
+                                m.wheelsi = {};
+                                m.hzwheel = {};
+                                m.timecod = e.stamp;
+                                m.changed++;
+                                mouse(m);
+                            }
                         }
-                    #endif
                     }
+                    #endif
                 };
                 auto s_proc = [&]
                 {
@@ -5713,8 +5905,9 @@ namespace netxs::os
                                micefd,       m_proc,
                                alarm,        f_proc);
                 }
-
-                os::close(micefd);
+                #if defined(__linux__)
+                lixx::uninitialize();
+                #endif
 
             #endif
 

@@ -158,9 +158,7 @@ namespace netxs::app::desk
             auto app_label = item_area->attach(slot::_1, ui::item::ctor(ansi::add(utf8).mgl(0).wrp(wrap::off).jet(bias::left)))
                 ->active()
                 ->setpad({ tall + 1, 0, tall, tall })
-                ->template plugin<pro::notes>(" Running application          \n"
-                                              "   LeftClick to activate      \n"
-                                              "   DoubleLeftClick to fly to  ")
+                ->template plugin<pro::notes>(skin::globals().NsTaskbarAppsApp_tooltip)
                 ->flexible()
                 ->drawdots()
                 ->shader(cF, e2::form::state::focus::count, data_src);
@@ -168,7 +166,7 @@ namespace netxs::app::desk
                 ->active()
                 ->shader(c1, e2::form::state::hover)
                 ->setpad({ 2, 2, tall, tall })
-                ->template plugin<pro::notes>(" Close application window ")
+                ->template plugin<pro::notes>(skin::globals().NsTaskbarAppsClose_tooltip)
                 ->invoke([&](auto& boss)
                 {
                     boss.base::hidden = true;
@@ -232,10 +230,7 @@ namespace netxs::app::desk
                     };
                 });
 
-            auto def_note = text{" Application:                                  \n"
-                                 "   LeftClick to start the application instance \n"
-                                 "   RightClick to set it as default             \n"
-                                 "   LeftDrag to move desktop viewport           "};
+            auto def_note = skin::globals().NsTaskbarApps_deftooltip;
             auto conf_list_ptr = data_src->base::riseup(tier::request, desk::events::menu);
             if (!conf_list_ptr || !apps_map_ptr) return apps;
             auto& conf_list = *conf_list_ptr;
@@ -259,6 +254,7 @@ namespace netxs::app::desk
                 if (conf.splitter)
                 {
                     auto item_area = apps->attach(ui::item::ctor(obj_desc))
+                        ->active() // Set active to enable tooltips.
                         ->flexible()
                         ->accented()
                         ->colors(cA)
@@ -344,9 +340,7 @@ namespace netxs::app::desk
                         ->setpad({ 2, 2, tall, tall })
                         ->active()
                         ->shader(cell::shaders::xlight, e2::form::state::hover)
-                        ->template plugin<pro::notes>(" Window list disclosure toggle                  \n"
-                                                      "   LeftClick to expand/collapse the window list \n"
-                                                      "   MouseWheel to switch to list closing mode    ")
+                        ->template plugin<pro::notes>(skin::globals().NsTaskbarApps_toggletooltip)
                         ->invoke([&](auto& boss)
                         {
                             insts->base::hidden = isfolded;
@@ -367,7 +361,7 @@ namespace netxs::app::desk
                         ->setpad({ 2, 2, tall, tall })
                         ->active()
                         ->shader(c1, e2::form::state::hover)
-                        ->template plugin<pro::notes>(" Close all open windows in the group ")
+                        ->template plugin<pro::notes>(skin::globals().NsTaskbarApps_groupclosetooltip)
                         ->invoke([&](auto& boss)
                         {
                             auto insts_shadow = ptr::shadow(insts);
@@ -406,8 +400,8 @@ namespace netxs::app::desk
 
             auto menu_bg_color = config.settings::take("/config/desktop/taskbar/colors/bground", cell{}.fgc(whitedk).bgc(0x60202020));
             auto menu_min_conf = config.settings::take("/config/desktop/taskbar/width/folded",   si32{ 5  });
-            auto menu_max_conf = config.settings::take("/config/desktop/taskbar/width/expanded", si32{ 32 });
-            auto bttn_min_size = twod{ 31, 1 + tall * 2 };
+            auto menu_max_conf = config.settings::take("/config/desktop/taskbar/width/expanded", si32{ 40 });
+            auto bttn_min_size = twod{ 40, 1 + tall * 2 };
             auto bttn_max_size = twod{ -1, 1 + tall * 2 };
 
             auto window = ui::fork::ctor(axis::Y, 0, 0, 1);
@@ -453,7 +447,7 @@ namespace netxs::app::desk
                     ->setpad({ 1, 0, tall, tall }, { 0, 0, -tall, 0 })
                     ->active()
                     ->shader(cell::shaders::xlight, e2::form::state::hover)
-                    ->template plugin<pro::notes>(" Connected user ");
+                    ->template plugin<pro::notes>(skin::globals().NsUser_tooltip);
                 return user;
             };
             auto branch_template = [user_template](auto& /*data_src*/, auto& usr_list)
@@ -532,10 +526,10 @@ namespace netxs::app::desk
                 ->shader(c8, e2::form::state::hover)
                 ->limits({}, { -1, 1 })
                 ->alignment({ snap::tail, snap::tail })
-                ->template plugin<pro::notes>(" Info ")
+                ->template plugin<pro::notes>(skin::globals().NsInfo_tooltip)
                 ->invoke([&](auto& boss)
                 {
-                    auto infospec = spec{ .menuid = "vtm_info_page", .hidden = true, .label = "Info", .title = "Info", .type = "info" };
+                    auto infospec = spec{ .menuid = "vtm_info_page", .hidden = true, .label = skin::globals().NsInfo_label, .title = skin::globals().NsInfo_title, .type = "info" };
                     boss.on(tier::mouserelease, input::key::LeftClick, [&, infospec](hids& gear) mutable
                     {
                         infospec.gear_id = gear.id;
@@ -601,7 +595,7 @@ namespace netxs::app::desk
                 });
             auto grips = taskbar_grips->attach(slot::_2, ui::mock::ctor())
                 ->limits({ 1, -1 }, { 1, -1 })
-                ->template plugin<pro::notes>(" LeftDrag to adjust taskbar width ")
+                ->template plugin<pro::notes>(skin::globals().NsTaskbarGrips_tooltip)
                 ->active()
                 //->template plugin<pro::focus>(pro::focus::mode::focusable)
                 //->shader(c3, e2::form::state::focus::count)
@@ -652,9 +646,7 @@ namespace netxs::app::desk
                 ->setpad({}, { 0, 0, 0, -tall }); // To place above Disconnect button.
             auto applist_area = apps_users->attach(slot::_1, ui::cake::ctor());
             auto tasks_scrl = applist_area->attach(ui::rail::ctor(axes::Y_only))
-                ->plugin<pro::notes>(" Desktop Taskbar                     \n"
-                                     "   RightDrag to scroll menu up/down  \n"
-                                     "   LeftDrag to move desktop viewport ")
+                ->plugin<pro::notes>(skin::globals().NsTaskbar_tooltip)
                 ->active()
                 ->invoke([&](auto& boss)
                 {
@@ -666,8 +658,9 @@ namespace netxs::app::desk
                 });
             auto users_area = apps_users->attach(slot::_2, ui::list::ctor());
             auto label_bttn = users_area->attach(ui::fork::ctor(axis::X))
-                                        ->plugin<pro::notes>(" List of active connections ");
-            auto label = label_bttn->attach(slot::_1, ui::item::ctor(os::process::elevated ? "admins" : "users"))
+                                        ->active() // Make it active for tooltip.
+                                        ->plugin<pro::notes>(skin::globals().NsUserList_tooltip);
+            auto label = label_bttn->attach(slot::_1, ui::item::ctor(os::process::elevated ? skin::globals().NsAdmins_label : skin::globals().NsUsers_label))
                 ->flexible()
                 ->accented()
                 ->colors(cA)
@@ -677,14 +670,14 @@ namespace netxs::app::desk
             auto bttn = label_bttn->attach(slot::_2, ui::item::ctor(userlist_hidden ? "…" : "<"))
                 ->active()
                 ->shader(cell::shaders::xlight, e2::form::state::hover)
-                ->plugin<pro::notes>(" Show/hide user list ")
+                ->plugin<pro::notes>(skin::globals().NsToggle_tooltip)
                 ->setpad({ 2, 2, tall, tall });
             auto userlist_area = users_area->attach(ui::cake::ctor())
                 ->setpad({}, { 0, 0, -tall, 0 }) // To place above the admins/users label.
                 ->invoke([&](auto& boss)
                 {
                     boss.base::hidden = userlist_hidden;
-                    boss.LISTEN(tier::anycast, e2::form::upon::started, root_ptr)
+                    boss.LISTEN(tier::anycast, e2::form::upon::started, root_ptr, -, (branch_template))
                     {
                         auto world_ptr = world.This();
                         auto users = boss.attach_element(desk::events::usrs, world_ptr, branch_template);
@@ -726,7 +719,7 @@ namespace netxs::app::desk
             auto disconnect_park = bttns->attach(slot::_1, ui::cake::ctor())
                 ->active()
                 ->shader(cell::shaders::xlight, e2::form::state::hover)
-                ->plugin<pro::notes>(" Leave current session ")
+                ->plugin<pro::notes>(skin::globals().NsDisconnect_tooltip)
                 ->invoke([&, name = text{ username_view }](auto& boss)
                 {
                     boss.on(tier::mouserelease, input::key::LeftClick, [&, name](hids& gear)
@@ -736,13 +729,13 @@ namespace netxs::app::desk
                         gear.dismiss(true);
                     });
                 });
-            auto disconnect = disconnect_park->attach(ui::item::ctor("× Disconnect"))
+            auto disconnect = disconnect_park->attach(ui::item::ctor(skin::globals().NsDisconnect_label))
                 ->setpad({ 1 + tall, 1 + tall, tall, tall })
                 ->alignment({ snap::head, snap::center });
             auto shutdown_park = bttns->attach(slot::_2, ui::cake::ctor())
                 ->active()
                 ->shader(c1, e2::form::state::hover)
-                ->plugin<pro::notes>(" Disconnect all users and shutdown ")
+                ->plugin<pro::notes>(skin::globals().NsShutdown_tooltip)
                 ->invoke([&](auto& boss)
                 {
                     boss.on(tier::mouserelease, input::key::LeftClick, [&](hids& gear)
@@ -751,7 +744,7 @@ namespace netxs::app::desk
                         gear.dismiss(true);
                     });
                 });
-            auto shutdown = shutdown_park->attach(ui::item::ctor("× Shutdown"))
+            auto shutdown = shutdown_park->attach(ui::item::ctor(skin::globals().NsShutdown_label))
                 ->setpad({ 1 + tall, 1 + tall, tall, tall })
                 ->alignment({ snap::tail, snap::center });
             return window;

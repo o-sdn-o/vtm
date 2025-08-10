@@ -30,6 +30,13 @@ It can wrap any console application and be nested indefinitely, forming a text-b
 ![Windows](.resources/status/windows.svg) [![Intel 64-bit](.resources/status/arch_x86_64.svg)](https://github.com/directvt/vtm/releases/latest/download/vtm_windows_x86_64.zip)  [![Intel 32-bit](.resources/status/arch_x86.svg)](https://github.com/directvt/vtm/releases/latest/download/vtm_windows_x86.zip)  [![ARM 64-bit](.resources/status/arch_arm64.svg)](https://github.com/directvt/vtm/releases/latest/download/vtm_windows_arm64.zip)  
 ![macOS](.resources/status/macos.svg)     [![Universal](.resources/status/arch_any.svg)](https://github.com/directvt/vtm/releases/latest/download/vtm_macos_any.zip)  
 
+Linux platform notes:
+- The Linux binaries are statically built using gcc-12/g++-12 on an Ubuntu 22.04 system provided by Github Actions.
+- Runtime dependencies on the Linux platform:
+  - ```
+    GLIBC 2.34
+    ```
+
 # Documentation
 
 - [Architecture](doc/architecture.md)
@@ -37,4 +44,4 @@ It can wrap any console application and be nested indefinitely, forming a text-b
 - [Command-line options](doc/command-line-options.md)
 - [User interface](doc/user-interface.md)
 - [Settings](doc/settings.md)
-- [VT2D: Unicode character Geometry Modifiers](doc/character_geometry.md)
+- [VT2D](doc/character_geometry.md)

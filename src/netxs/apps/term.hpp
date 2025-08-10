@@ -43,7 +43,7 @@ namespace netxs::app::terminal
             boss.base::signal(tier::release, e2::form::upon::started, root_ptr);
         };
     };
-    auto build_teletype = [](eccc appcfg, settings& config)
+    auto build_teletype = [](eccc appcfg, settings& /*config*/)
     {
         auto window_clr = skin::color(tone::window_clr);
         auto window = ui::cake::ctor()
@@ -61,7 +61,7 @@ namespace netxs::app::terminal
         auto scroll = layers->attach(ui::rail::ctor())
                             ->limits({ 10,1 }); // mc crashes when window is too small
         if (appcfg.cmd.empty()) appcfg.cmd = os::env::shell();//todo revise + " -i";
-        auto term = scroll->attach(ui::term::ctor(config))
+        auto term = scroll->attach(ui::term::ctor())
             ->plugin<pro::focus>(pro::focus::mode::focused)
             ->invoke([&](auto& boss)
             {
@@ -87,6 +87,7 @@ namespace netxs::app::terminal
                 {
                     if (std::exchange(is_focused, !!count) != is_focused)
                     {
+                        boss.base::deface(); // Trigger to update pro::cache.
                         window_clr = is_focused ? skin::color(tone::winfocus)
                                                 : skin::color(tone::window_clr);
                     }
@@ -150,7 +151,7 @@ namespace netxs::app::terminal
 
         if (appcfg.cmd.empty()) appcfg.cmd = os::env::shell();//todo revise + " -i";
         auto terminal_context = config.settings::push_context("/config/terminal/");
-        auto term = scroll->attach(ui::term::ctor(config))
+        auto term = scroll->attach(ui::term::ctor())
             ->plugin<pro::focus>(pro::focus::mode::focused)
             ->invoke([&](auto& boss)
             {
@@ -202,21 +203,21 @@ namespace netxs::app::terminal
         auto sb = layers->attach(ui::fork::ctor());
         auto vt = sb->attach(slot::_2, ui::grip<axis::Y>::ctor(scroll));
         auto& term_bgc = term->get_color().bgc();
-        auto& drawfx = term->base::field([&](auto& boss, auto& canvas, auto handle, auto /*object_len*/, auto handle_len, auto region_len, auto wide)
+        auto& drawfx = term->base::field([&](auto& boss, auto& canvas, auto scrollbar_grip, auto master_len, auto master_box, auto master_pos, auto wide)
         {
             static auto box1 = "▄"sv;
             static auto box2 = ' ';
-            if (handle_len != region_len) // Show only if it is oversized.
+            if (ui::drawfx::visible(master_len, master_box, master_pos))
             {
                 if (wide) // Draw full scrollbar on mouse hover.
                 {
                     canvas.fill([&](cell& c){ c.txt(box2).link(boss.bell::id).xlight().bgc().mix(window_clr.bgc()); });
-                    canvas.fill(handle, [&](cell& c){ c.bgc().xlight(2); });
+                    canvas.fill(scrollbar_grip, [&](cell& c){ c.bgc().xlight(2); });
                 }
                 else
                 {
                     canvas.fill([&](cell& c){ c.txt(box1).fgc(c.bgc()).bgc(term_bgc).fgc().mix(window_clr.bgc()); });
-                    canvas.fill(handle, [&](cell& c){ c.link(boss.bell::id).fgc().xlight(2); });
+                    canvas.fill(scrollbar_grip, [&](cell& c){ c.link(boss.bell::id).fgc().xlight(2); });
                 }
             }
             else canvas.fill([&](cell& c){ c.txt(box1).fgc(c.bgc()).bgc(term_bgc).fgc().mix(window_clr.bgc()); });
@@ -262,7 +263,6 @@ namespace netxs::app::terminal
                 parent_canvas.fill(full, [&](cell& c){ c.fgc(c.bgc()).bgc(bgc).txt(bar).link(bar); });
             };
         });
-        //config.settings::pop_context();
         term->invoke([&](auto& boss)
         {
             ui_term_events(boss, appcfg);

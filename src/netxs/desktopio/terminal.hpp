@@ -715,6 +715,42 @@ namespace netxs::ui
                         return { type::rgbcolor, get_color(4) };
                     }
                 }
+                else if (data.starts_with("0x")) // ; 0xbbggrr
+                {
+                    if (data.length() >= 8)
+                    {
+                        auto b1 = to_byte(data[2]);
+                        auto b2 = to_byte(data[3]);
+                        auto g1 = to_byte(data[4]);
+                        auto g2 = to_byte(data[5]);
+                        auto r1 = to_byte(data[6]);
+                        auto r2 = to_byte(data[7]);
+                        data.remove_prefix(8); // sizeof 0xbbggrr
+                        auto c = (b1 << 4 ) + (b2      )
+                               + (g1 << 12) + (g2 << 8 )
+                               + (r1 << 20) + (r2 << 16)
+                               + 0xFF000000;
+                        return { type::rgbcolor, c };
+                    }
+                }
+                else if (data.starts_with("#")) // ; #rrggbb
+                {
+                    if (data.length() >= 7)
+                    {
+                        auto r1 = to_byte(data[1]);
+                        auto r2 = to_byte(data[2]);
+                        auto g1 = to_byte(data[3]);
+                        auto g2 = to_byte(data[4]);
+                        auto b1 = to_byte(data[5]);
+                        auto b2 = to_byte(data[6]);
+                        data.remove_prefix(7); // sizeof #rrggbb
+                        auto c = (b1 << 4 ) + (b2      )
+                               + (g1 << 12) + (g2 << 8 )
+                               + (r1 << 20) + (r2 << 16)
+                               + 0xFF000000;
+                        return { type::rgbcolor, c };
+                    }
+                }
                 else // Lookup custom color names stored in settings.xml.
                 {
                     auto shadow = data;
@@ -7065,7 +7101,7 @@ namespace netxs::ui
                     auto path = text{ data.substr(delimpos) };
                     base::enqueue([&, path](auto& /*boss*/) mutable
                     {
-                        this->base::riseup(tier::preview, e2::form::prop::cwd, path); //todo VS2019 requires `this`
+                        base::riseup(tier::preview, e2::form::prop::cwd, path);
                     });
                 }
             }
@@ -7429,7 +7465,7 @@ namespace netxs::ui
         template<bool Forced = faux>
         auto ondata_direct(view data = {}, bufferbase* target_buffer = {})
         {
-            auto& console_ptr = target_buffer ? target_buffer : this->target;
+            auto& console_ptr = target_buffer ? target_buffer : target;
             if (data.size())
             {
                 if (io_log) log(prompt::cout, "\n\t", utf::replace_all(ansi::hi(utf::debase(data)), "\n", ansi::pushsgr().nil().add("\n\t").popsgr()));
@@ -7598,7 +7634,7 @@ namespace netxs::ui
             auto data = get_clipboard_text(gear);
             if (data.size())
             {
-                pro::focus::set(this->This(), gear.id, solo::off);
+                pro::focus::set(This(), gear.id, solo::off);
                 _paste(data);
                 return true;
             }
@@ -7607,7 +7643,7 @@ namespace netxs::ui
         auto _copy(hids& gear, text const& data)
         {
             auto form = selmod == mime::disabled ? mime::textonly : selmod;
-            pro::focus::set(this->This(), gear.id, solo::off);
+            pro::focus::set(This(), gear.id, solo::off);
             gear.set_clipboard(target->panel, data, form);
         }
         auto copy(hids& gear)
@@ -7674,7 +7710,7 @@ namespace netxs::ui
             }
             if (utf8.size())
             {
-                pro::focus::set(this->This(), gear.id, solo::off);
+                pro::focus::set(This(), gear.id, solo::off);
                 follow[axis::X] = true;
                 if (bpmode)
                 {
@@ -7801,7 +7837,7 @@ namespace netxs::ui
             {
                 if (gear.captured()) // Forward mouse wheel events to all parents. Wheeling while button pressed.
                 {
-                    auto& offset = this->base::coor();
+                    auto& offset = base::coor();
                     if (auto parent_ptr = base::parent())
                     {
                         auto& parent = *parent_ptr;
@@ -7997,7 +8033,7 @@ namespace netxs::ui
                     auto byemsg = error().add("Press Esc to close or press Enter to restart the session.\r\n")
                                          .add("\n");
                     ondata(byemsg);
-                    this->LISTEN(tier::release, input::events::keybd::post, gear, onerun) //todo VS2019 requires `this`
+                    LISTEN(tier::release, input::events::keybd::post, gear, onerun)
                     {
                         if (gear.keystat)
                         {
@@ -8009,7 +8045,7 @@ namespace netxs::ui
                             }
                         }
                     };
-                    this->base::riseup(tier::release, e2::form::global::sysstart, 0);
+                    base::riseup(tier::release, e2::form::global::sysstart, 0);
                 };
                 auto renew = [&]
                 {
@@ -8045,19 +8081,14 @@ namespace netxs::ui
                 base::enqueue([&, backup = This()](auto& /*boss*/) mutable // We can't request the title before conio.run(), so we queue the request.
                 {
                     auto& title = wtrack.get(ansi::osc_title);
-                    if (title.empty()) wtrack.set(ansi::osc_title); // Set default title if it is empty.
-                    if (defcfg.send_input.size()) ipccon.write<faux>(defcfg.send_input);
-                    // Sync external listeners with terminal current state.
-                    base::signal(tier::release, terminal::events::io_log,         io_log);
-                    base::signal(tier::release, terminal::events::selmod,         selmod);
-                    base::signal(tier::release, terminal::events::onesht,         onesht);
-                    base::signal(tier::release, terminal::events::selalt,         selalt);
-                    base::signal(tier::release, terminal::events::rawkbd,         rawkbd);
-                    base::signal(tier::release, terminal::events::colors::bg,     target->brush.bgc());
-                    base::signal(tier::release, terminal::events::colors::fg,     target->brush.fgc());
-                    base::signal(tier::release, terminal::events::layout::wrapln, (si32)target->style.wrp());
-                    base::signal(tier::release, terminal::events::layout::align,  (si32)target->style.jet());
-                    base::signal(tier::release, terminal::events::search::status, target->selection_button());
+                    if (title.empty())
+                    {
+                        wtrack.set(ansi::osc_title); // Set default title if it is empty.
+                    }
+                    if (defcfg.send_input.size())
+                    {
+                        ipccon.write<faux>(defcfg.send_input);
+                    }
                     backup.reset(); // Backup should dtored under the lock.
                 });
                 appcfg.win = target->panel;
@@ -8071,7 +8102,10 @@ namespace netxs::ui
         }
         void close(bool fast = true, bool notify = true)
         {
-            if (notify) this->base::signal(tier::request, e2::form::proceed::quit::one, fast);
+            if (notify)
+            {
+                base::signal(tier::request, e2::form::proceed::quit::one, fast);
+            }
             forced = fast;
             if (ipccon)
             {
@@ -8081,7 +8115,7 @@ namespace netxs::ui
                     {
                         ipccon.payoff(io_log); // Wait child process.
                         auto lock = bell::sync();
-                        this->base::riseup(tier::release, e2::form::proceed::quit::one, forced); //todo VS2019 requires `this`
+                        base::riseup(tier::release, e2::form::proceed::quit::one, forced);
                         backup.reset(); // Backup should dtored under the lock.
                     });
                 }
@@ -8092,7 +8126,7 @@ namespace netxs::ui
                 onerun.reset();
                 base::enqueue([&, backup = This()](auto& /*boss*/) mutable // The termlink trailer (calling ui::term::close()) should be joined before ui::term dtor.
                 {
-                    this->base::riseup(tier::release, e2::form::proceed::quit::one, forced); //todo VS2019 requires `this`
+                    base::riseup(tier::release, e2::form::proceed::quit::one, forced);
                     backup.reset(); // Backup should dtored under the lock.
                 });
             }
@@ -8208,8 +8242,8 @@ namespace netxs::ui
         }
 
     public:
-        term(settings& config)
-            : defcfg{ config },
+        term()
+            : defcfg{ bell::indexer.config },
               normal{ *this },
               altbuf{ *this },
               target{ &normal },
@@ -8249,10 +8283,10 @@ namespace netxs::ui
 
             base::plugin<pro::keybd>();
             auto& luafx = bell::indexer.luafx;
+            auto& config = bell::indexer.config;
             auto terminal_context = config.settings::push_context("/config/events/terminal/");
             auto script_list = config.settings::take_ptr_list_for_name("script");
             auto bindings = input::bindings::load(config, script_list);
-            //config.settings::pop_context();
             input::bindings::keybind(*this, bindings);
             base::add_methods(basename::terminal,
             {
@@ -8594,7 +8628,7 @@ namespace netxs::ui
                      || adjust_pads)
                     {
                         auto new_area = rect{ scroll_coor, scroll_size };
-                        this->base::signal(tier::release, e2::area, new_area);
+                        base::signal(tier::release, e2::area, new_area);
                         base::region = new_area;
                     }
                     base::deface();
@@ -8638,7 +8672,7 @@ namespace netxs::ui
                 auto& console = *target;
                 if (status.update(console))
                 {
-                    this->base::riseup(tier::preview, e2::form::prop::ui::footer, status.data);
+                    base::riseup(tier::preview, e2::form::prop::ui::footer, status.data);
                 }
 
                 auto clip = parent_canvas.clip();
@@ -9092,7 +9126,10 @@ namespace netxs::ui
         // dtvt: Close dtvt-object.
         void stop(bool fast, bool notify = true)
         {
-            if (notify) this->base::signal(tier::request, e2::form::proceed::quit::one, fast);
+            if (notify)
+            {
+                base::signal(tier::request, e2::form::proceed::quit::one, fast);
+            }
             auto nodtvt = [&]
             {
                 auto lock = stream.bitmap_dtvt.freeze();
@@ -9116,7 +9153,7 @@ namespace netxs::ui
             {
                 ipccon.payoff();
                 auto lock = bell::sync();
-                this->base::riseup(tier::release, e2::form::proceed::quit::one, true); // MSVC2019
+                base::riseup(tier::release, e2::form::proceed::quit::one, true);
                 backup.reset(); // Backup should dtored under the lock.
             });
         }
@@ -9192,7 +9229,7 @@ namespace netxs::ui
             bell::dup_handler(tier::general, input::events::halt.id);
             LISTEN(tier::release, input::events::focus::set::any, seed)
             {
-                auto deed = this->bell::protos();
+                auto deed = bell::protos();
                 auto state = deed == input::events::focus::set::on.id;
                 stream.sysfocus.send(*this, seed.gear_id, state, seed.focus_type, seed.treeid, seed.digest);
             };

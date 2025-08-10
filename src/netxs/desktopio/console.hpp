@@ -528,8 +528,10 @@ namespace netxs::ui
             auto& gear = *gear_ptr;
             gear.set_multihome();
             gear.hids::take(device);
-            //todo should we set default gear here?
-            base::strike();
+            if (props.legacy_mode & ui::console::mouse)
+            {
+                base::deface(); // Unconditional viewport update to redraw mouse cursor.
+            }
         }
         void fire(hint event_id)
         {
@@ -606,7 +608,7 @@ namespace netxs::ui
             {
                 auto& gear = *gear_ptr;
                 if (gear.mouse_disabled) continue;
-                auto [tooltip_page_sptr, tooltip_offset] = gear.tooltip.get_render_sptr_and_offset();
+                auto [tooltip_page_sptr, tooltip_offset] = gear.tooltip.get_render_sptr_and_offset(props.tooltip_colors);
                 if (tooltip_page_sptr)
                 {
                     auto& tooltip_page = *tooltip_page_sptr;
@@ -619,7 +621,7 @@ namespace netxs::ui
                     page_area.size.x = dot_mx.x; // Prevent line wrapping.
                     canvas.full(page_area);
                     canvas.cup(dot_00);
-                    canvas.output(tooltip_page, cell::shaders::color(props.tooltip_colors));
+                    canvas.output(tooltip_page, cell::shaders::fuse);
                 }
             }
             canvas.area(area);
@@ -750,9 +752,9 @@ namespace netxs::ui
         }
 
         //todo revise
-        gate(xipc uplink, si32 vtmode, settings& config, view userid = {}, si32 session_id = 0, bool isvtm = faux)
+        gate(xipc uplink, si32 vtmode, view userid = {}, si32 session_id = 0, bool isvtm = faux)
             : canal{ *uplink },
-              props{ canal, userid, vtmode, isvtm, session_id, config },
+              props{ canal, userid, vtmode, isvtm, session_id, bell::indexer.config },
               paint{ canal, props.vtmode },
               conio{ canal, *this  },
               alive{ true },
@@ -765,10 +767,10 @@ namespace netxs::ui
             base::plugin<pro::focus>();
             base::plugin<pro::keybd>();
             auto& luafx = bell::indexer.luafx;
+            auto& config = bell::indexer.config;
             auto gate_context = config.settings::push_context("/config/events/gate/");
             auto script_list = config.settings::take_ptr_list_for_name("script");
             auto bindings = input::bindings::load(config, script_list);
-            //config.settings::pop_context();
             input::bindings::keybind(*this, bindings);
             base::add_methods(basename::gate,
             {
@@ -991,7 +993,7 @@ namespace netxs::ui
             LISTEN(tier::preview, e2::form::proceed::create, dest_region)
             {
                 dest_region.coor += base::coor();
-                this->base::riseup(tier::release, e2::form::proceed::create, dest_region);
+                base::riseup(tier::release, e2::form::proceed::create, dest_region);
             };
             LISTEN(tier::release, e2::conio::pointer, pointer)
             {
@@ -999,7 +1001,7 @@ namespace netxs::ui
             };
             LISTEN(tier::release, e2::form::upon::stopped, fast) // Reading loop ends.
             {
-                this->base::signal(tier::anycast, e2::form::proceed::quit::one, fast);
+                base::signal(tier::anycast, e2::form::proceed::quit::one, fast);
                 disconnect();
                 paint.stop();
                 bell::sensors.clear();
@@ -1016,11 +1018,11 @@ namespace netxs::ui
             {
                 base::update_scripting_context(); // Gate has no parents.
                 if (props.debug_overlay) debug.start();
-                this->base::signal(tier::release, e2::form::prop::name, props.title);
+                base::signal(tier::release, e2::form::prop::name, props.title);
                 //todo revise
                 if (props.title.length())
                 {
-                    this->base::riseup(tier::preview, e2::form::prop::ui::header, props.title);
+                    base::riseup(tier::preview, e2::form::prop::ui::header, props.title);
                 }
             };
             LISTEN(tier::request, e2::form::prop::ui::footer, f)
@@ -1159,7 +1161,10 @@ namespace netxs::ui
                 });
                 LISTEN(tier::release, e2::config::fps, fps)
                 {
-                    if (fps > 0) this->base::signal(tier::general, e2::config::fps, fps);
+                    if (fps > 0)
+                    {
+                        base::signal(tier::general, e2::config::fps, fps);
+                    }
                 };
                 LISTEN(tier::preview, e2::form::prop::cwd, path)
                 {
