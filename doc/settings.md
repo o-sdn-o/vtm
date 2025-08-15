@@ -583,7 +583,7 @@ Standard object names
 |                 |                          | `vtm.gate.AntialiasingMode() -> int`               | Toggle anti-aliasing mode.
 |`applet`         | Running applet           | `vtm.applet.Warp(int l, int r, int t, int b)`      | Request to deform the applet window. The parameters specify four deltas for the left, right, top and bottom sides of the applet window.
 |                 |                          | `vtm.applet.ZOrder() -> int`                       | Request the current z-order state of the applet window.
-|                 |                          | `vtm.applet.ZOrder(int n) -> int`                  | Set the current z-order state for the applet window. -1: backmost; 0: plain; 1: topmost.
+|                 |                          | `vtm.applet.ZOrder(int n) -> int`                  | Set the current z-order state for the applet window. -1: backmost; 0: normal; 1: topmost.
 |                 |                          | `vtm.applet.Close()`                               | Close applet window.
 |                 |                          | `vtm.applet.Minimize()`                            | Minimize applet window.
 |                 |                          | `vtm.applet.Maximize()`                            | Maximize applet window.
@@ -620,7 +620,8 @@ Standard object names
 |                 |                          | `vtm.terminal.ScrollViewportToTop()`               | Scroll the terminal viewport to the scrollback top.
 |                 |                          | `vtm.terminal.ScrollViewportToEnd()`               | Scroll the terminal viewport to the scrollback bottom.
 |                 |                          | `vtm.terminal.SendKey(string s)`                   | Send the text string `s` as terminal input.
-|                 |                          | `vtm.terminal.Print(string s)`                     | Print the text string `s` to the terminal scrollback buffer.
+|                 |                          | `vtm.terminal.Print(auto args, ...)`               | Print the specified args to the terminal scrollback buffer.
+|                 |                          | `vtm.terminal.PrintLn(auto args, ...)`             | Print the specified args and move the text cursor to the next line.
 |                 |                          | `vtm.terminal.CopyViewport()`                      | Сopy terminal viewport to the clipboard.
 |                 |                          | `vtm.terminal.CopySelection()`                     | Copy selected lines or the current line to the clipboard.
 |                 |                          | `vtm.terminal.PasteClipboard()`                    | Paste from clipboard.
@@ -642,6 +643,10 @@ Standard object names
 |                 |                          | `vtm.terminal.LogMode(int n)`                      | Set the current terminal logging mode on/off.
 |                 |                          | `vtm.terminal.LogMode() -> int`                    | Get the current terminal logging mode state.
 |                 |                          | `vtm.terminal.ClearScrollback()`                   | Clear the terminal scrollback buffer.
+|                 |                          | `vtm.terminal.ScrollbackSize() -> int n, m, q`     | Get the current scrollback buffer parameters (three integer values):<br>`n` Initial buffer size<br>`m` Grow step<br>`q` Grow limit
+|                 |                          | `vtm.terminal.ScrollbackSize(int n, int m, int q)` | Set scrollback buffer parameters:<br>`n` Initial buffer size<br>`m` Grow step<br>`q` Grow limit
+|                 |                          | `vtm.terminal.EventReporting(string args, ...)`    | Enable event reporting for the specified sources:<br>`"keyboard"` Keyboard events<br>`"mouse"` Mouse events<br>`"focus"` Focus events<br>`"format"` Line format events<br>`"clipoard"` Clipboard events<br>`"window"` Window size and selection events<br>`"system"` System signals<br>`""` Switch event reporting off
+|                 |                          | `vtm.terminal.EventReporting()`                    | Get a list of active event sources.
 |                 |                          | `vtm.terminal.Restart()`                           | Restart the current terminal session.
 |                 |                          | `vtm.terminal.Quit()`                              | Close terminal.
 

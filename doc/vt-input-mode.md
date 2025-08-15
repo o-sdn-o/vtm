@@ -31,17 +31,47 @@ Existing approaches have the following drawbacks:
 
 ## Conventions
 
-- We use HEX-form of the uint32 (IEEE-754 32-bit binary float, Little-Endian) for the floating point value representation.
+- We use HEX-form of the uint32 for the 32-bit floating point value representation (IEEE-754 32-bit binary float, Little-Endian).
 - Space characters are not used in sequence payloads and are only used for readability of the description.
-- All unescaped symbols outside of this protocol should be treated as clipboard pasted data.
+- //todo: keyboard only: All unescaped symbols outside of this protocol should be treated as clipboard pasted data.
 
-### Format
+## Event tracking activation
 
-Signaling uses APC `ESC _ <payload> ESC \` with an event-specific payload syntax.
+Event tracking is activated by sending an APC vt-sequence to the terminal with a script to switch the event tracking mode.
 
-The payload consists of a list of attributes in the following format:
+The following APC sequences set/reset/request event tracking for the specified event `"Source"`s:
+
+- Set:
+  ```
+  ESC _ vtm.terminal.EventReporting("Source0", ..., "SourceN") ESC \
+  ```
+- Reset (the event tracking is deactivated if an empty string is specified.):
+  ```
+  ESC _ vtm.terminal.EventReporting("") ESC \
+  ```
+- Get a list of active sources:
+  ```
+  ESC _ src_list=vtm.terminal.EventReporting() ESC \
+  ```
+
+Sources      | Events to track
+-------------|----------------
+`"keyboard"` | Keyboard.
+`"mouse"`    | Mouse.
+`"focus"`    | Focus.
+`"format"`   | Line format.
+`"clipboard"`| Clipboard.
+`"window"`   | Window size and selection.
+`"system"`   | System signals.
+`""`         | Set event reporting off.
+
+/todo: keyboard only: Note: By enabling `vt-input-mode`, all current terminal modes are automatically saved (to be restored on exit) and switched to something like "raw" mode, in which input is available character by character, echoing is disabled, and all special processing of terminal input and output characters is disabled (except for `LF` to `CR+LF` conversion).
+
+### Event format
+
+The event signaling also uses APC `ESC _ <payload> ESC \` vt-sequences with the following payload format:
 ```
-<attr>=<val>,...,<val>; ...; <attr>=<val>,...,<val>
+<attr>=<val>,...,<val>;...;<attr>=<val>,...,<val>
 ```
 
 Field             | Descriprtion
@@ -49,40 +79,19 @@ Field             | Descriprtion
 `<attr>`          | Attribute name.
 `<val>,...,<val>` | Comma-separated value list.
 
-## Initialization
-
-```
-Set:   ESC _ events=<Source0>,...,<SourceN> ESC \
-Reset: ESC _ events ESC \
-```
-
-Source     | Events to track
------------|----------------
-`keyboard` | Keyboard.
-`mouse`    | Mouse.
-`focus`    | Focus.
-`format`   | Line format.
-`clipoard` | Clipboard.
-`window`   | Window size and selection.
-`system`   | System signals.
-
-This sequence enables `vt-input-mode` and event tracking for the specified event `Source`s. The `vt-input-mode` is deactivated if none of the `Source`s is specified.
-
-Note: By enabling `vt-input-mode`, all current terminal modes are automatically saved (to be restored on exit) and switched to something like "raw" mode, in which input is available character by character, echoing is disabled, and all special processing of terminal input and output characters is disabled (except for `LF` to `CR+LF` conversion).
-
 ## Events
 
 - Keyboard
   ```
-  ESC _ event=keyboard ; id=0 ; kbmods=<KeyMods> ; keyid=<KeyId> ; pressed=<KeyDown> ; scancode=<ScanCode> ; id_chord=<HexFormString> ; ch_chord=<HexFormString> ; sc_chord=<HexFormString> ; cluster=<C0>,...,<Cn> ESC \
+  ESC _ event=keyboard ; id=<ID> ; kbmods=<KeyMods> ; keyid=<KeyId> ; pressed=<KeyDown> ; scancode=<ScanCode> ; id_chord=<HexFormString> ; ch_chord=<HexFormString> ; sc_chord=<HexFormString> ; cluster=<C0>,...,<Cn> ESC \
   ```
 - Mouse
   ```
-  ESC _ event=mouse ; id=0 ; kbmods=<KeyMods> ; coord=<X>,<Y> ; buttons=<ButtonState> ; wheel=<DeltaY>[,<DeltaX>] ESC \
+  ESC _ event=mouse ; id=<ID> ; kbmods=<KeyMods> ; coor=<X>,<Y> ; buttons=<ButtonState> ; iscroll=<DeltaX>,<DeltaY> ; fscroll=<DeltaX>,<DeltaY> ESC \
   ```
 - Focus
   ```
-  ESC _ event=focus ; id=0 ; state=<FocusState> ESC \
+  ESC _ event=focus ; id=<ID> ; state=<FocusState> ESC \
   ```
 - Format
   ```
@@ -91,7 +100,7 @@ Note: By enabling `vt-input-mode`, all current terminal modes are automatically 
 //todo Textinput, Text, IME or Input for IME preview etc
 - Clipboard
   ```
-  ESC _ event=clipoard ; id=0 ; format=<ClipFormat> ; security=<SecLevel> ; data=<Data> ESC \
+  ESC _ event=clipboard ; id=<ID> ; format=<ClipFormat> ; security=<SecLevel> ; data=<Data> ESC \
   ```
 - Window
   ```
@@ -105,15 +114,15 @@ Note: By enabling `vt-input-mode`, all current terminal modes are automatically 
 ### Keyboard
 
 ```
-ESC _ event=keyboard ; id=0 ; kbmods=<KeyMods> ; keyid=<KeyId> ; pressed=<KeyDown> ; scancode=<ScanCode> ; id_chord=<HexFormString> ; ch_chord=<HexFormString> ; sc_chord=<HexFormString> ; cluster=<C0>,...,<Cn> ESC \
+ESC _ event=keyboard ; id=<ID> ; kbmods=<KeyMods> ; keyid=<KeyId> ; pressed=<KeyDown> ; scancode=<ScanCode> ; id_chord=<HexFormString> ; ch_chord=<HexFormString> ; sc_chord=<HexFormString> ; cluster=<C0>,...,<Cn> ESC \
 ```
 
 > Q: Do we need to track scancode chord? `scanchord=<Code0>,...,<CodeN>`?
 
 Attribute                     | Description
 ------------------------------|------------
-`id=0`                        | Seat id.
-`kbmods=<KeyMods>`            | Keyboard modifiers.
+`id=<ID>`                     | Device group id (unsigned integer value).
+`kbmods=<KeyMods>`            | Keyboard modifiers bit field.
 `keyid=<KeyId>`               | Physical key ID.
 `pressed=<KeyDown>`           | Key state:<br>\<KeyDown\>=1 - Pressed.<br>\<KeyDown\>=0 - Released.
 `scancode=<ScanCode>`         | Scan code.
@@ -124,7 +133,7 @@ Attribute                     | Description
 
 In response to the activation of `keyboard` tracking, the application receives a vt-sequence containing keyboard modifiers state:
 ```
-ESC _ event=keyboard ; id=0 ; kbmods=<KeyMods> ESC \
+ESC _ event=keyboard ; id=<ID> ; kbmods=<KeyMods> ESC \
 ```
 
 The full sequence is fired after every key press and key release. The sequence can contain a string generated by a keystroke as a set of codepoints: `C0 + ... + Cn`. ~~The string can be fragmented and delivered by multiple consecutive events.~~
@@ -351,21 +360,17 @@ Key ID | Name               | Generic Name       | Scan Code | Notes
 ### Mouse
 
 ```
-ESC _ event=mouse ; id=0 ; kbmods=<KeyMods> ; coord=<X>,<Y> ; buttons=<ButtonState> ; wheel=<DeltaY>[,<DeltaX>] ESC \
+ESC _ event=mouse ; id=<ID> ; kbmods=<KeyMods> ; coor=<X>,<Y> ; buttons=<ButtonState> ; iscroll=<DeltaX>,<DeltaY> ; fscroll=<DeltaX>,<DeltaY> ESC \
 ```
 
-Attribute                   | Description
-----------------------------|------------
-`id=0`                      | Seat id.
-`kbmods=<KeyMods>`          | Keyboard modifiers (see Keyboard event).
-`coord=<X>,<Y>`             | Pixel-wise coordinates of the mouse pointer. Each coordinate is represented in the form of a floating point value of the sum of the integer coordinate of the cell in the terminal window grid and the relative offset within the cell in the range `[0.0f, 1.0f)`.
-`buttons=<ButtonState>`     | Mouse button state.
-`wheel=<DeltaY>[,<DeltaX>]` | Vertical and horizontal high-resolution wheel delta integer value.
-
-In response to the activation of `mouse` tracking, the application receives a vt-sequence containing current mouse state:
-```
-ESC _ event=mouse ; kbmods=<KeyMods> ; coord=<X>,<Y> ; buttons=<ButtonState> ESC \
-```
+Attribute                       | Description
+--------------------------------|------------
+`id=<ID>`                       | Device group id (unsigned integer value).
+`kbmods=<KeyMods>`              | Keyboard modifiers bit field (see Keyboard event).
+`coor=<X>,<Y>`                  | Pixel-wise 32-bit floating point coordinates of the mouse pointer relative to the console's text cell grid. The integer part corresponds to the cell coordinates, and the fractional part corresponds to the normalized position within the cell. The pointer's screen pixel coordinates can be calculated by multiplying these floating point values by the cell size. Receiving a NaN value is a signal that the mouse has left the window or disconnected.
+`buttons=<ButtonState>`         | Mouse buttons bit field.
+`iscroll=<DeltaX>,<DeltaY>`     | Low-resolution integer horizontal and vertical scroll deltas (one scroll line corresponds to a value of 1). Low-resolution scroll deltas increase as the values of high-resolution deltas accumulate, and are zeroed when the scroll direction changes.
+`fscroll=<DeltaX>,<DeltaY>`     | High-resolution 32-bit floating-point horizontal and vertical scroll deltas (one scroll line corresponds to a value of 1.0f).
 
 The mouse tracking event fires on any mouse activity, as well as on keyboard modifier changes.
 
@@ -378,18 +383,20 @@ Bit | Active button
 2   | Middle
 3   | 4th
 4   | 5th
+... | ...
+N-1 | Nth
 
 Note: Mouse tracking will continue outside the terminal window as long as the mouse button pressed inside the window is active. In this case, coordinates with negative values are possible.
 
 ### Focus
 
 ```
-ESC _ event=focus ; id=0 ; state=<FocusState> ESC \
+ESC _ event=focus ; id=<ID> ; state=<FocusState> ESC \
 ```
 
 Attribute            | Description
 ---------------------|------------
-`id=0`               | Seat id.
+`id=<ID>`            | Device group id (unsigned integer value).
 `state=<FocusState>` | Terminal window focus:<br>\<FocusState\>=1 - Focused.<br>\<FocusState\>=0 - Unfocused.
 
 In response to the activation of `focus` tracking, the application receives a vt-sequence containing current focus state.
@@ -411,12 +418,12 @@ In response to the activation of `format` tracking, the application receives a v
 ### Clipboard
 
 ```
-ESC _ event=clipoard ; id=0 ; format=<ClipFormat> ; security=<SecLevel> ; data=<Data> ESC \
+ESC _ event=clipboard ; id=<ID> ; format=<ClipFormat> ; security=<SecLevel> ; data=<Data> ESC \
 ```
 
 Attribute             | Description
 ----------------------|------------
-`id=0`                | Seat id.
+`id=<ID>`             | Device group id (unsigned integer value).
 `format=<ClipFormat>` | Clipboard data format.
 `security=<SecLevel>` | Security level.
 `data=<Data>`         | Base64 encoded data.

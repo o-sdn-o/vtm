@@ -260,6 +260,14 @@ namespace netxs::ansi
     static const auto paste_begin = "\033[200~"sv; // Bracketed paste begin.
     static const auto paste_end   = "\033[201~"sv; // Bracketed paste end.
 
+    static constexpr auto apc_prefix_mouse         = "event=mouse;"sv;
+    static constexpr auto apc_prefix_mouse_id      = "id="sv;      // ui32
+    static constexpr auto apc_prefix_mouse_kbmods  = "kbmods="sv;  // ui32
+    static constexpr auto apc_prefix_mouse_coor    = "coor="sv;    // fp32,fp32
+    static constexpr auto apc_prefix_mouse_buttons = "buttons="sv; // ui32
+    static constexpr auto apc_prefix_mouse_iscroll = "iscroll="sv; // si32,si32
+    static constexpr auto apc_prefix_mouse_fscroll = "fscroll="sv; // fp32,fp32
+
     template<class Base>
     class basevt
     {
@@ -541,8 +549,8 @@ namespace netxs::ansi
         }
         auto& vmouse(bool b) // escx: Focus and Mouse position reporting/tracking.
         {
-            return add(b ? "\033[?1002;1003;1004;1006;10060h"
-                         : "\033[?1002;1003;1004;1006;10060l");
+            return add(b ? "\033[?1002;1003;1004;1006;10060h\033_vtm.terminal.EventReporting('mouse')\033\\"
+                         : "\033[?1002;1003;1004;1006;10060l\033_vtm.terminal.EventReporting('')\033\\");
         }
         auto& setutf(bool b)        { return add(b ? "\033%G"      : "\033%@"        ); } // escx: Select UTF-8 character set (true) or default (faux). Not supported by Apple Terminal on macOS.
         auto& altbuf(bool b)        { return add(b ? "\033[?1049h" : "\033[?1049l"   ); } // escx: Alternative buffer.
@@ -612,8 +620,39 @@ namespace netxs::ansi
             return *this;
         }
         template<class T>
-        auto& mouse_sgr(T const& gear, twod coor) // escx: Mouse tracking report (SGR).
+        auto& mouse_vtm(T const& gear, fp2d coor) // escx: Mouse tracking report (vt-input-mode).
         {
+            //  ESC _ event=mouse ; id=0 ; kbmods=<KeyMods> ; coor=<X>,<Y> ; buttons=<ButtonState> ; iscroll=<DeltaX>,<DeltaY> ; fscroll=<DeltaX>,<DeltaY> ST
+            //todo make it fp2d
+            auto x = ui32{};
+            auto y = ui32{};
+            ::memcpy(&x, &coor.x, sizeof(x));
+            ::memcpy(&y, &coor.y, sizeof(y));
+            auto iv = gear.m_sys.wheelsi;
+            auto ih = 0;
+            auto fh = ui32{};
+            auto fv = ui32{};
+            ::memcpy(&fv, &gear.m_sys.wheelfp, sizeof(fv));
+            if (gear.m_sys.hzwheel)
+            {
+                std::swap(ih, iv);
+                std::swap(fh, fv);
+            }
+            add("\033_event=mouse;id=", gear.id, ";kbmods=", gear.m_sys.ctlstat, ";coor=");
+            utf::_to_hex(x, 4 * 2, [&](char c){ add(c); });
+            add(",");
+            utf::_to_hex(y, 4 * 2, [&](char c){ add(c); });
+            add(";buttons=", gear.m_sys.buttons, ";iscroll=", ih, ",", iv, ";fscroll=");
+            utf::_to_hex(fh, 4 * 2, [&](char c){ add(c); });
+            add(",");
+            utf::_to_hex(fv, 4 * 2, [&](char c){ add(c); });
+            add("\033\\");
+            return *this;
+        }
+        template<class T>
+        auto& mouse_sgr(T const& gear, fp2d coor) // escx: Mouse tracking report (SGR).
+        {
+            if (std::isnan(coor.x)) return *this;
             using hids = T;
             static constexpr auto left     = si32{ 0  };
             static constexpr auto mddl     = si32{ 1  };
@@ -681,13 +720,14 @@ namespace netxs::ansi
             auto count = std::max(1, std::abs(gear.m_sys.wheelsi));
             while (count--)
             {
-                add("\033[<", ctrl, ';', coor.x, ';', coor.y, pressed ? 'M' : 'm');
+                add("\033[<", ctrl, ';', (si32)coor.x, ';', (si32)coor.y, pressed ? 'M' : 'm');
             }
             return *this;
         }
         template<class T>
-        auto& mouse_x11(T const& gear, twod coor, bool utf8) // escx: Mouse tracking report (X11).
+        auto& mouse_x11(T const& gear, fp2d coor, bool utf8) // escx: Mouse tracking report (X11).
         {
+            if (std::isnan(coor.x)) return *this;
             using hids = T;
             static constexpr auto left     = si32{ 0  };
             static constexpr auto mddl     = si32{ 1  };
@@ -739,15 +779,15 @@ namespace netxs::ansi
                 if (utf8)
                 {
                     add("\033[M");
-                    utf::to_utf_from_code(std::clamp(ctrl,   0, si16max - 32) + 32, *this);
-                    utf::to_utf_from_code(std::clamp(coor.x, 1, si16max - 32) + 32, *this);
-                    utf::to_utf_from_code(std::clamp(coor.y, 1, si16max - 32) + 32, *this);
+                    utf::to_utf_from_code(std::clamp(ctrl,         0, si16max - 32) + 32, *this);
+                    utf::to_utf_from_code(std::clamp((si32)coor.x, 1, si16max - 32) + 32, *this);
+                    utf::to_utf_from_code(std::clamp((si32)coor.y, 1, si16max - 32) + 32, *this);
                 }
                 else
                 {
-                    add("\033[M", (char)(std::clamp(ctrl,   0, 127-32) + 32),
-                                  (char)(std::clamp(coor.x, 1, 127-32) + 32),
-                                  (char)(std::clamp(coor.y, 1, 127-32) + 32));
+                    add("\033[M", (char)(std::clamp(ctrl,         0, 127-32) + 32),
+                                  (char)(std::clamp((si32)coor.x, 1, 127-32) + 32),
+                                  (char)(std::clamp((si32)coor.y, 1, 127-32) + 32));
                 }
             }
             return *this;

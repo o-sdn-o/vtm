@@ -558,7 +558,20 @@ namespace netxs::os
                     static constexpr auto style       = 0;
                     static constexpr auto paste_begin = 1;
                     static constexpr auto paste_end   = 2;
+                    static constexpr auto fp2d_mouse  = 3;
                 }
+                struct fp2d_mouse_input
+                {
+                    ui32 EventType = MENU_EVENT;
+                    ui32 id        = event::custom | event::fp2d_mouse;
+                    fp2d coord;    // Floating point mouse coord.
+                };
+                struct style_input
+                {
+                    ui32 EventType = MENU_EVENT;
+                    ui32 id        = event::custom | event::style;
+                    si32 format;   // Style format command.
+                };
                 namespace op
                 {
                     static constexpr auto read_io                 = CTL_CODE(FILE_DEVICE_CONSOLE, 1,  METHOD_OUT_DIRECT,  FILE_ANY_ACCESS);
@@ -4507,14 +4520,20 @@ namespace netxs::os
                     }
                 }
             }
-            void mouse(input::hids& gear, bool moved, twod coord, input::mouse::prot encod, input::mouse::mode state)
+            void mouse(input::hids& gear, bool moved, fp2d coord, input::mouse::prot encod, input::mouse::mode state)
             {
                 using mode = input::mouse::mode;
                 using prot = input::mouse::prot;
 
                 if (attached)
                 {
-                    if (encod == prot::w32) termlink->mouse(gear, moved, coord, encod, state);
+                    if (state & mode::vtim)
+                    {
+                        auto guard = std::lock_guard{ writemtx };
+                        writebuf.mouse_vtm(gear, coord);
+                        writesyn.notify_one();
+                    }
+                    else if (encod == prot::w32) termlink->mouse(gear, moved, coord, encod, state);
                     else
                     {
                         if (state & mode::move
@@ -4882,6 +4901,7 @@ namespace netxs::os
             #if defined(_WIN32)
 
                 auto accumfp = fp32{};
+                auto coordfp = fp2d{ fp32nan, fp32nan };
                 auto items = std::vector<INPUT_RECORD>{};
                 auto count = DWORD{};
                 auto point = utfx{};
@@ -5054,12 +5074,19 @@ namespace netxs::os
                             if (r.Event.MenuEvent.dwCommandId & nt::console::event::custom)
                             switch (r.Event.MenuEvent.dwCommandId ^ nt::console::event::custom)
                             {
-                                case nt::console::event::style:
-                                    if (head != tail && head->EventType == MENU_EVENT)
+                                case nt::console::event::fp2d_mouse:
+                                    coordfp = reinterpret_cast<nt::console::fp2d_mouse_input*>(&r)->coord;
+                                    if (std::isnan(coordfp.x))
                                     {
-                                        auto& next_rec = *head++;
-                                        style(deco{ (si32)next_rec.Event.MenuEvent.dwCommandId });
+                                        m.changed++;
+                                        m.timecod = datetime::now();
+                                        m.enabled = input::hids::stat::halt; // Send a mouse halt event.
+                                        mouse(m);
+                                        m.enabled = input::hids::stat::ok;
                                     }
+                                    break;
+                                case nt::console::event::style:
+                                    style(deco{ reinterpret_cast<nt::console::style_input*>(&r)->format });
                                     break;
                                 case nt::console::event::paste_begin:
                                     ctrlv = true;
@@ -5099,7 +5126,7 @@ namespace netxs::os
                                 m.hzwheel = {};
                             }
                             auto new_button_state = (si32)(r.Event.MouseEvent.dwButtonState & 0b00011111);
-                            auto new_coords_state = twod{ r.Event.MouseEvent.dwMousePosition.X, r.Event.MouseEvent.dwMousePosition.Y };
+                            auto new_coords_state = !std::isnan(coordfp.x) ? coordfp : fp2d{ r.Event.MouseEvent.dwMousePosition.X, r.Event.MouseEvent.dwMousePosition.Y };
                             if (!((dtvt::vtmode & ui::console::nt16) && wheeldt)) // Skip the mouse coord update when wheeling on win7/8 (broken coords).
                             {
                                 if (m.coordxy != new_coords_state)
@@ -5212,6 +5239,7 @@ namespace netxs::os
                     focus,
                     style,
                     paste,
+                    mousevtim,
                 };
                 static const auto style_cmd = "\033[" + std::to_string(ansi::ccc_stl) + ":";
                 auto take_sequence = [](qiew& cache) // s.size() always > 1.
@@ -5266,6 +5294,37 @@ namespace netxs::os
                         else if (c == 'O') // SS3: ESC O byte
                         {
                             s = s.substr(0, 3);
+                        }
+                        else if (c == '_') // APC: ESC _ payload ST
+                        {
+                            incomplete = true;
+                            while (head != tail) // Looking for ST
+                            {
+                                auto d = *head++;
+                                if (d == ansi::c0_bel)
+                                {
+                                    s = qiew{ s.begin() + 2, std::prev(head) };
+                                    incomplete = faux;
+                                    break;
+                                }
+                                else if (d == ansi::c0_esc && head != tail && *head == '\\')
+                                {
+                                    s = { s.begin() + 2, std::prev(head) };
+                                    incomplete = faux;
+                                    head++;
+                                    break;
+                                }
+                            }
+                            if (!incomplete) // Return payload only, not a whole APC sequence.
+                            {
+                                cache = { head, tail };
+                                if (s.starts_with(ansi::apc_prefix_mouse))
+                                {
+                                    s.remove_prefix(ansi::apc_prefix_mouse.size());
+                                    t = type::mousevtim;
+                                }
+                                return std::tuple{ t, s, incomplete };
+                            }
                         }
                         else // ESC cluster == Alt+cluster
                         {
@@ -5614,6 +5673,75 @@ namespace netxs::os
                         {
                             auto [t, s, incomplete] = take_sequence(cache);
                             if (incomplete) break;
+                            else if (t == type::mousevtim) // ESC _ payload ST
+                            {
+                                utf::split<true>(s, ';', [&](qiew frag)
+                                {
+                                    if (frag.starts_with(ansi::apc_prefix_mouse_kbmods))
+                                    {
+                                        frag.remove_prefix(ansi::apc_prefix_mouse_kbmods.size());
+                                        if (auto v = utf::to_int<ui32>(frag))
+                                        {
+                                            m.ctlstat = v.value();
+                                            k.ctlstat = m.ctlstat;
+                                        }
+                                    }
+                                    else if (frag.starts_with(ansi::apc_prefix_mouse_coor))
+                                    {
+                                        frag.remove_prefix(ansi::apc_prefix_mouse_coor.size());
+                                        if (auto x = utf::to_int<ui32, 16>(frag); x && frag)
+                                        {
+                                            frag.pop_front(); // Pop ','
+                                            if (auto y = utf::to_int<ui32, 16>(frag))
+                                            {
+                                                m.coordxy.x = *reinterpret_cast<fp32*>(&x.value());
+                                                m.coordxy.y = *reinterpret_cast<fp32*>(&y.value());
+                                            }
+                                        }
+                                    }
+                                    else if (frag.starts_with(ansi::apc_prefix_mouse_buttons))
+                                    {
+                                        frag.remove_prefix(ansi::apc_prefix_mouse_buttons.size());
+                                        if (auto b = utf::to_int<ui32>(frag))
+                                        {
+                                            m.buttons = b.value();
+                                        }
+                                    }
+                                    else if (frag.starts_with(ansi::apc_prefix_mouse_iscroll))
+                                    {
+                                        frag.remove_prefix(ansi::apc_prefix_mouse_iscroll.size());
+                                        if (auto h = utf::to_int<si32>(frag); h && frag)
+                                        {
+                                            frag.pop_front(); // Pop ','
+                                            if (auto v = utf::to_int<si32>(frag))
+                                            {
+                                                //todo make it twod
+                                                m.hzwheel = h.value() != 0;
+                                                m.wheelsi = m.hzwheel ? h.value() : v.value();
+                                            }
+                                        }
+                                    }
+                                    else if (frag.starts_with(ansi::apc_prefix_mouse_fscroll))
+                                    {
+                                        frag.remove_prefix(ansi::apc_prefix_mouse_fscroll.size());
+                                        if (auto h = utf::to_int<ui32, 16>(frag); h && frag)
+                                        {
+                                            frag.pop_front(); // Pop ','
+                                            if (auto v = utf::to_int<ui32, 16>(frag))
+                                            {
+                                                //todo make it fp2d
+                                                auto fh = *reinterpret_cast<fp32*>(&h.value());
+                                                auto fv = *reinterpret_cast<fp32*>(&v.value());
+                                                m.hzwheel = fh != 0;
+                                                m.wheelfp = m.hzwheel ? fh : fv;
+                                            }
+                                        }
+                                    }
+                                });
+                                m.changed++;
+                                m.timecod = datetime::now();
+                                mouse(m);
+                            }
                             else if (t == type::mouse) // ESC [ < ctrl ; xpos ; ypos M
                             {
                                 auto tmp = s.substr(3); // Pop "\033[<"

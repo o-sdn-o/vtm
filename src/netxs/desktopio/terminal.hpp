@@ -60,13 +60,42 @@ namespace netxs::ui
 {
     namespace terminal
     {
+        namespace event_source
+        {
+            static constexpr auto _counter = __COUNTER__ + 1;
+            static constexpr auto keyboard  = 1 << (__COUNTER__ - _counter);
+            static constexpr auto mouse     = 1 << (__COUNTER__ - _counter);
+            static constexpr auto focus     = 1 << (__COUNTER__ - _counter);
+            static constexpr auto format    = 1 << (__COUNTER__ - _counter);
+            static constexpr auto clipboard = 1 << (__COUNTER__ - _counter);
+            static constexpr auto window    = 1 << (__COUNTER__ - _counter);
+            static constexpr auto system    = 1 << (__COUNTER__ - _counter);
+        }
         namespace events = netxs::events::userland::terminal;
+        static auto event_source_map = utf::unordered_map<text, si32>
+           {{ "keyboard"s,  event_source::keyboard  },
+            { "mouse"s,     event_source::mouse     },
+            { "focus"s,     event_source::focus     },
+            { "format"s,    event_source::format    },
+            { "clipboard"s, event_source::clipboard },
+            { "window"s,    event_source::window    },
+            { "system"s,    event_source::system    }};
     }
 
     struct term
         : public ui::form<term>
     {
         static constexpr auto classname = basename::terminal;
+        static constexpr auto event_source_name = std::to_array(
+        {
+            "keyboard",
+            "mouse",
+            "focus",
+            "format",
+            "clipboard",
+            "window",
+            "system",
+        });
 
         #define proc_list \
             X(KeyEvent             ) /* */ \
@@ -78,6 +107,7 @@ namespace netxs::ui
             X(ScrollViewportToEnd  ) /* */ \
             X(SendKey              ) /* */ \
             X(Print                ) /* */ \
+            X(PrintLn              ) /* */ \
             X(CopyViewport         ) /* */ \
             X(CopySelection        ) /* */ \
             X(PasteClipboard       ) /* */ \
@@ -93,6 +123,8 @@ namespace netxs::ui
             X(LineAlignMode        ) /* */ \
             X(LogMode              ) /* */ \
             X(ClearScrollback      ) /* */ \
+            X(ScrollbackSize       ) /* */ \
+            X(EventReporting       ) /* */ \
             X(Restart              ) /* */ \
             X(Quit                 ) /* */ \
 
@@ -400,7 +432,7 @@ namespace netxs::ui
             using prot = input::mouse::prot;
 
             term& owner; // m_tracking: Terminal object reference.
-            twod  coord; // m_tracking: Last coord of mouse cursor.
+            fp2d  coord; // m_tracking: Last coord of mouse cursor.
             subs  token; // m_tracking: Subscription token.
             prot  encod; // m_tracking: Mouse encoding protocol.
             mode  state; // m_tracking: Mouse reporting mode.
@@ -445,6 +477,15 @@ namespace netxs::ui
                 state = (mode)(state | m);
                 if (state && !token.size()) // Do not subscribe if it is already subscribed.
                 {
+                    owner.on(tier::mouserelease, input::key::MouseLeave, token, [&](hids& gear)
+                    {
+                        if (owner.selmod == mime::disabled)
+                        {
+                            coord = { fp32nan, fp32nan }; // Forward a mouse halt event.
+                            owner.ipccon.mouse(gear, true, coord, encod, state);
+                        }
+                    });
+                    owner.bell::dup_handler(tier::general, input::events::halt.id, token.back());
                     owner.LISTEN(tier::release, input::events::device::mouse::any, gear, token)
                     {
                         check_focus(gear);
@@ -456,10 +497,10 @@ namespace netxs::ui
                             }
                             else if (gear.m_sys.buttons) gear.capture(owner.id);
                             auto& console = *owner.target;
-                            auto c = twod{ gear.m_sys.coordxy };
+                            auto c = gear.m_sys.coordxy;
                             c.y -= console.get_basis();
                             auto moved = coord((state & mode::over) ? c
-                                                                    : std::clamp(c, dot_00, console.panel - dot_11));
+                                                                    : std::clamp(c, fp2d{ dot_00 }, fp2d{ console.panel - dot_11 }));
                             if (gear.m_sav.changed != gear.m_sys.changed)
                             {
                                 owner.ipccon.mouse(gear, moved, coord, encod, state);
@@ -1052,7 +1093,7 @@ namespace netxs::ui
                 vt.intro[ctrl::esc][esc_nel   ] = V{ p->cr(); p->dn(1); }; // ESC E  Move cursor down and CR. Same as CSI 1 E
                 vt.intro[ctrl::esc][esc_decdhl] = V{ p->dhl(q); };         // ESC # ...  ESC # 3, ESC # 4, ESC # 5, ESC # 6, ESC # 8
 
-                vt.intro[ctrl::esc][esc_apc   ] = V{ p->msg(esc_apc, q); }; // ESC _ ... ST  APC.
+                vt.intro[ctrl::esc][esc_apc   ] = V{ p->apc(q); };          // ESC _ ... ST  APC.
                 vt.intro[ctrl::esc][esc_dcs   ] = V{ p->msg(esc_dcs, q); }; // ESC P ... ST  DCS.
                 vt.intro[ctrl::esc][esc_sos   ] = V{ p->msg(esc_sos, q); }; // ESC X ... ST  SOS.
                 vt.intro[ctrl::esc][esc_pm    ] = V{ p->msg(esc_pm , q); }; // ESC ^ ... ST  PM.
@@ -1641,6 +1682,34 @@ namespace netxs::ui
                     default:
                         log("%%ESC # %char% (%val%) is unknown", prompt::term, (char)c, c);
                         break;
+                }
+            }
+            void apc(qiew& q)
+            {
+                parser::flush();
+                auto script_body = qiew{};
+                auto head = q.begin();
+                auto tail = q.end();
+                while (head != tail)
+                {
+                    auto c = *head++;
+                    if (c == ansi::c0_bel)
+                    {
+                        script_body = qiew{ q.begin(), std::prev(head) };
+                        break;
+                    }
+                    else if (c == ansi::c0_esc && head != tail && *head == '\\')
+                    {
+                        script_body = qiew{ q.begin(), std::prev(head) };
+                        head++;
+                        break;
+                    }
+                }
+                q = { head, tail };
+                if (script_body)
+                {
+                    auto& luafx = owner.bell::indexer.luafx;
+                    luafx.run_script(owner, script_body);
                 }
             }
             void msg(si32 cmd, qiew& q)
@@ -7002,6 +7071,7 @@ namespace netxs::ui
         hook       onerun; // term: One-shot token for restart session.
         bool       rawkbd; // term: Exclusive keyboard access.
         bool       bottom_anchored; // term: Anchor scrollback content when resizing (default is anchor at bottom).
+        ui32       event_sources; // term: vt-input-mode event reporting bit-field.
         vtty       ipccon; // term: IPC connector. Should be destroyed first.
 
         // term: Place rectangle block to the scrollback buffer.
@@ -8271,7 +8341,8 @@ namespace netxs::ui
               kbmode{ prot::vt },
               ime_on{ faux },
               rawkbd{ faux },
-              bottom_anchored{ true }
+              bottom_anchored{ true },
+              event_sources{}
         {
             set_fg_color(defcfg.def_fcolor);
             set_bg_color(defcfg.def_bcolor);
@@ -8333,7 +8404,7 @@ namespace netxs::ui
                                                         }
                                                         else
                                                         {
-                                                            auto state = luafx.get_args_or(1, 0);
+                                                            auto state = luafx.get_args_or(1, si32{ 0 });
                                                             set_rawkbd(1 + (si32)!!state);
                                                             luafx.set_return();
                                                         }
@@ -8398,8 +8469,28 @@ namespace netxs::ui
                                                     {
                                                         luafx.run_with_gear([&](auto& gear)
                                                         {
-                                                            auto crop = luafx.get_args_or(1, ""s);
+                                                            auto args_count = luafx.args_count();
+                                                            auto crop = text{};
+                                                            for (auto i = 1; i <= args_count; i++)
+                                                            {
+                                                                crop += luafx.get_args_or(i, ""s);
+                                                            }
                                                             if (crop.size()) data_in(crop);
+                                                            gear.set_handled();
+                                                        });
+                                                    }},
+                { methods::PrintLn,                 [&]
+                                                    {
+                                                        luafx.run_with_gear([&](auto& gear)
+                                                        {
+                                                            auto args_count = luafx.args_count();
+                                                            auto crop = text{};
+                                                            for (auto i = 1; i <= args_count; i++)
+                                                            {
+                                                                crop += luafx.get_args_or(i, ""s);
+                                                            }
+                                                            crop += "\n\r";
+                                                            data_in(crop);
                                                             gear.set_handled();
                                                         });
                                                     }},
@@ -8454,7 +8545,7 @@ namespace netxs::ui
                                                         }
                                                         else
                                                         {
-                                                            auto state = luafx.get_args_or(1, 1);
+                                                            auto state = luafx.get_args_or(1, si32{ 1 });
                                                             set_selmod(state % mime::count);
                                                             luafx.set_return();
                                                         }
@@ -8529,7 +8620,7 @@ namespace netxs::ui
                                                         }
                                                         else
                                                         {
-                                                            auto state = luafx.get_args_or(1, 0);
+                                                            auto state = luafx.get_args_or(1, si32{ 0 });
                                                             base::riseup(tier::preview, terminal::events::toggle::cwdsync, state);
                                                             luafx.set_return();
                                                         }
@@ -8579,7 +8670,7 @@ namespace netxs::ui
                                                         }
                                                         else
                                                         {
-                                                            auto state = luafx.get_args_or(1, 0);
+                                                            auto state = luafx.get_args_or(1, si32{ 0 });
                                                             set_log(state);
                                                             luafx.set_return();
                                                         }
@@ -8593,6 +8684,76 @@ namespace netxs::ui
                                                         }
                                                         clear_scrollback();
                                                         luafx.set_return();
+                                                    }},
+                { methods::ScrollbackSize,          [&]
+                                                    {
+                                                        luafx.run_with_gear_wo_return([&](auto& gear){ gear.set_handled(); });
+                                                        target->flush();
+                                                        auto args_count = luafx.args_count();
+                                                        if (!args_count)
+                                                        {
+                                                            luafx.set_return(defcfg.def_length, defcfg.def_growdt, defcfg.def_growmx);
+                                                        }
+                                                        else
+                                                        {
+                                                            auto ring_size = luafx.get_args_or(1, defcfg.def_length);
+                                                            auto grow_step = luafx.get_args_or(2, defcfg.def_growdt);
+                                                            auto grow_mxsz = luafx.get_args_or(3, defcfg.def_growmx);
+                                                            normal.resize_history(ring_size, grow_step, grow_mxsz);
+                                                            luafx.set_return();
+                                                        }
+                                                    }},
+                { methods::EventReporting,          [&]
+                                                    {
+                                                        luafx.run_with_gear_wo_return([&](auto& gear){ gear.set_handled(); });
+                                                        auto args_count = luafx.args_count();
+                                                        if (!args_count)
+                                                        {
+                                                            auto src_list = txts{};
+                                                            auto i = 0;
+                                                            auto e = event_sources;
+                                                            while (e)
+                                                            {
+                                                                if (e & 1) src_list.push_back(event_source_name[i]);
+                                                                i++;
+                                                                e >>= 1;
+                                                            }
+                                                            luafx.set_return_array(src_list);
+                                                        }
+                                                        else
+                                                        {
+                                                            auto prev_event_sources = event_sources;
+                                                            for (auto i = 1; i <= args_count; i++)
+                                                            {
+                                                                auto src = luafx.get_args_or(i, ""s);
+                                                                if (src.empty())
+                                                                {
+                                                                    event_sources = {};
+                                                                }
+                                                                else
+                                                                {
+                                                                    auto iter = ui::terminal::event_source_map.find(src);
+                                                                    if (iter != ui::terminal::event_source_map.end())
+                                                                    {
+                                                                        event_sources |= iter->second;
+                                                                    }
+                                                                    else
+                                                                    {
+                                                                        log("%%Unknown event source: '%%'", prompt::term, src);
+                                                                    }
+                                                                }
+                                                            }
+                                                            auto mouse_tracking = event_sources & ui::terminal::event_source::mouse;
+                                                            if ((prev_event_sources & ui::terminal::event_source::mouse) != mouse_tracking)
+                                                            {
+                                                                base::enqueue([&, mouse_tracking](auto& /*boss*/) // Perform switching outside of Lua script context.
+                                                                {
+                                                                    mouse_tracking ? mtrack.enable(input::mouse::mode::vt_input_mode)
+                                                                                   : mtrack.disable(input::mouse::mode::vt_input_mode);
+                                                                });
+                                                            }
+                                                            luafx.set_return();
+                                                        }
                                                     }},
                 { methods::Restart,                 [&]
                                                     {
