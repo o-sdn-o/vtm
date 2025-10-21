@@ -22,7 +22,7 @@ namespace netxs::app
 
 namespace netxs::app::shared
 {
-    static const auto version = "v2025.08.19";
+    static const auto version = "v2025.10.21";
     static const auto repository = "https://github.com/directvt/vtm";
     static const auto usr_config = "~/.config/vtm/settings.xml"s;
     static const auto sys_config = "/etc/vtm/settings.xml"s;
@@ -645,9 +645,9 @@ namespace netxs::app::shared
                     auto& applet = *applet_ptr;
                     applet.LISTEN(tier::anycast, e2::form::upon::started, root_ptr)
                     {
-                        applet.base::enqueue([&](auto&)
+                        applet.base::enqueue([&](auto&) // Enqueue the trigger to window menu update.
                         {
-                            applet.base::signal(tier::release, e2::form::upon::started, root_ptr); // Fire a release started event after all initializations.
+                            applet.base::signal(tier::release, e2::form::upon::started); // Fire a release started event after all initializations.
                         });
                     };
                     return applet_ptr;
@@ -920,6 +920,9 @@ namespace netxs::app::shared
         g.NsInfoRotationFlipandMirror     = config.settings::take("/Ns/Info/SF/RotationFlipandMirror"     , ""s);
         g.NsInfoCharacterMatrix           = config.settings::take("/Ns/Info/SF/CharacterMatrix"           , ""s);
         g.NsInfoCharacterHalves           = config.settings::take("/Ns/Info/SF/CharacterHalves"           , ""s);
+        g.NsInfoTuiShadows                = config.settings::take("/Ns/Info/SF/TuiShadows"                , ""s);
+        g.NsInfoTuiShadowsInner           = config.settings::take("/Ns/Info/SF/TuiShadowsInner"           , ""s);
+        g.NsInfoTuiShadowsOuter           = config.settings::take("/Ns/Info/SF/TuiShadowsOuter"           , ""s);
         g.NsInfosRGBBlending              = config.settings::take("/Ns/Info/SF/sRGBBlending"              , ""s);
         g.NsInfoPressCtrlCaps             = config.settings::take("/Ns/Info/SF/PressCtrlCaps"             , ""s);
 
@@ -998,7 +1001,7 @@ namespace netxs::app::shared
         app::shared::applet_kb_navigation(config, applet_ptr);
         gate.attach(std::move(applet_ptr));
         ui_lock.unlock();
-        gate.launch();
+        gate.launch(ui_lock);
         gate.base::dequeue();
         ui_lock.lock();
         gate_ptr.reset();

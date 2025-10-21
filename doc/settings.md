@@ -398,7 +398,7 @@ The syntax for defining event bindings is:
 
 ```xml
 <dom_element1>
-    <script="script body" on="EventID1" ... on="preview:EventId2" ...>
+    <script="script body" prerun="prerun script body" on="EventID1" ... on="preview:EventId2" ...>
         <on="EventID"/>
         <on="EventID" source="OptionalEventSourceObjectID"/>
         ...
@@ -416,6 +416,7 @@ Tag                 | Belongs to           | Value           | Description
 `<dom_element>`     |                      | ObjectID        | Visual tree object id.
 `id`                | `<dom_element>`      | UTF-8 string    | Additional id for the visual tree object.
 `script`            | `<dom_element>`      | UTF-8 string    | A Lua script that will be executed when the events specified by the `on` tags occur.
+`prerun`            | `script`             | UTF-8 string    | A Lua script that will be executed during pre-polling prior the non-preview keyboard events specified in the `on` tags occurs. This is mostly used to indicate that the event is not expected on the source object.
 `on`                | `script`             | EventID         | Specific event id text string.
 `source`            | `on`                 | ObjectID        | Visual tree object id.
 
@@ -581,6 +582,8 @@ Standard object names
 |                 |                          | `vtm.gate.WheelAccumReset()`                       | Reset floating point step accumulator for mouse wheel.
 |                 |                          | `vtm.gate.CellHeightReset()`                       | Resets the cell height to the value specified in the settings.
 |                 |                          | `vtm.gate.AntialiasingMode() -> int`               | Toggle anti-aliasing mode.
+|                 |                          | `vtm.gate.SetOverlay(int index, string s)`         | Set user's console visual overlay. Remove overlay for index `index` if `s` is empty. The overlay will be rendered behind everything (background) if index < 0.
+|                 |                          | `vtm.gate.Deface()`                                | Trigger to redraw.
 |`applet`         | Running applet           | `vtm.applet.Warp(int l, int r, int t, int b)`      | Request to deform the applet window. The parameters specify four deltas for the left, right, top and bottom sides of the applet window.
 |                 |                          | `vtm.applet.ZOrder() -> int`                       | Request the current z-order state of the applet window.
 |                 |                          | `vtm.applet.ZOrder(int n) -> int`                  | Set the current z-order state for the applet window. -1: backmost; 0: normal; 1: topmost.
@@ -591,14 +594,26 @@ Standard object names
 |                 |                          | `vtm.applet.Restore()`                             | Restore applet window.
 |`gear`           | User mouse and keyboard  | `vtm.gear.IsKeyRepeated() -> bool`                 | Returns true if the keyboard event is a key-repeat generated event.
 |                 |                          | `vtm.gear.SetHandled()`                            | Set that the event is processed, and stop further processing.
+|                 |                          | `vtm.gear.Interrupt()`                             | Interrupt the key event processing.
 |                 |                          | `vtm.gear.RepeatWhilePressed(ref ObjectId)`        | Capture the mouse by ObjectId and trigger the mouse button pressed event to repeat while pressed.
 |                 |                          | `vtm.gear.Focus(ref ObjectId) -> bool`             | Set input focus to the object. Returns true if focus is already set.
+|                 |                          | `vtm.gear.Bypass() -> bool`                        | Indicates that the keyboard event being processed is not expected by this object. Used by the `prerun` function inside `script` to bypass tier::keybdrelease events. Always return true.
+|                 |                          | `vtm.gear.GetCoord() -> float x, y`                | Get mouse pointer 32-bit floating point coordinates.
 |`desktop`        | Desktop environment      | `vtm.desktop.Cleanup(bool b)`                      | Clean up temporary internal structures of the desktop environment and optionally report the state of registry objects.
 |                 |                          | `vtm.desktop.EventList()`                          | Print all available generic event IDs.
 |                 |                          | `vtm.desktop.Shutdown()`                           | Close all windows and shutdown the desktop.
 |                 |                          | `vtm.desktop.Disconnect()`                         | Disconnect the current desktop user.
 |                 |                          | `vtm.desktop.Run({ lua_table })`                   | Run the specified applet.
 |                 |                          | `vtm.desktop.FocusNextWindow(int n)`               | Set focus to the next (n=1) or previous (n=-1) desktop window.
+|                 |                          | `vtm.desktop.SetOverlay(int index, string s)`      | Set desktop visual overlay for all users. Remove overlay for index `index` if `s` is empty. The overlay will be rendered behind everything (background) if index < 0.
+|                 |                          | `vtm.desktop.Deface()`                             | Trigger to redraw.
+|`taskbar`        | Desktop taskbar          | `vtm.taskbar.ActivateItem()`                       | Activate the focused UI element on the taskbar.
+|                 |                          | `vtm.taskbar.FocusNextItem(int n, int min_w, int max_w = intmax)` | Move to the next(n>0)/prev(n<0) focusable element with `min_w` <= weight <= `max_w`, skipping (std::abs(n)-1) elements with `min_w` <= weight <= `max_w` and all elements with weight < `min_w`.
+|                 |                          | `vtm.taskbar.FocusTop()`                           | Set focus to the first (top) focusable UI element among the elements on the taskbar.
+|                 |                          | `vtm.taskbar.FocusEnd()`                           | Set focus to the last (bottom) focusable UI element among the elements on the taskbar.
+|                 |                          | `vtm.taskbar.ChangeWidthByStep(int n)`             | Change the taskbar width by step n.
+|                 |                          | `vtm.taskbar.GetFocusedWeight() -> int w`          | Get the weight of the focused taskbar element.
+|                 |                          | `vtm.taskbar.GetHeight() -> int h1, h2`            | Get taskbar height (h1) and line height (h2).
 |`tile`           | Tiling window manager    | `vtm.tile.FocusNextPaneOrGrip(int n)`              | Set focus to the next (n=1) or previous (n=-1) tile's pane or pane splitter.
 |                 |                          | `vtm.tile.FocusNextPane(int n)`                    | Set focus to the next (n=1) or previous (n=-1) tile's pane.
 |                 |                          | `vtm.tile.FocusNextGrip(int n)`                    | Set focus to the next (n=1) or previous (n=-1) pane splitter.
@@ -614,6 +629,7 @@ Standard object names
 |                 |                          | `vtm.grip.ResizeGrip(int n)`                       | Set splitter width to n.
 |                 |                          | `vtm.grip.FocusNextGrip(int n)`                    | Set focus to the next (n=1) or previous (n=-1) tile's splitter.
 |`terminal`       |                          | `vtm.terminal.KeyEvent({ ... })`                   | Generates a terminal key event using the specified parameters.<br>- `keystat=...,`: Pressed state. 1 - Pressed, 0 - Released.<br>- `ctlstat=...,`: Keyboard modifiers bit-field.<br>- `virtcod=...,`: Key virtual code.<br>- `scancod=...,`: Key scan code.<br>- `keycode=...,`: Physical key code.<br>- `extflag=...,`: Extended key flag.<br>- `cluster=...,`: Text cluster generated by the key.
+|                 |                          | `vtm.terminal.ForwardKeys()`                       | Send the last keyboard event to the terminal.
 |                 |                          | `vtm.terminal.ExclusiveKeyboardMode(int n)`        | Set/reset exclusive keyboard mode for the terminal.
 |                 |                          | `vtm.terminal.FindNextMatch(int n)`                | Highlight next/previous(n>0/n<0) match of selected text fragment. Clipboard content is used if no active selection.
 |                 |                          | `vtm.terminal.ScrollViewportByPage(int x, int y)`  | Scroll the terminal viewport page by page in the direction specified by the 2D point { x, y }.
@@ -643,6 +659,8 @@ Standard object names
 |                 |                          | `vtm.terminal.LineAlignMode() -> int`              | Get the current line aligning mode.
 |                 |                          | `vtm.terminal.LogMode(int n)`                      | Set the current terminal logging mode on/off.
 |                 |                          | `vtm.terminal.LogMode() -> int`                    | Get the current terminal logging mode state.
+|                 |                          | `vtm.terminal.AltbufMode(bool m)`                  | Enable/disable the alternate buffer mode (DECSET/DECRST 1049).
+|                 |                          | `vtm.terminal.AltbufMode() -> bool`                | Returns true if the alternate buffer is active.
 |                 |                          | `vtm.terminal.ClearScrollback()`                   | Clear the terminal scrollback buffer.
 |                 |                          | `vtm.terminal.ScrollbackSize() -> int n, m, q`     | Get the current scrollback buffer parameters (three integer values):<br>`n` Initial buffer size<br>`m` Grow step<br>`q` Grow limit
 |                 |                          | `vtm.terminal.ScrollbackSize(int n, int m, int q)` | Set scrollback buffer parameters:<br>`n` Initial buffer size<br>`m` Grow step<br>`q` Grow limit
@@ -655,14 +673,15 @@ Standard object names
 
 Key bindings:
 
-Configuration                                                  | Interpretation
----------------------------------------------------------------|-----------------
-`<script=ScriptReference on="Key+Chord"/>`                     | Append existing bindings using an indirect reference (the `ScriptReference` variable without quotes).
-`<script="text"  on="Key+Chord \| Another+Chord"/>`            | Append existing bindings for `Key+Chord | Another+Chord`.
-`<script="text"  on="Key+Chord"/>`                             | Append existing bindings with the directly specified Lua script body.
-`<script="text"><on="Key+Chord" source="ObjectID"/></script>`  | Binding to an event source using a specific ObjectID.
-`<script=""      on="Key+Chord"/>`                             | Remove all existing bindings for the specified key combination "Key+Chord".
-`<script="..."   on=""         />`                             | Do nothing.
+Configuration                                                | Interpretation
+-------------------------------------------------------------|-----------------
+`<script=ScriptReference on="KeyChord"/>`                    | Append existing bindings using an indirect reference (the `ScriptReference` variable without quotes).
+`<script="..."  on="KeyChord \| AnotherChord"/>`             | Append existing bindings for `KeyChord | AnotherChord`.
+`<script="..."  on="KeyChord"/>`                             | Append existing bindings with the directly specified Lua script body.
+`<script="..."><on="KeyChord" source="ObjectID"/></script>`  | Binding to an event source using a specific `ObjectID`.
+`<script=""     on="KeyChord"/>`                             | Remove all existing bindings for the specified key combination `KeyChord`.
+`<script="..."  on="KeyChord" prerun="if (something) vtm.gear.Bypass() end"/>` | Bypass the `KeyChord` event if something. Works only with non-preview KeyChords.
+`<script="..."  on=""         />`                            | Do nothing.
 
 EventId's:
 
@@ -891,7 +910,7 @@ Notes
             </autorun>
             <width>  <!-- Taskbar menu width. -->
                 <folded=18/>
-                <expanded=32/>
+                <expanded=41/>
             </width>
             <timeout=250ms/>  <!-- Taskbar collaplse timeout after mouse leave. -->
             <colors>
@@ -909,7 +928,7 @@ Notes
             <height=1/>  <!-- Desktop space reserved on top. -->
         </panel>
         <background>  <!-- Desktop background. -->
-            <color fgc=whitedk bgc= #00007f80/>  <!-- Desktop background color. -->
+            <color fgc=whitedk bgc= #00003f80/>  <!-- Desktop background color. -->
             <tile=""/>                           <!-- Truecolor ANSI-art can be used here. -->
         </background>
     </desktop>
@@ -1018,13 +1037,10 @@ Notes
             <script=RollFontsForward       on="Ctrl+Shift+F12"                   />
             <script=ResetWheelAccumulator  on="preview:-Ctrl"                    />
             <script=ToggleDebugOverlay     on="Space-Backspace | Backspace-Space"/>
-            <script=FocusTaskBar           on="Esc+F1"                           />
-            <script=FocusTaskBar           on="Alt+Z"                            />
         </gate>
-        <taskbar script*>  <!-- Taskbar bindings. -->
-            <script=FocusTaskBar on="-Esc"/>
-        </taskbar>
         <desktop script*>  <!-- Desktop bindings. -->
+            <script=FocusTaskbar    on="Esc+F1"       />
+            <script=FocusTaskbar    on="Alt+Z"        />
             <script=FocusPrevWindow on="Ctrl+PageUp"  />
             <script=FocusNextWindow on="Ctrl+PageDown"/>
             <script=Disconnect      on="Shift+F7"     />
@@ -1032,6 +1048,22 @@ Notes
             <script=RunApplication  on="Alt+Shift+N"  />
             <script=RunInfoPage     on="Esc+I"        />
         </desktop>
+        <taskbar=desktop script*>  <!-- Taskbar bindings (including desktop bindings). -->
+            <script=FocusTaskbar          on="-Esc | -Alt"/>
+            <script=FocusLeftTaskbarItem  on="LeftArrow"/>
+            <script=FocusRightTaskbarItem on="RightArrow"/>
+            <script=FocusPrevTaskbarItem  on="UpArrow"/>
+            <script=FocusNextTaskbarItem  on="DownArrow"/>
+            <script=FocusPrevTaskbarPage  on="PageUp"/>
+            <script=FocusNextTaskbarPage  on="PageDown"/>
+            <script=FocusPrevTaskbarGroup on="Shift+Tab"/>
+            <script=FocusNextTaskbarGroup on="Tab"/>
+            <script=FocusTaskbarTop       on="Home"/>
+            <script=FocusTaskbarEnd       on="End"/>
+            <script=DecreaseTaskbarWidth  on="Ctrl+LeftArrow"/>
+            <script=IncreaseTaskbarWidth  on="Ctrl+RightArrow"/>
+            <script=ActivateTaskbarItem   on="Space | Enter"/>
+        </taskbar>
         <applet script*>  <!-- Applet bindings. -->
             <script=AlwaysOnTopApplet     on="Esc+T"                                              />
             <script=CloseApplet           on="Esc+W"                                              />
@@ -1085,18 +1117,18 @@ Notes
                 vtm.terminal.ClearSelection()
                 vtm.terminal.KeyEvent({ virtcod=0x1b, scancod=1, keystat=1, cluster='\\u{1b}' }, { virtcod=0x1b, scancod=1, keystat=0 })
             </script>
-            <script=TerminalFindNext                   on="Alt+RightArrow"       />
-            <script=TerminalFindPrev                   on="Alt+LeftArrow"        />
-            <script=TerminalScrollViewportOnePageUp    on="Shift+Ctrl+PageUp"    />
-            <script=TerminalScrollViewportOnePageDown  on="Shift+Ctrl+PageDown"  />
-            <script=TerminalScrollViewportOnePageLeft  on="Shift+Alt+LeftArrow"  />
-            <script=TerminalScrollViewportOnePageRight on="Shift+Alt+RightArrow" />
-            <script=TerminalScrollViewportOneLineUp    on="Shift+Ctrl+UpArrow"   />
-            <script=TerminalScrollViewportOneLineDown  on="Shift+Ctrl+DownArrow" />
-            <script=TerminalScrollViewportOneCellLeft  on="Shift+Ctrl+LeftArrow" />
-            <script=TerminalScrollViewportOneCellRight on="Shift+Ctrl+RightArrow"/>
-            <script=TerminalScrollViewportToTop        on="Shift+Ctrl+Home"      />
-            <script=TerminalScrollViewportToEnd        on="Shift+Ctrl+End"       />
+            <script=IgnoreAltbuf | TerminalFindNext                   on="Alt+RightArrow"       />
+            <script=IgnoreAltbuf | TerminalFindPrev                   on="Alt+LeftArrow"        />
+            <script=IgnoreAltbuf | TerminalScrollViewportOnePageUp    on="Shift+Ctrl+PageUp"    />
+            <script=IgnoreAltbuf | TerminalScrollViewportOnePageDown  on="Shift+Ctrl+PageDown"  />
+            <script=IgnoreAltbuf | TerminalScrollViewportOnePageLeft  on="Shift+Alt+LeftArrow"  />
+            <script=IgnoreAltbuf | TerminalScrollViewportOnePageRight on="Shift+Alt+RightArrow" />
+            <script=IgnoreAltbuf | TerminalScrollViewportOneLineUp    on="Shift+Ctrl+UpArrow"   />
+            <script=IgnoreAltbuf | TerminalScrollViewportOneLineDown  on="Shift+Ctrl+DownArrow" />
+            <script=IgnoreAltbuf | TerminalScrollViewportOneCellLeft  on="Shift+Ctrl+LeftArrow" />
+            <script=IgnoreAltbuf | TerminalScrollViewportOneCellRight on="Shift+Ctrl+RightArrow"/>
+            <script=IgnoreAltbuf | TerminalScrollViewportToTop        on="Shift+Ctrl+Home"      />
+            <script=IgnoreAltbuf | TerminalScrollViewportToEnd        on="Shift+Ctrl+End"       />
             <script=TerminalSendKey                    on=""                     />
             <script=TerminalReset                      on=""                     />
             <script=TerminalClearScrollback            on=""                     />
@@ -1119,7 +1151,7 @@ Notes
             <script="vtm.defapp.ShowClosingPreview(faux);"                                            on="Any"         /> <!-- Preview for "Any" is always triggered after all other previews. Non-preview "Any" is triggered before all other keys. -->
             <script="if (not vtm.gear.IsKeyRepeated()) then vtm.defapp.ShowClosingPreview(true); end" on="Esc"         /> <!-- Window pred-close action (close when releasing the Esc key). -->
             <script="if (vtm.defapp.ShowClosingPreview()) then vtm.defapp.Close() end"                on="preview:-Esc"/> <!-- Close the window on Esc release. -->
-            <script="if (vtm.defapp.ShowClosingPreview()) then local focus_count=vtm(); vtm.defapp.ShowClosingPreview(focus_count~=0) end" source="applet" on="release:e2::form::state::focus::count" /> <!-- Disable window closing preview when focus is lost. -->
+            <script="if (vtm.defapp.ShowClosingPreview()) then local focus_count=vtm(); vtm.defapp.ShowClosingPreview(focus_count~=0) end" on="release:e2::form::state::focus::count" /> <!-- Disable window closing preview when focus is lost. -->
             <script="vtm.defapp.ScrollViewportByPage( 0, 1)"                                          on="PageUp"      />
             <script="vtm.defapp.ScrollViewportByPage( 0,-1)"                                          on="PageDown"    />
             <script="vtm.defapp.ScrollViewportByStep( 0, 3)"                                          on="UpArrow"     />
@@ -1281,6 +1313,9 @@ Notes
                 <RotationFlipandMirror="Rotation, Flip, and Mirror"/>
                 <CharacterMatrix="Character Matrix"/>
                 <CharacterHalves="Character Halves"/>
+                <TuiShadows="UI Shadows"/>
+                <TuiShadowsInner="Inner shadow"/>
+                <TuiShadowsOuter="Outer shadow"/>
                 <sRGBBlending="sRGB Gamma-correct Blending"/>
                 <PressCtrlCaps="Press Ctrl+CapsLock to toggle antialiasing mode on to check results."/>
             </SF>
@@ -1324,13 +1359,13 @@ Notes
                 </App>
             </Apps>
             <tooltip_footer>
-                "\e[m\n""   LeftClick to launch instance ""\n"
-                        "   RightClick to set as default "
+                "   LeftClick to launch instance ""\n"
+                "   RightClick to set as default "
             </tooltip_footer>
-            <Terminal    label="Terminal Emulator" title="Terminal"       tooltip="\e[1m Terminal Console                \e[m\n"|tooltip_footer/>
-            <Tile        label="Window Manager"    title="Window Manager" tooltip="\e[1m Tiling Window Manager           \e[m\n"|tooltip_footer/>
-            <Site        label="Viewport Marker"   title="Site "          tooltip="\e[1m Desktop Viewport Marker         \e[m\n"|tooltip_footer/>
-            <Logs        label="Log Monitor"       title="Log Monitor"    tooltip="\e[1m Log Monitor                     \e[m\n"|tooltip_footer/>
+            <Terminal    label="Terminal Emulator" title="Terminal"       tooltip="\e[1m Terminal Console               \e[m\n"|tooltip_footer/>
+            <Tile        label="Window Manager"    title="Window Manager" tooltip="\e[1m Tiling Window Manager          \e[m\n"|tooltip_footer/>
+            <Site        label="Viewport Marker"   title="Site "          tooltip="\e[1m Desktop Viewport Marker        \e[m\n"|tooltip_footer/>
+            <Logs        label="Log Monitor"       title="Log Monitor"    tooltip="\e[1m Log Monitor                    \e[m\n"|tooltip_footer/>
             <Grips    tooltip=" LeftDrag to adjust taskbar width "/>
             <UserList tooltip=" List of active connections ">
                 <Admins label="admins"/>
@@ -1421,6 +1456,7 @@ Notes
             <Apps label="applets"/>
         </Taskbar>
     </en-GB>
+
     <ru-RU>
         <TextbasedDesktopEnvironment="  Текстовая среда рабочего стола  "/>
         <Info label="Информация" title=label tooltip=" Информация ">
@@ -1494,6 +1530,9 @@ Notes
                 <RotationFlipandMirror="Вращение, переворот и отражение"/>
                 <CharacterMatrix="Матрица символов"/>
                 <CharacterHalves="Половинки символов"/>
+                <TuiShadows="Тени в пользовательском интерфейсе"/>
+                <TuiShadowsInner="Внутренняя тень"/>
+                <TuiShadowsOuter="Внешняя тень"/>
                 <sRGBBlending="Гамма-корректное sRGB наложение"/>
                 <PressCtrlCaps="Чтобы посмотреть работу наложения, переключите режим антиалиасинга нажатием Ctrl+CapsLock."/>
             </SF>
@@ -1838,7 +1877,7 @@ Notes
     <RunInfoPage           ="vtm.desktop.Run({ title='Info-page', hidden=true, label='Info', type='info' });"/>  <!-- Run Info-page. -->
     <FocusPrevWindow       ="vtm.desktop.FocusNextWindow(-1);"/>  <!-- Switch focus to the prev window. -->
     <FocusNextWindow       ="vtm.desktop.FocusNextWindow( 1);"/>  <!-- Switch focus to the next window. -->
-    <FocusTaskBar          ="if (vtm.gear.Focus(vtm.taskbar)) then vtm.gear.Focus(vtm.desktop) end;"/>  <!-- Set input focus to the taskbar or return focus back to the desktop. -->
+    <FocusTaskbar          ="if (vtm.gear.Focus(vtm.taskbar)) then vtm.gear.Focus(vtm.desktop); end; vtm.gear.Interrupt();"/>  <!-- Set input focus to the taskbar or return focus back to the desktop. -->
 
     <AlwaysOnTopApplet     ="vtm.applet.ZOrder(vtm.applet.ZOrder()==1 and 0 or 1);"/>  <!-- Request to toggle z-order window attribute. -1: backmost; 0: plain; 1: topmost. -->
     <CloseApplet           ="vtm.applet.Close();"/>            <!-- Request to Close window. -->
@@ -1923,5 +1962,44 @@ Notes
     <TerminalAlignMode                 ="vtm.terminal.LineAlignMode((vtm.terminal.LineAlignMode() + 1) % 3);"/>    <!-- Toggle terminal scrollback lines aligning mode. Applied to the active selection if it is. 0: left; 1: right; 2: center. -->
     <TerminalStdioLog                  ="vtm.terminal.LogMode(vtm.terminal.LogMode()==1 and 0 or 1);"/>            <!-- Toggle stdin/stdout logging. -->
     <TerminalRestart                   ="vtm.terminal.Restart();"/>                    <!-- Terminate runnning console apps and restart current session. -->
+    <IgnoreAltbuf                      ="if (vtm.terminal.AltbufMode()) then vtm.terminal.ForwardKeys(); return; end;"/>  <!-- Forward the last key event to the terminal if the alternate buffer is active. -->
+
+    <!-- Taskbar focus layout.
+            Splitter(not focusable)
+            AppGroup(weight=100)  CollapseButton(10) CloseAllButton(10)
+                RunningApp(50)  CloseButton(10)
+            ...
+            AppGroup(100)
+            UserListHeader(not focusable)  UserListCollapseButton(100)
+                UserLabel(50)
+                ...
+                UserLabel(50)
+            DisconnectButton(100)  ShutdownButton(10)
+        Keyboard focus switching logic.
+            DownArrow   Move to the next focusable element with a weight of at least 50, skipping elements with a lower weight.
+            UpArrow     Move to the prev focusable element with a weight of at least 50, skipping elements with a lower weight.
+            RightArrow  Move to the next focusable element with a weight of at least 10, skipping elements with a lower weight
+            LeftArrow   Move to the prev focusable element with a weight no less than the CURRENT one, skipping elements with a lower weight.
+            Tab         Move to the next focusable element with a weight of at least 100, skipping elements with a lower weight.
+            Shift+Tab   Move to the prev focusable element with a weight of at least 100, skipping elements with a lower weight.
+            PageDown    Move to the next focusable element skipping N elements with weight >= 50, where N=taskbar_height/(2*line_height).
+            PageUp      Move to the prev focusable element skipping N elements with weight >= 50, where N=taskbar_height/(2*line_height).
+            Home        Move to the first(top) focusable element with a weight of at least 100 in the visual tree.
+            End         Move to the last(bottom) focusable element with a weight of at least 100 in the visual tree.
+        vtm.taskbar.FocusNextItem(si32 n, si32 min_w, si32 max_w = si32max); // Move to the next(n>0)/prev(n<0) focusable element with `min_w` <= weight <= `max_w`, skipping (std::abs(n)-1) elements with `min_w` <= weight <= `max_w` and all elements with weight < `min_w`.
+    -->
+    <FocusLeftTaskbarItem  ="local w=vtm.taskbar.GetFocusedWeight(); vtm.taskbar.FocusNextItem(-1, w);"/>
+    <FocusRightTaskbarItem ="vtm.taskbar.FocusNextItem( 1, 10, 10);"/>
+    <FocusPrevTaskbarItem  ="vtm.taskbar.FocusNextItem(-1, 50);"/>
+    <FocusNextTaskbarItem  ="vtm.taskbar.FocusNextItem( 1, 50);"/>
+    <FocusPrevTaskbarPage  ="local h1,h2=vtm.taskbar.GetHeight(); vtm.taskbar.FocusNextItem(-h1/(2*h2), 50);"/>
+    <FocusNextTaskbarPage  ="local h1,h2=vtm.taskbar.GetHeight(); vtm.taskbar.FocusNextItem( h1/(2*h2), 50);"/>
+    <FocusPrevTaskbarGroup ="vtm.taskbar.FocusNextItem(-1, 100);"/>
+    <FocusNextTaskbarGroup ="vtm.taskbar.FocusNextItem( 1, 100);"/>
+    <FocusTaskbarTop       ="vtm.taskbar.FocusTop();"/>
+    <FocusTaskbarEnd       ="vtm.taskbar.FocusEnd();"/>
+    <DecreaseTaskbarWidth  ="vtm.taskbar.ChangeWidthByStep(-1);"/>
+    <IncreaseTaskbarWidth  ="vtm.taskbar.ChangeWidthByStep(1);"/>
+    <ActivateTaskbarItem   ="vtm.taskbar.ActivateItem();"/>
 </Scripting>
 ```

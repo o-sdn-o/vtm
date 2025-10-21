@@ -2063,7 +2063,6 @@ namespace netxs::gui
                 m.enabled = input::hids::stat::ok;
                 m.coordxy = { si16min, si16min };
                 c.fast = true;
-                //todo run gear.base::update_scripting_context() outside the ctor
             }
         };
 
@@ -2122,6 +2121,8 @@ namespace netxs::gui
         regs  fields; // winbase: Text input field list.
         link  stream; // winbase: DirectVT event proxy.
         kmap  chords; // winbase: Pressed key table (key chord).
+        bool  fake_ctrl; // winbase: Fake ctrl key event on AltGr press/release (non-US kb layouts).
+        bool  wait_ralt; // winbase: Wait RightAlt right after the fake LeftCtrl.
 
         winbase(auth& indexer, std::list<text>& font_names, si32 cell_height, bool antialiasing, span blink_rate, twod grip_cell)
             : base{ indexer },
@@ -2151,7 +2152,9 @@ namespace netxs::gui
               heldby{ 0x0 },
               whlacc{ 0.f },
               wdelta{ 24.f },
-              stream{ *this, *os::dtvt::client }
+              stream{ *this, *os::dtvt::client },
+              fake_ctrl{ faux },
+              wait_ralt{ faux }
         { }
 
         virtual bool layer_create(layer& s, winbase* host_ptr = nullptr, twod win_coord = {}, twod grid_size = {}, dent border_dent = {}, twod cell_size = {}) = 0;
@@ -2214,10 +2217,16 @@ namespace netxs::gui
         }
         void print_vkstat(text s)
         {
-            s += "\n"s;
+            s += "\n    x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 xA xB xC xD xE xF"s;
             auto i = 0;
             for (auto k : vkstat)
             {
+                if (i % 16 == 0)
+                {
+                    s += "\n ";
+                    utf::to_hex<true>(i, s, 2);
+                    s += ' ';
+                }
                      if (k == 0x80) s += ansi::fgc(tint::greenlt);
                 else if (k == 0x01) s += ansi::fgc(tint::yellowlt);
                 else if (k == 0x81) s += ansi::fgc(tint::cyanlt);
@@ -2225,7 +2234,6 @@ namespace netxs::gui
                 else                s += ansi::nil();
                 s += utf::to_hex(k) + ' ';
                 i++;
-                if (i % 16 == 0)s += '\n';
             }
             log(s);
         }
@@ -2867,6 +2875,7 @@ namespace netxs::gui
                 stream.m.hzwheel = hz;
                 stream.m.wheelfp = wheelfp;
                 stream.m.wheelsi = wheelsi;
+                stream.m.enabled = hids::stat::ok;
                 stream.mouse(stream.m);
                 stream.m.hzwheel = {};
                 stream.m.wheelfp = {};
@@ -2880,8 +2889,11 @@ namespace netxs::gui
             stream.m.timecod = datetime::now();
             stream.m.enabled = hids::stat::halt;
             if (!mfocus.focused()) stream.m.ctlstat &= input::hids::NumLock | input::hids::CapsLock | input::hids::ScrlLock;
+            if (std::exchange(stream.gears->tooltip.visible, faux)) // Hide all active tooltips on mouse leave.
+            {
+                update_tooltip();
+            }
             stream.mouse(stream.m);
-            stream.m.enabled = hids::stat::ok;
         }
         void mouse_leave()
         {
@@ -2896,10 +2908,10 @@ namespace netxs::gui
             mhover = true;
             auto inner_rect = blinky.area;
             auto ingrip = hit_grips();
-            //if (moving && mbttns != bttn::left && mbttns != bttn::right) // Do not allow to move window with multiple buttons pressed.
-            //{
-            //    moving = faux;
-            //}
+            if (moving && !mbttns) // Don't allow to move GUI window without mouse button pressed (race condition, left mouse button sticks randomly when dragging GUI window).
+            {
+                moving = faux;
+            }
             if (auto target_list = mfocus.is_idle()) // Seize OS focus if group focus is active but window is idle.
             {
                 auto local_target = master.hWnd;
@@ -2957,6 +2969,7 @@ namespace netxs::gui
                     stream.m.changed++;
                     stream.m.timecod = datetime::now();
                     stream.m.ctlstat = get_mods_state();
+                    stream.m.enabled = hids::stat::ok;
                     stream.mouse(stream.m);
                 }
             }
@@ -3026,6 +3039,7 @@ namespace netxs::gui
                     stream.m.changed++;
                     stream.m.timecod = datetime::now();
                     stream.m.ctlstat = get_mods_state();
+                    stream.m.enabled = hids::stat::ok;
                     stream.mouse(stream.m);
                 }
                 return;
@@ -3037,6 +3051,7 @@ namespace netxs::gui
                 stream.m.changed++;
                 stream.m.timecod = datetime::now();
                 stream.m.ctlstat = get_mods_state();
+                stream.m.enabled = hids::stat::ok;
                 stream.mouse(stream.m);
             }
             else
@@ -3079,10 +3094,25 @@ namespace netxs::gui
             }
             else
             {
+                if (fake_ctrl && wait_ralt) // RAlt is expected right after the fake LCtrl when AltGr is pressed.
+                {
+                    wait_ralt = faux;
+                    auto is_ralt = scancod == input::key::map::data(input::key::RightAlt).scan/*0x38*/ && extflag; // RAlt.
+                    if (!is_ralt) // If something else comes instead of RAlt, it means that the LCtrl key was actually pressed.
+                    {
+                        fake_ctrl = faux;
+                        keybd_send_state(vkey::control, input::key::pressed, input::key::map::data(input::key::LeftCtrl).scan/*0x1d*/); // Send LCtrl actually pressed.
+                    }
+                }
+                if (fake_ctrl) state |= input::hids::AltGr; // Keep AltGr flag even if RightAlt released.
+                if (fake_ctrl && keystat == input::key::released && scancod == input::key::map::data(input::key::RightAlt).scan) // Clear the AltGr state.
+                {
+                    fake_ctrl = faux;
+                }
                 if (keybd_test_toggled(vkey::numlock )) state |= input::hids::NumLock, cs |= input::key::NumLockMode;
                 if (keybd_test_toggled(vkey::capslock)) state |= input::hids::CapsLock;
                 if (keybd_test_toggled(vkey::scrllock)) state |= input::hids::ScrlLock;
-                if (keybd_test_pressed(vkey::lcontrol)) state |= input::hids::LCtrl;
+                if (keybd_test_pressed(vkey::lcontrol) && !fake_ctrl) state |= input::hids::LCtrl;
                 if (keybd_test_pressed(vkey::rcontrol)) state |= input::hids::RCtrl;
                 if (keybd_test_pressed(vkey::lalt    )) state |= input::hids::LAlt;
                 if (keybd_test_pressed(vkey::ralt    )) state |= input::hids::RAlt;
@@ -3146,16 +3176,42 @@ namespace netxs::gui
                     if (virtcod == vkey::shift) return;
                     state = keymod;
                 }
+                else if (scancod == input::key::map::data(input::key::LeftCtrl).scan/*0x1d*/ && !extflag) // Filter fake LeftCtrl messages when AltGr pressed/repeated/released (non-US kb layouts).
+                {
+                    if (keystat == input::key::pressed)
+                    {
+                        //if constexpr (debugmode) log("Fake LeftCtrl pressed");
+                        fake_ctrl = !(state & input::hids::RAlt) && keybd_read_pressed(vkey::ralt); // Actually AltGr is pressed.
+                    }
+                    else if (keystat == input::key::released)
+                    {
+                        //if constexpr (debugmode) log("Fake LeftCtrl released");
+                        fake_ctrl = (state & input::hids::RAlt) && !keybd_read_pressed(vkey::ralt); // Actually AltGr is released.
+                    }
+                    else // Actually AltGr is repeated if fake_ctrl==true.
+                    {
+                        //if constexpr (debugmode) log("Fake LeftCtrl repeated");
+                    }
+                    if (fake_ctrl) // Filter input::key::repeated events as well.
+                    {
+                        if constexpr (debugmode) log("Fake left ctrl key '%%' event filtered", keystat == input::key::pressed ? "pressed" : keystat == input::key::released ? "released" : "repeated");
+                        wait_ralt = keystat != input::key::released; // Zeroize flag on release.
+                        return;
+                    }
+                }
             }
             auto changed = std::exchange(keymod, state) != keymod || synth;
             auto& gear = *stream.gears;
-            if (changed || gear.ctlstat != keymod)
+            if ((changed || gear.ctlstat != keymod))
             {
                 gear.ctlstat = keymod;
-                stream.m.ctlstat = keymod;
-                stream.m.timecod = datetime::now();
-                stream.m.changed++;
-                stream.mouse(stream.m); // Fire mouse event to update kb modifiers.
+                if (stream.m.enabled == hids::stat::ok)
+                {
+                    stream.m.ctlstat = keymod;
+                    stream.m.timecod = datetime::now();
+                    stream.m.changed++;
+                    stream.mouse(stream.m); // Fire mouse event to update kb modifiers.
+                }
             }
             gear.payload = input::keybd::type::keypress;
             gear.extflag = extflag;

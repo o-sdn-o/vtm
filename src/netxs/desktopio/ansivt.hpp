@@ -11,10 +11,10 @@ namespace netxs::ansi
 
     static const auto esc_csi     = '['; // ESC [ ...
     static const auto esc_ocs     = ']'; // ESC ] ...
-    static const auto esc_dcs     = 'P'; // ESC P ... BELL/ST
-    static const auto esc_sos     = 'X'; // ESC X ... BELL/ST
-    static const auto esc_pm      = '^'; // ESC ^ ... BELL/ST
-    static const auto esc_apc     = '_'; // ESC _ ... BELL/ST
+    static const auto esc_dcs     = 'P'; // ESC P ... BEL/ST
+    static const auto esc_sos     = 'X'; // ESC X ... BEL/ST
+    static const auto esc_pm      = '^'; // ESC ^ ... BEL/ST
+    static const auto esc_apc     = '_'; // ESC _ ... BEL/ST  The command string may consist of bit combinations in the ASCII ranges from 8 to 13 and from 32 to 126.
     static const auto esc_g0set   = '('; // ESC ( c
     static const auto esc_g1set   = ')'; // ESC ) c
     static const auto esc_g2set   = '*'; // ESC * c
@@ -472,7 +472,7 @@ namespace netxs::ansi
         template<class ...Args>
         auto& err(Args&&... data) { return pushsgr().fgc(redlt).add(std::forward<Args>(data)...).popsgr(); } // basevt: Add error message.
         // basevt: Ansify/textify content of specified region.
-        template<bool UseSGR = true, bool Initial = true, bool Finalize = true>
+        template<bool UseSGR = true, bool Initial = true, bool Finalize = true, bool Select_11_only = true>
         auto& s11n(core const& canvas, rect region, cell& state)
         {
             auto allfx = [&](cell const& c)
@@ -482,7 +482,14 @@ namespace netxs::ansi
                 c.scan_attr<svga::vtrgb, UseSGR>(state, block);
                 if (w == 0 || h == 0 || y != 1 || x != 1 || utf8.empty() || (byte)utf8.front() < 32) // 2D fragment is either non-standard or empty or C0.
                 {
-                    add(" "sv);
+                    if constexpr (Select_11_only)
+                    {
+                        if (y > 1 || x > 2) add(' ');
+                    }
+                    else
+                    {
+                        add(' ');
+                    }
                 }
                 else
                 {
@@ -505,17 +512,17 @@ namespace netxs::ansi
             }
             return block;
         }
-        template<bool UseSGR = true, bool Initial = true, bool Finalize = true>
+        template<bool UseSGR = true, bool Initial = true, bool Finalize = true, bool Select_11_only = true>
         auto& s11n(core const& canvas, rect region) // basevt: Ansify/textify content of specified region.
         {
             auto state = cell{};
-            return s11n<UseSGR, Initial, Finalize>(canvas, region, state);
+            return s11n<UseSGR, Initial, Finalize, Select_11_only>(canvas, region, state);
         }
-        template<bool UseSGR = true, bool Initial = true, bool Finalize = true>
+        template<bool UseSGR = true, bool Initial = true, bool Finalize = true, bool Select_11_only = true>
         auto& s11n(core const& canvas, cell& state) // basevt: Ansify/textify all content.
         {
             auto region = rect{ -dot_mx / 2, dot_mx };
-            return s11n<UseSGR, Initial, Finalize>(canvas, region, state);
+            return s11n<UseSGR, Initial, Finalize, Select_11_only>(canvas, region, state);
         }
     };
 
@@ -542,6 +549,7 @@ namespace netxs::ansi
             return add(other);
         }
 
+        auto& clear() { text::clear(); return *this; }
         auto& shellmouse(bool b) // escx: Mouse shell integration on/off.
         {
             return add(b ? "\033[?1000;1006h"
@@ -879,12 +887,30 @@ namespace netxs::ansi
             }
             return *this;
         }
+        auto& numerate_lines(argb liter_fg)
+        {
+            auto count = 1;
+            auto width = 0_sz;
+            auto total = std::count(text::begin(), text::end(), '\n') + 1;
+            while (total)
+            {
+                total /= 10;
+                width++;
+            }
+            auto numerate = [&]
+            {
+                return escx{}.pushsgr().fgc(liter_fg).add(utf::adjust(std::to_string(count++), width, ' ', true), ": ").popsgr();
+            };
+            *this = numerate().add(*this);
+            utf::for_each(*this, "\n", [&]{ return "\n" + numerate(); });
+            return *this;
+        }
     };
 
-    template<bool UseSGR = true, bool Initial = true, bool Finalize = true>
+    template<bool UseSGR = true, bool Initial = true, bool Finalize = true, bool Select_11_only = true>
     auto s11n(core const& canvas, rect region) // ansi: Ansify/textify content of specified region.
     {
-        return escx{}.s11n<UseSGR, Initial, Finalize>(canvas, region);
+        return escx{}.s11n<UseSGR, Initial, Finalize, Select_11_only>(canvas, region);
     }
     template<class ...Args>
     auto clipbuf(Args&&... data) { return escx{}.clipbuf(std::forward<Args>(data)...); } // ansi: Set clipboard.
@@ -977,8 +1003,8 @@ namespace netxs::ansi
     auto cursor0(si32 i)       { return escx{}.cursor0(i);    } // ansi: Set cursor inside the cell.
     auto ref(si32 i)           { return escx{}.ref(i);        } // ansi: Create the reference to the existing paragraph. Create new id if it is not existing.
     auto idx(si32 i)           { return escx{}.idx(i);        } // ansi: Split the text run and associate the fragment with an id.
-                                                                       //       All following text is under the IDX until the next command is issued.
-                                                                       //       Redefine if the id already exists.
+                                                                //       All following text is under the IDX until the next command is issued.
+                                                                //       Redefine if the id already exists.
     // ansi: Curses commands.
     // The order is important (see the richtext::flow::exec constexpr).
     //todo tie with richtext::flow::exec
@@ -1466,10 +1492,12 @@ namespace netxs::ansi
         // vt_parser: Static UTF-8/ANSI parser.
         void parse(view utf8, T*& client)
         {
+            auto decsg = client->decsg;
             auto s = [&](auto const& traits, qiew utf8)
             {
                 client->defer = faux;
                 intro.execute(traits.control, utf8, client); // Make one iteration using firstcmd and return.
+                decsg = client->decsg; // Sync DECSG mode if buffer/client changed. //todo Should we make it shared among buffers?
                 return utf8;
             };
             auto y = [&](auto const& cluster)
@@ -1482,7 +1510,7 @@ namespace netxs::ansi
                 client->ascii(plain);
                 client->defer = true;
             };
-            utf::decode(s, y, a, utf8, client->decsg);
+            utf::decode(s, y, a, utf8, decsg);
             client->flush();
         }
         // vt_parser: Static UTF-8/ANSI parser proc.

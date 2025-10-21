@@ -65,10 +65,11 @@ namespace netxs::input
         static constexpr auto ExtendedKey = 0x0100;
         static constexpr auto NumLockMode = 0x0020;
 
-        static constexpr auto _counter = __COUNTER__ + 1;
-        static constexpr auto released = __COUNTER__ - _counter;
-        static constexpr auto pressed  = __COUNTER__ - _counter;
-        static constexpr auto repeated = __COUNTER__ - _counter;
+        static constexpr auto _counter    = __COUNTER__ + 1;
+        static constexpr auto released    = __COUNTER__ - _counter;
+        static constexpr auto pressed     = __COUNTER__ - _counter;
+        static constexpr auto repeated    = __COUNTER__ - _counter;
+        static constexpr auto interrupted = __COUNTER__ - _counter;
 
         static constexpr auto generic_sign   = 0xF0;
         static constexpr auto scancode_sign  = 0x80;
@@ -447,9 +448,9 @@ namespace netxs::input
                             return is_released;
                         });
                         auto sign = !!k.keystat;
-                        if (vk_valid && k.cluster.size() && k.cluster.front() != '\0')
+                        if (k.cluster.size() && k.cluster.front() != '\0')
                         {
-                            k.chchord = k.vkchord;
+                            k.chchord = k.vkchord; // The main part of the chchord is the same as in vkchord.
                             push_cluster(sign, k.chchord, k.cluster);
                         }
                         push_keyid(sign, k.vkchord, k.keycode);
@@ -739,7 +740,12 @@ namespace netxs::input
         ui64 digest{}; // foci: Incrementing event number to avoid refocusing when connecting recursively.
     };
 
-    using multihome_t = std::pair<wptr, wptr>;
+    struct multihome_t
+    {
+        wptr                      world_wptr;  // multihome_t: World reference.
+        wptr                      parent_wptr; // multihome_t: Current world's parent.
+        std::list<sptr>::iterator holder;      // multihome_t: Iterator on parent's subset list.
+    };
 
     // input: Mouse tracker.
     struct mouse
@@ -1323,11 +1329,12 @@ namespace netxs::input
             NumLock      = 1 << 12, // ⇭ Num Lock
             CapsLock     = 1 << 13, // ⇪ Caps Lock
             ScrlLock     = 1 << 14, // ⇳ Scroll Lock (⤓)
-            AltGr        = LAlt   | LCtrl,
+            AltGr        = 1 << 15, // AltGr on non-us keyboard
+            LCtrlAlt     = LAlt   | LCtrl,
             anyCtrl      = LCtrl  | RCtrl,
             anyAlt       = LAlt   | RAlt,
             anyShift     = LShift | RShift,
-            anyAltGr     = anyAlt | anyCtrl,
+            anyCtrlAlt   = anyAlt | anyCtrl,
             anyWin       = LWin   | RWin,
             anyMod       = anyAlt | anyCtrl | anyShift | anyWin,
         };
@@ -1397,27 +1404,27 @@ namespace netxs::input
         {
             return std::unordered_map<si32, text>
             {
-                { key::KeyEnter  | hids::anyCtrl  << 8, { "\x0a"      }},
-                { key::Backspace | hids::anyCtrl  << 8, { "\x08"      }},
-                { key::Backspace | hids::anyAlt   << 8, { "\033\x7f"  }},
-                { key::Backspace | hids::anyAltGr << 8, { "\033\x08"  }},
-                { key::Tab       | hids::anyCtrl  << 8, { "\t"        }},
-                { key::Tab       | hids::anyShift << 8, { "\033[Z"    }},
-                { key::Tab       | hids::anyAlt   << 8, { "\033[1;3I" }},
-                { key::Esc       | hids::anyAlt   << 8, { "\033\033"  }},
-                { key::Key1      | hids::anyCtrl  << 8, { "1"         }},
-                { key::Key3      | hids::anyCtrl  << 8, { "\x1b"      }},
-                { key::Key4      | hids::anyCtrl  << 8, { "\x1c"      }},
-                { key::Key5      | hids::anyCtrl  << 8, { "\x1d"      }},
-                { key::Key6      | hids::anyCtrl  << 8, { "\x1e"      }},
-                { key::Key7      | hids::anyCtrl  << 8, { "\x1f"      }},
-                { key::Key8      | hids::anyCtrl  << 8, { "\x7f"      }},
-                { key::Key9      | hids::anyCtrl  << 8, { "9"         }},
-                { key::KeySlash  | hids::anyCtrl  << 8, { "\x1f"      }},
-                { slash          | hids::anyAltGr << 8, { "\033\x1f"  }},
-                { slash          | hids::anyCtrl  << 8, { "\x1f"      }},
-                { quest          | hids::anyAltGr << 8, { "\033\x7f"  }},
-                { quest          | hids::anyCtrl  << 8, { "\x7f"      }},
+                { key::KeyEnter  | hids::anyCtrl    << 8, { "\x0a"      }},
+                { key::Backspace | hids::anyCtrl    << 8, { "\x08"      }},
+                { key::Backspace | hids::anyAlt     << 8, { "\033\x7f"  }},
+                { key::Backspace | hids::anyCtrlAlt << 8, { "\033\x08"  }},
+                { key::Tab       | hids::anyCtrl    << 8, { "\t"        }},
+                { key::Tab       | hids::anyShift   << 8, { "\033[Z"    }},
+                { key::Tab       | hids::anyAlt     << 8, { "\033[1;3I" }},
+                { key::Esc       | hids::anyAlt     << 8, { "\033\033"  }},
+                { key::Key1      | hids::anyCtrl    << 8, { "1"         }},
+                { key::Key3      | hids::anyCtrl    << 8, { "\x1b"      }},
+                { key::Key4      | hids::anyCtrl    << 8, { "\x1c"      }},
+                { key::Key5      | hids::anyCtrl    << 8, { "\x1d"      }},
+                { key::Key6      | hids::anyCtrl    << 8, { "\x1e"      }},
+                { key::Key7      | hids::anyCtrl    << 8, { "\x1f"      }},
+                { key::Key8      | hids::anyCtrl    << 8, { "\x7f"      }},
+                { key::Key9      | hids::anyCtrl    << 8, { "9"         }},
+                { key::KeySlash  | hids::anyCtrl    << 8, { "\x1f"      }},
+                { slash          | hids::anyCtrlAlt << 8, { "\033\x1f"  }},
+                { slash          | hids::anyCtrl    << 8, { "\x1f"      }},
+                { quest          | hids::anyCtrlAlt << 8, { "\033\x7f"  }},
+                { quest          | hids::anyCtrl    << 8, { "\x7f"      }},
             };
         }
 
@@ -1622,10 +1629,10 @@ namespace netxs::input
         }
         void set_multihome()
         {
-            auto [world_wptr, parent_wptr] = multihome;
-            if (auto world_ptr = world_wptr.lock())
+            if (auto world_ptr = multihome.world_wptr.lock())
             {
-                world_ptr->base::father = parent_wptr;
+                world_ptr->base::father = multihome.parent_wptr;
+                world_ptr->base::holder = multihome.holder;
             }
             bell::indexer.luafx.set_gear(*this);
         }
@@ -2051,9 +2058,9 @@ namespace netxs::input
             {
                 auto s = keybd::ctlstat;
                 auto v = keybd::keycode & -2; // Generic keys only
-                auto c = keybd::cluster.empty() ? 0 : keybd::cluster.front();
+                auto c = keybd::cluster.empty() ? 0 : (byte)keybd::cluster.front();
 
-                if (s & hids::LCtrl && s & hids::RAlt) // This combination is already translated.
+                if (s & hids::AltGr || (s & hids::LCtrl && s & hids::RAlt)) // This combination is already translated.
                 {
                     s &= ~(hids::LCtrl | hids::RAlt);
                 }
@@ -2096,10 +2103,16 @@ namespace netxs::input
 
                 if (auto it_alone = alone_key.find(v); it_alone != alone_key.end())
                 {
-                    if (v >= key::KeyEnd && v <= key::KeyDownArrow) it_alone->second[1] = decckm ? 'O' : '[';
+                    if (v >= key::KeyEnd && v <= key::KeyDownArrow)
+                    {
+                        it_alone->second[1] = decckm ? 'O' : '[';
+                    }
                     return it_alone->second;
                 }
-                else if (c) return keybd::cluster;
+                else if (c)
+                {
+                    return keybd::cluster;
+                }
             }
             return text{};
         }
@@ -2109,9 +2122,10 @@ namespace netxs::input
     {
         struct binding_t
         {
-            text              chord;
-            txts              sources; // Event source list.
-            netxs::sptr<text> script_ptr;
+            text                               chord;
+            txts                               sources; // Event source list.
+            netxs::sptr<std::pair<ui64, text>> script_ptr;
+            netxs::sptr<std::pair<ui64, text>> prerun_ptr;
         };
         using vector = std::vector<binding_t>;
 
@@ -2159,21 +2173,22 @@ namespace netxs::input
             {
                 if (sources.empty())
                 {
-                    //log("Set handler for event_id:%% script: %%", event_id, ansi::hi(*(script_ptr->script_body_ptr)));
+                    //log("Set handler for event_id:%% script: %%", event_id, ansi::hi(script_ptr->script_body_ptr->second));
                     boss.bell::submit_generic(tier_id, event_id, script_ptr);
                 }
                 else //todo revise: too hacky
                 {
-                    //log("Deferred setting handler on '%target%' for script: ", sources.front(), ansi::hi(*(script_ptr->script_body_ptr)));
+                    //log("Deferred setting handler on '%target%' for script: ", sources.front(), ansi::hi(script_ptr->script_body_ptr->second));
                     auto& indexer = boss.indexer;
                     indexer._null_gear_sptr->ui::base::enqueue([&, id = boss.id, tier_id, event_id, sources, script_ptr](auto& /*gear_0*/) // Subscribe on sources (with boss.sensors).
                     {
                         if (auto boss_ptr = indexer._null_gear_sptr->getref(id)) // The boss may already be deleted.
                         {
+                            auto& scripting_context = boss_ptr->get_scripting_context();
                             for (auto& src_name : sources)
                             {
-                                //log("Set handler on '%target%' for script: ", src_name, ansi::hi(*(script_ptr->script_body_ptr)));
-                                if (auto target_ptr = indexer.get_target(boss_ptr->scripting_context, src_name))
+                                //log("Set handler on '%target%' for script: ", src_name, ansi::hi(script_ptr->script_body_ptr->second));
+                                if (auto target_ptr = indexer.get_target(scripting_context, src_name))
                                 {
                                     target_ptr->bell::submit_generic(tier_id, event_id, boss_ptr->sensors, script_ptr);
                                 }
@@ -2188,14 +2203,15 @@ namespace netxs::input
                 }
             }
         }
-        auto keybind(base& boss, qiew chord_str, auto&& script_body, txts const& sources = {})
+        auto keybind(base& boss, qiew chord_str, auto&& script_body, netxs::sptr<std::pair<ui64, text>> prerun_body = {}, txts const& sources = {})
         {
             if (!chord_str) return;
             auto [chords, is_preview] = input::bindings::get_chords(chord_str);
             if (chords.size())
             {
-                auto script_ptr = ptr::shared<script_ref>(boss.scripting_context, script_body);
-                auto reset_handler = !(script_ptr->script_body_ptr && script_ptr->script_body_ptr->size());
+                auto script_ptr = ptr::shared<script_ref>(boss.indexer, boss, script_body);
+                auto prerun_ptr = prerun_body && prerun_body->second.size() ? ptr::shared<script_ref>(boss.indexer, boss, prerun_body) : netxs::sptr<script_ref>{};
+                auto reset_handler = !(script_ptr->script_body_ptr && script_ptr->script_body_ptr->second.size());
                 for (auto& binary_chord : chords) if (binary_chord.size()) // Scripts always store their sensors at the boss side, since the lifetime of base::scripting_context depends on the boss.
                 {
                     auto k = (byte)binary_chord.front();
@@ -2223,6 +2239,10 @@ namespace netxs::input
                         auto event_id = boss.indexer.get_kbchord_hint(binary_chord);
                         auto tier_id = is_preview ? tier::keybdpreview : tier::keybdrelease;
                         set_handler(reset_handler, boss, tier_id, event_id, sources, script_ptr);
+                        if (prerun_ptr)
+                        {
+                            set_handler(reset_handler, boss, tier::keybd_prerun, event_id, sources, prerun_ptr);
+                        }
                     }
                 }
             }
@@ -2231,7 +2251,7 @@ namespace netxs::input
         {
             for (auto& r : bindings)
             {
-                keybind(boss, r.chord, r.script_ptr, r.sources);
+                keybind(boss, r.chord, r.script_ptr, r.prerun_ptr, r.sources);
             }
         }
         void dispatch(auto& boss, auto& instance_id, hids& gear, si32 tier_id, hint event_id)
@@ -2241,6 +2261,7 @@ namespace netxs::input
                 && boss.bell::has_handlers(tier::keybdrelease, event_id))
             {
                 gear.touched = instance_id;
+                boss.base::signal(tier::keybd_prerun, event_id, gear);
             }
         }
         auto load(settings& config, auto& script_list)
@@ -2250,7 +2271,8 @@ namespace netxs::input
             {
                 //todo revise
                 //auto script_context = config.settings::push_context(script_ptr);
-                auto script_body_ptr = ptr::shared(config.settings::take_value(script_ptr));
+                auto script_body_ptr = ptr::shared(std::pair<ui64, text>{ 0, config.settings::take_value(script_ptr) });
+                auto prerun_body_ptr = ptr::shared(std::pair<ui64, text>{ 0, config.settings::take_value_from(script_ptr, "prerun", ""s) });
                 auto on_ptr_list = config.settings::take_ptr_list_of(script_ptr, "on");
                 for (auto event_ptr : on_ptr_list)
                 {
@@ -2260,10 +2282,10 @@ namespace netxs::input
                     //{
                     //    for (auto& sourse : sources)
                     //    {
-                    //         log("chord='%%' \tpreview=%% source='%%' script=%%", on_rec, (si32)preview, source, ansi::hi(*script_body_ptr));
+                    //         log("chord='%%' \tpreview=%% source='%%' script=%%", on_rec, (si32)preview, source, ansi::hi(script_body_ptr->second));
                     //    }
                     //}
-                    bindings.push_back({ .chord = std::move(on_rec), .sources = std::move(sources), .script_ptr = script_body_ptr });
+                    bindings.push_back({ .chord = std::move(on_rec), .sources = std::move(sources), .script_ptr = script_body_ptr, .prerun_ptr = prerun_body_ptr });
                 }
             }
             return bindings;

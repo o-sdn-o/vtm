@@ -147,7 +147,7 @@ struct consrv
             waitexit = std::thread{ [&, trailer]
             {
                 auto pid = proc_pid; // MSVC don't capture it.
-                io::select(prochndl, [&terminal, pid]{ if (terminal.io_log) log("%%Process %pid% terminated", prompt::vtty, pid); });
+                io::select(netxs::maxspan, noop{}, prochndl, [&terminal, pid]{ if (terminal.io_log) log("%%Process %pid% terminated", prompt::vtty, pid); });
                 trailer();
                 if (terminal.io_log) log("%%Process %pid% waiter ended", prompt::vtty, pid);
             }};
@@ -1078,7 +1078,10 @@ struct impl : consrv
             if (toWIDE.empty()) toWIDE.push_back(0);
             auto c = toWIDE.front();
 
-            auto ctrls = os::nt::ms_kbstate(gear.ctlstat) | (gear.extflag ? ENHANCED_KEY : 0);
+            auto altgr_not_released = gear.ctlstat & input::hids::AltGr && (gear.keystat != input::key::released || gear.keycode != input::key::RightAlt);
+            auto ctrls = os::nt::ms_kbstate(gear.ctlstat)
+                       | (gear.extflag ? ENHANCED_KEY : 0)
+                       | (altgr_not_released ? LEFT_CTRL_PRESSED : 0);
             if (toWIDE.size() > 1) // Surrogate pair special case (not a clipboard paste, see generate(wiew wstr, ui32 s = 0)).
             {
                 if (gear.keystat)
@@ -1097,7 +1100,18 @@ struct impl : consrv
                     auto yield = gear.interpret(decckm);
                     if (yield.size()) generate(yield);
                 }
-                else generate(c, ctrls, gear.virtcod, gear.keystat, gear.scancod);
+                else
+                {
+                    if (gear.ctlstat & input::hids::AltGr && gear.keycode == input::key::RightAlt) // Generate fake LeftCtrl events on AltGr activity.
+                    {
+                        auto lctrl = input::key::map::data(input::key::LeftCtrl);
+                        auto pre_ctrls = ctrls;
+                        if (gear.keystat == input::key::pressed ) pre_ctrls &= ~(RIGHT_ALT_PRESSED | ENHANCED_KEY); // AltGr is not pressed yet.
+                        else                                      pre_ctrls = (pre_ctrls & ~ENHANCED_KEY) | RIGHT_ALT_PRESSED; // AltGr is still pressed.
+                        generate(c, pre_ctrls, lctrl.vkey, gear.keystat, lctrl.scan); // Restore the LeftCtrl+RightAlt state for AltGr.
+                    }
+                    generate(c, ctrls, gear.virtcod, gear.keystat, gear.scancod);
+                }
             }
 
             if (c == ansi::c0_etx)
@@ -1696,6 +1710,8 @@ struct impl : consrv
         auto readevents(Payload& packet, cdrw& answer)
         {
             if (!server.size_check(packet.echosz, answer.sendoffset())) return;
+            // Test unstable stdin.
+            //os::sleep(150ms);
             auto avail = packet.echosz - answer.sendoffset();
             auto limit = avail / (ui32)sizeof(recbuf.front());
             if (server.io_log) log("\tuser limit: ", limit);
@@ -1703,8 +1719,9 @@ struct impl : consrv
             if (packet.input.utf16)
             {
                 recbuf.clear();
-                recbuf.reserve(count());
-                auto tail = head + std::min(limit, count());
+                auto mx = count();//std::min(2u, (ui32)count());
+                recbuf.reserve(mx);
+                auto tail = head + std::min(limit, mx);
                 while (head != tail)
                 {
                     recbuf.emplace_back(*head++);
@@ -2328,8 +2345,12 @@ struct impl : consrv
         {
             if (handle_ptr->link == &uiterm.target)
             {
-                     if (uiterm.target == &uiterm.normal) unsync |= proc(uiterm.normal);
-                else if (uiterm.target == &uiterm.altbuf) unsync |= proc(uiterm.altbuf);
+                if (uiterm.target == &uiterm.normal) unsync |= proc(uiterm.normal);
+                else
+                {
+                    auto& target_buffer = *(decltype(uiterm.altbuf)*)uiterm.target;
+                    unsync |= proc(target_buffer);
+                }
                 return true;
             }
             else
@@ -3822,6 +3843,7 @@ struct impl : consrv
             auto handle_ptr = (hndl*)packet.target;
             if (handle_ptr->link == &uiterm.target) // Restore original buffer mode.
             {
+                log("\t  restore original buffer mode to ", altmod ? "'altbuf'" : "'normal'");
                 auto& console = *uiterm.target;
                 if (altmod) uiterm.reset_to_altbuf(console);
                 else        uiterm.reset_to_normal(console);
@@ -3829,10 +3851,12 @@ struct impl : consrv
             else // Switch to additional buffer.
             {
                 auto window_ptr = select_buffer(packet.target);
+                log("\t  switch to additional buffer (%%)", window_ptr);
                 if (!window_ptr) return;
                 if (uiterm.target == &uiterm.normal || uiterm.target == &uiterm.altbuf) // Save/update original buffer mode.
                 {
                     altmod = uiterm.target == &uiterm.altbuf;
+                    log("\t  prev mode was ", altmod ? "'altbuf'" : "'normal'");
                 }
                 auto& console = *window_ptr;
                 uiterm.reset_to_altbuf(console);

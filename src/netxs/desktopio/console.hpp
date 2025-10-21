@@ -475,6 +475,7 @@ namespace netxs::ui
         bool       yield; // gate: Indicator that the current frame has been successfully sent.
         bool       fullscreen; // gate: .
         face       canvas; // gate: .
+        std::map<si32, ui::page> gate_overlays; // gate: User defined overlays (for Lua scripting output).
         std::unordered_map<id_t, netxs::sptr<hids>> gears; // gate: .
         pro::debug& debug;
         input::multihome_t& multihome;
@@ -500,10 +501,26 @@ namespace netxs::ui
                 auto& luafx = bell::indexer.luafx;
                 gear.base::add_methods(basename::gear,
                 {
+                    { "GetCoord",       [&]
+                                        {
+                                            luafx.set_return(gear.coord.x, gear.coord.y);
+                                        }},
                     { "IsKeyRepeated",  [&]
                                         {
                                             auto repeated = gear.keystat == input::key::repeated;
                                             luafx.set_return(repeated);
+                                        }},
+                    { "Interrupt",      [&]
+                                        {
+                                            gear.keystat = input::key::interrupted;
+                                            gear.set_handled();
+                                            gear.indexer.expire();
+                                            luafx.set_return();
+                                        }},
+                    { "Bypass",         [&]
+                                        {
+                                            gear.touched = {};
+                                            luafx.set_return(true);
                                         }},
                     { "SetHandled",     [&]
                                         {
@@ -536,8 +553,7 @@ namespace netxs::ui
                                             luafx.set_return(is_focused);
                                         }},
                 });
-                gear.base::father = This();            // Gear has a fixed parent.
-                gear.base::update_scripting_context(); //
+                gear.base::father = This(); // Gear has a fixed parent.
             }
             auto& [ext_gear_id, gear_ptr] = *gear_it;
             auto& gear = *gear_ptr;
@@ -592,8 +608,10 @@ namespace netxs::ui
             for (auto& [ext_gear_id, gear_ptr] : gears)
             {
                 auto& gear = *gear_ptr;
-                if (gear.mouse_disabled || std::isnan(gear.coord.x)) continue;
-                fill_pointer(gear, parent_canvas);
+                if (!gear.mouse_disabled && !std::isnan(gear.coord.x))
+                {
+                    fill_pointer(gear, parent_canvas);
+                }
             }
         }
         void draw_clipboard_preview(time const& stamp)
@@ -687,6 +705,13 @@ namespace netxs::ui
                         //todo cache background
                         canvas.tile(props.background_image, cell::shaders::fuse);
                     }
+                    auto overlay_iter = gate_overlays.begin();
+                    while (overlay_iter != gate_overlays.end() && overlay_iter->first < 0) // Draw background (index < 0) overlays.
+                    {
+                        canvas.cup(dot_00);
+                        canvas.output(overlay_iter->second, cell::shaders::fuse);
+                        overlay_iter++;
+                    }
                     if (base::subset.size())
                     {
                         base::subset.back()->render(canvas);
@@ -714,6 +739,12 @@ namespace netxs::ui
                             bgc.mix(mark);
                             c.bgc(bgc);
                         });
+                    }
+                    while (overlay_iter != gate_overlays.end()) // Draw foreground (index < 0) overlays.
+                    {
+                        canvas.cup(dot_00);
+                        canvas.output(overlay_iter->second, cell::shaders::fuse);
+                        overlay_iter++;
                     }
                 }
                 if (props.legacy_mode & ui::console::mouse) // Render our mouse pointer.
@@ -756,14 +787,26 @@ namespace netxs::ui
             fire(input::key::MouseMove);
         }
         // gate: Rx loop.
-        void launch()
+        void launch(auto& lock)
         {
             auto root_ptr = This();
             base::signal(tier::anycast, e2::form::upon::started, root_ptr); // Make all stuff ready to receive input.
+            base::signal(tier::release, e2::form::upon::started, root_ptr); // Notify that the gate is running.
             directvt::binary::stream::reading_loop(canal, [&](view data){ conio.s11n::sync(data); });
             conio.s11n::stop(); // Wake up waiting dtvt objects, if any.
             if constexpr (debugmode) log(prompt::gate, "DirectVT session closed");
-            base::signal(tier::release, e2::form::upon::stopped, true);
+            lock.lock();
+                if (gears.size())
+                if (auto& gear_ptr = gears.begin()->second) // Select any gear in order to set multihome state.
+                {
+                    gear_ptr->set_multihome();
+                }
+                base::signal(tier::release, e2::form::upon::stopped, root_ptr); // Notify that the gate is closed.
+                base::signal(tier::anycast, e2::form::proceed::quit::one, true);
+                disconnect();
+                paint.stop();
+                bell::sensors.clear();
+            lock.unlock();
         }
 
         //todo revise
@@ -789,6 +832,36 @@ namespace netxs::ui
             input::bindings::keybind(*this, bindings);
             base::add_methods(basename::gate,
             {
+                { "Deface",                 [&]
+                                            {
+                                                base::deface();
+                                                luafx.set_return();
+                                            }},
+                { "SetOverlay",             [&]
+                                            {
+                                                auto overlay_index = luafx.get_args_or(1, 0);
+                                                auto overlay_thing = luafx.get_args_or(2, ""s);
+                                                auto iter = gate_overlays.find(overlay_index);
+                                                if (overlay_thing.empty()) // Drop overlay.
+                                                {
+                                                    if (iter != gate_overlays.end())
+                                                    {
+                                                        gate_overlays.erase(iter);
+                                                    }
+                                                }
+                                                else // Set overlay.
+                                                {
+                                                    if (iter == gate_overlays.end())
+                                                    {
+                                                        gate_overlays[overlay_index] = overlay_thing;
+                                                    }
+                                                    else
+                                                    {
+                                                        iter->second = overlay_thing;
+                                                    }
+                                                }
+                                                luafx.set_return();
+                                            }},
                 { "Disconnect",             [&]
                                             {
                                                 auto& gear = luafx.get_gear();
@@ -895,7 +968,7 @@ namespace netxs::ui
             canvas.face::area(base::area());
             LISTEN(tier::release, e2::form::proceed::multihome, world_ptr)
             {
-                multihome = { world_ptr, world_ptr->base::father };
+                multihome = input::multihome_t{ .world_wptr = world_ptr, .parent_wptr = world_ptr->base::father, .holder = world_ptr->base::holder };
             };
             LISTEN(tier::release, e2::command::printscreen, gear)
             {
@@ -1014,13 +1087,6 @@ namespace netxs::ui
             {
                 props.legacy_mode |= pointer ? ui::console::mouse : 0;
             };
-            LISTEN(tier::release, e2::form::upon::stopped, fast) // Reading loop ends.
-            {
-                base::signal(tier::anycast, e2::form::proceed::quit::one, fast);
-                disconnect();
-                paint.stop();
-                bell::sensors.clear();
-            };
             LISTEN(tier::preview, e2::conio::quit, deal) // Disconnect.
             {
                 disconnect();
@@ -1031,7 +1097,6 @@ namespace netxs::ui
             };
             LISTEN(tier::anycast, e2::form::upon::started, root_ptr)
             {
-                base::update_scripting_context(); // Gate has no parents.
                 if (props.debug_overlay) debug.start();
                 base::signal(tier::release, e2::form::prop::name, props.title);
                 //todo revise

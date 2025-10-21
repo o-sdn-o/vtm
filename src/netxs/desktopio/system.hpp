@@ -27,17 +27,16 @@
 
 #else
 
-    #include <errno.h>      // ::errno
-    #include <spawn.h>      // ::exec
-    #include <unistd.h>     // ::gethostname(), ::getpid(), ::read()
-    #include <sys/param.h>  //
-    #include <sys/types.h>  // ::getaddrinfo
-    #include <sys/socket.h> // ::shutdown() ::socket(2)
-    #include <netdb.h>      //
+    #include <errno.h>       // ::errno
+    #include <spawn.h>       // ::exec
+    #include <unistd.h>      // ::gethostname(), ::getpid(), ::read()
+    #include <sys/param.h>   //
+    #include <sys/types.h>   // ::getaddrinfo(), ::sysctl()
+    #include <sys/socket.h>  // ::shutdown() ::socket(2)
+    #include <netdb.h>       //
     //#include <arpa/inet.h>  // ::inet_ntop() ?This may require dynamic linking. #GH696
 
     #include <stdio.h>
-    #include <unistd.h>     // ::read()
     #include <sys/un.h>
     #include <stdlib.h>
 
@@ -47,7 +46,6 @@
     #include <sys/wait.h>   // ::waitpid
     #include <syslog.h>     // syslog, daemonize
 
-    #include <sys/types.h>
     #include <sys/stat.h>   // ::chmod()
     #include <fcntl.h>      // ::splice()
 
@@ -61,15 +59,14 @@
             #include <linux/kd.h>   // ::console_ioctl()
         #else
             #include <sys/kd.h>     // ::console_ioctl()
+            #include <linux/input.h>// mouse button codes: BTN_LEFT ...
         #endif
         #include <linux/keyboard.h> // ::keyb_ioctl()
-        #include <linux/input.h>    // mouse button codes: BTN_LEFT ...
     #endif
 
     #if defined(__APPLE__)
         #include <mach-o/dyld.h>    // ::_NSGetExecutablePath()
     #elif defined(__BSD__)
-        #include <sys/types.h>  // ::sysctl()
         #include <sys/sysctl.h>
     #endif
 
@@ -126,7 +123,7 @@ namespace netxs::os
         using pidt = pid_t;
         using fd_t = int;
         using tios = ::termios;
-        static const auto invalid_fd = fd_t{ -1            };
+        static constexpr auto invalid_fd = fd_t{ -1 };
         static auto stdin_fd  = fd_t{ STDIN_FILENO  };
         static auto stdout_fd = fd_t{ STDOUT_FILENO };
         static auto stderr_fd = fd_t{ STDERR_FILENO };
@@ -1419,7 +1416,7 @@ namespace netxs::os
             }
             else
             {
-                os::close(w); // Wriite end should be closed first.
+                os::close(w); // Write end should be closed first.
                 os::close(r);
             }
         }
@@ -1628,9 +1625,9 @@ namespace netxs::os
                     ok(::fcntl(handle[1], F_SETFL, ::fcntl(handle[1], F_GETFL) | O_NONBLOCK), "::fcntl(h, O_NONBLOCK)", os::unexpected);
                     thread = std::thread{ [&]
                     {
-                        auto signal = sigt{};
                         while (true)
                         {
+                            auto signal = sigt{ -1 };
                             ::sigwait(&signals::sigset, &signal);
                             if (signal == SIGUSR1 && !active) break;
                             if (signal > 0) ok(::write(handle[1], &signal, sizeof(signal)), "::write(h[1])", os::unexpected);
@@ -1805,27 +1802,43 @@ namespace netxs::os
 
             #endif
         }
-        template<bool NonBlocked = faux, class ...Args>
-        void select(Args&&... args)
+        template<class ...Args>
+        void select(span timeout, auto&& timeout_proc, Args&&... args)
         {
             #if defined(_WIN32)
 
-                static constexpr auto timeout = NonBlocked ? 0 /*milliseconds*/ : INFINITE;
+                auto timeval = timeout == netxs::maxspan ? INFINITE : datetime::round<si32, std::chrono::milliseconds>(timeout);
                 auto socks = _fd_set(std::forward<Args>(args)...);
                 // Note: ::WaitForMultipleObjects() does not work with pipes (DirectVT).
-                auto yield = ::WaitForMultipleObjects((DWORD)socks.size(), socks.data(), FALSE, timeout);
-                yield -= WAIT_OBJECT_0;
-                _handle(yield, std::forward<Args>(args)...);
+                auto yield = ::WaitForMultipleObjects((DWORD)socks.size(), socks.data(), FALSE, timeval);
+                if (yield == WAIT_TIMEOUT) // Timeout.
+                {
+                    timeout_proc();
+                }
+                else
+                {
+                    yield -= WAIT_OBJECT_0;
+                    _handle(yield, std::forward<Args>(args)...);
+                }
 
             #else
 
-                auto timeval = ::timeval{ .tv_sec = 0, .tv_usec = 0 };
-                auto timeout = NonBlocked ? &timeval/*returns immediately*/ : nullptr;
+                auto ssec = datetime::round<decltype(::timeval{}.tv_sec), std::chrono::seconds>(timeout);
+                auto usec = datetime::round<decltype(::timeval{}.tv_usec), std::chrono::microseconds>(timeout - std::chrono::seconds{ ssec });
+                auto timeval = ::timeval{ .tv_sec = ssec, .tv_usec = usec };
+                auto timeval_ptr = timeout == netxs::maxspan ? nullptr : &timeval;
                 auto socks = fd_set{};
                 FD_ZERO(&socks);
                 auto nfds = 1 + _fd_set(socks, std::forward<Args>(args)...);
-                auto count = ::select(nfds, &socks, 0, 0, timeout);
-                _select(count, socks, std::forward<Args>(args)...);
+                auto count = ::select(nfds, &socks, 0, 0, timeval_ptr);
+                if (count == 0) // Timeout.
+                {
+                    timeout_proc();
+                }
+                else
+                {
+                    _select(count, socks, std::forward<Args>(args)...);
+                }
 
             #endif
         }
@@ -1838,7 +1851,7 @@ namespace netxs::os
                 while (true)
                 {
                     auto empty = true;
-                    io::select<true>(os::stdin_fd, [&]{
+                    io::select(span{}, noop{}, os::stdin_fd, [&]{
                         empty = flush.size() != io::recv(os::stdin_fd, flush).length(); });
                     if (empty) break;
                 }
@@ -3441,7 +3454,8 @@ namespace netxs::os
                     {
                         signal.flush();
                     };
-                    io::select(handle.r, h_proc,
+                    io::select(netxs::maxspan, noop{},
+                               handle.r, h_proc,
                                signal  , f_proc);
 
                 #endif
@@ -3882,8 +3896,8 @@ namespace netxs::os
                     });
                 };
                 haspty = ::isatty(os::stdin_fd);
-                haspty ? proc([&](auto... args){ return io::select<true>(args...); })
-                       : proc([&](auto... args){ return io::select<faux>(args...); });
+                haspty ? proc([&](auto... args){ return io::select(netxs::span{},  noop{}, args...); })  // Nonblocking.
+                       : proc([&](auto... args){ return io::select(netxs::maxspan, noop{}, args...); }); // Blocking.
 
             #endif
             if (cfsize)
@@ -4097,14 +4111,23 @@ namespace netxs::os
                         auto reading_thread = std::thread{ [&]
                         {
                             auto buffer = std::array<char, os::pipebuf>{};
-                            auto answer = io::recv(os::stdin_fd, buffer);
-                            if (answer.find("10060") != text::npos) // Check the answer for "\x1b[?1;2;10060c".
+                            auto answer = text{};
+                            while (true) // WSL shreds stdinput into 16 byte chunks, so we should get all chunks.
                             {
-                                vtm_env = "1";
+                                auto crop = io::recv(os::stdin_fd, buffer);
+                                answer += crop;
+                                if (!crop || crop.find('c') != text::npos) break; // Looking for the sequence terminator 'c'.
                             }
-                            else if (answer && answer.back() == 'u' && colorterm == "kmscon") // Detect an old kmscon which is limited to 256 colors (It replies: "60;1;6;9;15cu").
+                            if (answer.size())
                             {
-                                dtvt::vtmode |= ui::console::vt256;
+                                if (answer.find("10060") != text::npos) // Check the answer for "\x1b[?1;2;10060c".
+                                {
+                                    vtm_env = "1";
+                                }
+                                else if (answer.back() == 'u' && colorterm == "kmscon") // Detect an old kmscon which is limited to 256 colors (It replies: "60;1;6;9;15cu").
+                                {
+                                    dtvt::vtmode |= ui::console::vt256;
+                                }
                             }
                             lock.notify();
                         }};
@@ -4136,7 +4159,7 @@ namespace netxs::os
                                               : dtvt::vtmode & ui::console::nt16  ? "Win32 Console API 16-color"
                                               : dtvt::vtmode & ui::console::vt256 ? "xterm 256-color"
                                               : dtvt::vtmode & ui::console::vtrgb ? "xterm truecolor"
-                                                                                  : "xterm VT2D (truecolor with 2D Character Geometry support)");
+                                                                                  : "xterm VT2D (TrueColor with 2D Character Geometry)");
                 log(prompt::os, "Mouse mode: ", dtvt::vtmode & ui::console::mouse ? "Kernel input device"
                                               : dtvt::vtmode & ui::console::nt    ? "Win32 Console API"
                                                                                   : "VT-style");
@@ -4296,6 +4319,7 @@ namespace netxs::os
                 if constexpr (debugmode) log(prompt::dtvt, "Writing thread started", ' ', utf::to_hex_0x(std::this_thread::get_id()));
                 auto cache = text{};
                 auto guard = std::unique_lock{ writemtx };
+                //todo revise writing thread sync (sometimes thread::join causes deadlock)
                 while ((void)writesyn.wait(guard, [&]{ return writebuf.size() || !attached; }), attached)
                 {
                     std::swap(cache, writebuf);
@@ -4340,7 +4364,9 @@ namespace netxs::os
                         directvt::binary::stream::reading_loop(termlink, receiver);
                         if constexpr (debugmode) log(prompt::dtvt, "Reading thread ended", ' ', utf::to_hex_0x(std::this_thread::get_id()));
 
-                        if (attached.exchange(faux)) writesyn.notify_one(); // Interrupt writing thread.
+                        attached.exchange(faux);
+                        //todo revise writing thread sync (sometimes thread::join causes deadlock)
+                        writesyn.notify_one(); // Interrupt writing thread.
                         if constexpr (debugmode) log(prompt::dtvt, "Writing thread joining", ' ', utf::to_hex_0x(stdinput.get_id()));
                         stdwrite.join();
                         log("%%Process '%cmd%' disconnected", prompt::dtvt, ansi::hi(utf::debase437(cmd)));
@@ -4378,6 +4404,12 @@ namespace netxs::os
             {
                 if (stdwrite.joinable())
                 {
+                    //if (attached.exchange(faux)) // Detach child process and forget.
+                    //{
+                    //    writesyn.notify_one(); // Interrupt writing thread.
+                    //    termlink->abort(termlink->stdinput); // Interrupt reading thread.
+                    //}
+                    attached.exchange(faux);
                     writesyn.notify_one();
                     if (io_log) log(prompt::vtty, "Writing thread joining", ' ', utf::to_hex_0x(stdwrite.get_id()));
                     stdwrite.join();
@@ -4738,7 +4770,7 @@ namespace netxs::os
                 }
             });
         }
-        #if defined(__linux__)
+        #if defined(__linux__) && !defined(__ANDROID__)
     }
 }
         #include "lixx.hpp" // libinput++
@@ -4767,7 +4799,7 @@ namespace netxs::os
                     {
                         count++;
                         log("\tadded device: %% (%%)", device->ud_device.devpath, device->ud_device.devname);
-                        auto rc = device->libinput_device_config_tap_set_enabled(LIBINPUT_CONFIG_TAP_ENABLED) == LIBINPUT_CONFIG_STATUS_SUCCESS;
+                        auto rc = device->libinput_device_config_tap_set_enabled(true) == LIBINPUT_CONFIG_STATUS_SUCCESS;
                         log("\t  LIBINPUT_CONFIG_TAP_ENABLED: ", rc);
                         rc = device->libinput_device_config_scroll_set_method(LIBINPUT_CONFIG_SCROLL_2FG) == LIBINPUT_CONFIG_STATUS_SUCCESS;// | LIBINPUT_CONFIG_SCROLL_EDGE));
                         log("\t   LIBINPUT_CONFIG_SCROLL_2FG: ", rc);
@@ -5012,13 +5044,16 @@ namespace netxs::os
                             else if (modstat.changed)
                             {
                                 k.ctlstat = kbmod;
-                                m.ctlstat = kbmod;
-                                m.hzwheel = faux;
-                                m.wheelfp = 0;
-                                m.wheelsi = 0;
-                                m.timecod = datetime::now();
-                                m.changed++;
-                                mouse(m); // Fire mouse event to update kb modifiers.
+                                if (m.enabled == input::hids::stat::ok)
+                                {
+                                    m.ctlstat = kbmod;
+                                    m.hzwheel = faux;
+                                    m.wheelfp = 0;
+                                    m.wheelsi = 0;
+                                    m.timecod = datetime::now();
+                                    m.changed++;
+                                    mouse(m); // Fire mouse event to update kb modifiers.
+                                }
                             }
                             if (utf::to_code(r.Event.KeyEvent.uChar.UnicodeChar, point))
                             {
@@ -5086,7 +5121,6 @@ namespace netxs::os
                                         m.timecod = datetime::now();
                                         m.enabled = input::hids::stat::halt; // Send a mouse halt event.
                                         mouse(m);
-                                        m.enabled = input::hids::stat::ok;
                                     }
                                     break;
                                 case nt::console::event::style:
@@ -5141,6 +5175,7 @@ namespace netxs::os
                                     {
                                         m.changed++;
                                         m.timecod = datetime::now();
+                                        m.enabled = input::hids::stat::ok;
                                         mouse(m);
                                     }
                                 }
@@ -5150,6 +5185,7 @@ namespace netxs::os
                             {
                                 m.changed++;
                                 m.timecod = datetime::now();
+                                m.enabled = input::hids::stat::ok;
                                 mouse(m);
                             }
                         }
@@ -5171,9 +5207,14 @@ namespace netxs::os
 
             #else
 
+                static constexpr auto waitio = 100ms;
+                static constexpr auto disarm = netxs::maxspan;
+                auto timeout = span{};
                 auto micefd = os::invalid_fd;
                 auto buffer = text(os::pipebuf, '\0');
                 auto sig_fd = os::signals::fd{};
+                auto input_buffer = text{};
+                auto paste_not_complete = faux;
                 auto get_kb_state = []
                 {
                     auto state = si32{ 0 };
@@ -5221,7 +5262,7 @@ namespace netxs::os
                     #endif
                     return state;
                 };
-                #if defined(__linux__)
+                #if defined(__linux__) && !defined(__ANDROID__)
                 if (dtvt::vtmode & ui::console::mouse) // Trying to get direct mouse access.
                 {
                     if (auto li = lixx::initialize())
@@ -5246,16 +5287,28 @@ namespace netxs::os
                     mousevtim,
                 };
                 static const auto style_cmd = "\033[" + std::to_string(ansi::ccc_stl) + ":";
-                auto take_sequence = [](qiew& cache) // s.size() always > 1.
+                auto take_sequence = [](qiew& cache)
                 {
                     auto s = cache;
                     auto t = type::undef;
                     auto incomplete = faux;
-                    if (s.size() > 2) // ESC [ == Alt+[   ESC O == Alt+Shift+O
+                    auto head = s.begin() + 1; // Pop Esc.
+                    auto tail = s.end();
+                    auto c = *head; // cache.size() > 1.
+                    if (c == '\x1b') // ESC ESC
                     {
-                        auto head = s.begin() + 1; // Pop Esc.
-                        auto tail = s.end();
-                        auto c = *head++;
+                        s = s.substr(0, 1);
+                    }
+                    else if (s.size() == 2)
+                    {
+                        if (c == '[' || c == 'O' || c == '_') // ESC [ == Alt+[   ESC O == Alt+Shift+O
+                        {
+                            incomplete = true;
+                        }
+                    }
+                    else // s.size() > 2
+                    {
+                        head++;
                         if (c == '[') // CSI: ESC [ pn;...;pn cmd
                         {
                             while (head != tail) // Looking for CSI command.
@@ -5276,9 +5329,9 @@ namespace netxs::os
                                 {
                                     if (s.starts_with(style_cmd)) t = type::style; // "\033[33:"...
                                 }
-                                else if ((c == 'I' || c == 'O') && len == 3) // \033[1;3I == Alt+Tab
+                                else if (c == 'I' || c == 'O') // \033[1;3I == Alt+Tab
                                 {
-                                    t = type::focus;
+                                    if (len == 3) t = type::focus;
                                 }
                                 else if (c == '[') // ESC [ [ byte
                                 {
@@ -5295,9 +5348,20 @@ namespace netxs::os
                                 s = s.substr(0, len);
                             }
                         }
-                        else if (c == 'O') // SS3: ESC O byte
+                        else if (c == 'O') // SS3: ESC O byte  or  ESC O n ; m [PQRS]
                         {
-                            s = s.substr(0, 3);
+                            while (head != tail) // Looking for P Q R or S.
+                            {
+                                auto c3 = *head;
+                                if (c3 >= 'P' && c3 <= 'S') break;
+                                head++;
+                            }
+                            if (head == tail) incomplete = true;
+                            else
+                            {
+                                ++head;
+                                s = qiew{ s.begin(), head };
+                            }
                         }
                         else if (c == '_') // APC: ESC _ payload ST
                         {
@@ -5333,7 +5397,14 @@ namespace netxs::os
                         else // ESC cluster == Alt+cluster
                         {
                             auto cluster = utf::cluster<true>(s.substr(1));
-                            s = s.substr(0, cluster.attr.utf8len + 1);
+                            if (!cluster.attr.correct && s.size() == cluster.attr.utf8len + 1) // UTF-8 character is not complete.
+                            {
+                                incomplete = true;
+                            }
+                            else
+                            {
+                                s = s.substr(0, cluster.attr.utf8len + 1);
+                            }
                         }
                     }
                     if (!incomplete)
@@ -5358,6 +5429,10 @@ namespace netxs::os
                         { key::KeyDownArrow,  "\033[1; B"  },
                         { key::KeyInsert,     "\033[2; ~"  },
                         { key::KeyDelete,     "\033[3; ~"  },
+                        { key::F1,            "\033O1; P"  }, // adb shell specific (ESC O ...)
+                        { key::F2,            "\033O1; Q"  }, //
+                        { key::F3,            "\033O1; R"  }, //
+                        { key::F4,            "\033O1; S"  }, //
                         { key::F1,            "\033[1; P"  },
                         { key::F2,            "\033[1; Q"  },
                         { key::F3,            "\033[1; R"  },
@@ -5373,44 +5448,44 @@ namespace netxs::os
                     };
                     auto m = utf::unordered_map<text, std::pair<text, si32>>
                     {
-                        //{ "\033\x7f"  , { "\x08", key::Backspace     | hids::LAlt   << 8 }},
+                        //{ "\033\x7f"  , { "\x08", key::Backspace     | hids::LAlt     << 8 }},
                         { "\033\x7f"  , { "",     key::KeySlash      |(hids::LCtrl | hids::LAlt | hids::LShift) << 8 }},
-                        { "\033\x00"s , { "",     key::Space         | hids::AltGr  << 8 }},
-                        { "\x00"s     , { " ",    key::Space         | hids::LCtrl  << 8 }},
-                        { "\x08"      , { "\x7f", key::Backspace     | hids::LCtrl  << 8 }},
-                        { "\033\x08"  , { "",     key::Backspace     | hids::AltGr  << 8 }},
-                        //{ "\033[Z"    , { "",     key::Tab           | hids::LShift << 8 }}, // Alt+Shift+Z
-                        { "\033[1;3I" , { "",     key::Tab           | hids::LAlt   << 8 }},
-                        { "\033\033"  , { "",     key::Esc           | hids::LAlt   << 8 }},
-                        { "\x7f"      , { "\x08", key::Backspace                         }},
-                        { "\x09"      , { "\x09", key::Tab                               }},
-                        { "\x0d"      , { "\x0d", key::KeyEnter                          }},
-                        { "\x0a"      , { "\x0a", key::KeyEnter      | hids::LCtrl  << 8 }},
+                        { "\033\x00"s , { "",     key::Space         | hids::LCtrlAlt << 8 }},
+                        { "\x00"s     , { " ",    key::Space         | hids::LCtrl    << 8 }},
+                        { "\x08"      , { "\x7f", key::Backspace     | hids::LCtrl    << 8 }},
+                        { "\033\x08"  , { "",     key::Backspace     | hids::LCtrlAlt << 8 }},
+                        { "\033[Z"    , { "",     key::Tab           | hids::LShift   << 8 }}, //todo: revise Alt+Shift+Z ?
+                        { "\033[1;3I" , { "",     key::Tab           | hids::LAlt     << 8 }},
+                        { "\033\033"  , { "",     key::Esc           | hids::LAlt     << 8 }},
+                        { "\x7f"      , { "\x08", key::Backspace                           }},
+                        { "\x09"      , { "\x09", key::Tab                                 }},
+                        { "\x0d"      , { "\x0d", key::KeyEnter                            }},
+                        { "\x0a"      , { "\x0a", key::KeyEnter      | hids::LCtrl    << 8 }},
 
-                        //{ "\x1a"      , { "",     key::Pause                             }},
-                        //{ "\x1a"      , { "\x1a", key::KeyZ          | hids::LCtrl  << 8 }},
-                        { "\033"      , { "\033", key::Esc                               }},
-                        { "\x1c"      , { "",     key::Key4          | hids::LCtrl  << 8 }},
-                        { "\x1d"      , { "",     key::Key5          | hids::LCtrl  << 8 }},
-                        { "\x1e"      , { "",     key::Key6          | hids::LCtrl  << 8 }},
-                        { "\x1f"      , { "",     key::KeySlash      | hids::LCtrl  << 8 }},
-                        { "\033\x1f"  , { "",     key::KeySlash      | hids::AltGr  << 8 }},
-                        { "\x20"      , { " ",    key::Space                             }},
-                        { "\x21"      , { "!",    key::Key1          | hids::LShift << 8 }},
-                        { "\x22"      , { "\"",   key::SingleQuote   | hids::LShift << 8 }},
-                        { "\x23"      , { "#",    key::Key3          | hids::LShift << 8 }},
-                        { "\x24"      , { "$",    key::Key4          | hids::LShift << 8 }},
-                        { "\x25"      , { "%",    key::Key5          | hids::LShift << 8 }},
-                        { "\x26"      , { "&",    key::Key7          | hids::LShift << 8 }},
-                        { "\x27"      , { "'",    key::SingleQuote                       }},
-                        { "\x28"      , { "(",    key::Key9          | hids::LShift << 8 }},
-                        { "\x29"      , { ")",    key::Key0          | hids::LShift << 8 }},
-                        { "\x2a"      , { "*",    key::KeyMultiply                       }},
-                        { "\x2b"      , { "+",    key::KeyPlus                           }},
-                        { "\x2c"      , { ",",    key::Comma                             }},
-                        { "\x2d"      , { "-",    key::KeyMinus                          }},
-                        { "\x2e"      , { ".",    key::KeyPeriod                         }},
-                        { "\x2f"      , { "/",    key::KeySlash                          }},
+                        //{ "\x1a"      , { "",     key::Pause                               }},
+                        //{ "\x1a"      , { "\x1a", key::KeyZ          | hids::LCtrl    << 8 }},
+                        { "\033"      , { "\033", key::Esc                                 }},
+                        { "\x1c"      , { "",     key::Key4          | hids::LCtrl    << 8 }},
+                        { "\x1d"      , { "",     key::Key5          | hids::LCtrl    << 8 }},
+                        { "\x1e"      , { "",     key::Key6          | hids::LCtrl    << 8 }},
+                        { "\x1f"      , { "",     key::KeySlash      | hids::LCtrl    << 8 }},
+                        { "\033\x1f"  , { "",     key::KeySlash      | hids::LCtrlAlt << 8 }},
+                        { "\x20"      , { " ",    key::Space                               }},
+                        { "\x21"      , { "!",    key::Key1          | hids::LShift   << 8 }},
+                        { "\x22"      , { "\"",   key::SingleQuote   | hids::LShift   << 8 }},
+                        { "\x23"      , { "#",    key::Key3          | hids::LShift   << 8 }},
+                        { "\x24"      , { "$",    key::Key4          | hids::LShift   << 8 }},
+                        { "\x25"      , { "%",    key::Key5          | hids::LShift   << 8 }},
+                        { "\x26"      , { "&",    key::Key7          | hids::LShift   << 8 }},
+                        { "\x27"      , { "'",    key::SingleQuote                         }},
+                        { "\x28"      , { "(",    key::Key9          | hids::LShift   << 8 }},
+                        { "\x29"      , { ")",    key::Key0          | hids::LShift   << 8 }},
+                        { "\x2a"      , { "*",    key::KeyMultiply                         }},
+                        { "\x2b"      , { "+",    key::KeyPlus                             }},
+                        { "\x2c"      , { ",",    key::Comma                               }},
+                        { "\x2d"      , { "-",    key::KeyMinus                            }},
+                        { "\x2e"      , { ".",    key::KeyPeriod                           }},
+                        { "\x2f"      , { "/",    key::KeySlash                            }},
 
                         { "\x3a"      , { ":",    key::Semicolon     | hids::LShift << 8 }},
                         { "\x3b"      , { ";",    key::Semicolon                         }},
@@ -5632,14 +5707,17 @@ namespace netxs::os
                         std::swap(k.scancod, scancod);
                     }
                 };
-
-                auto parser = [&, input = text{}, pasting_not_complete = faux](view accum) mutable
+                auto parser = [&](view accum)
                 {
-                    input += accum;
-                    auto cache = qiew{ input };
+                    if (input_buffer.size() && !paste_not_complete)
+                    {
+                        timeout = disarm;
+                    }
+                    input_buffer += accum;
+                    auto cache = qiew{ input_buffer };
                     while (cache.size())
                     {
-                        if (pasting_not_complete)
+                        if (paste_not_complete)
                         {
                             auto pos = cache.find(ansi::paste_end);
                             if (pos != text::npos)
@@ -5647,7 +5725,7 @@ namespace netxs::os
                                 p_txtdata += cache.substr(0, pos);
                                 cache.remove_prefix(pos + ansi::paste_end.size());
                                 paste_data(p_txtdata);
-                                pasting_not_complete = faux;
+                                paste_not_complete = faux;
                                 p_txtdata.clear();
                                 continue;
                             }
@@ -5668,16 +5746,20 @@ namespace netxs::os
                                 break;
                             }
                         }
-                        else if (cache.size() == 1)
-                        {
-                            detect_key(cache);
-                            cache.clear();
-                        }
                         else if (cache.front() == '\033')
                         {
+                            if (cache.size() == 1) // Ambiguous state, need to wait some time for additional input.
+                            {
+                                timeout = waitio;
+                                break;
+                            }
                             auto [t, s, incomplete] = take_sequence(cache);
-                            if (incomplete) break;
-                            else if (t == type::mousevtim) // ESC _ payload ST
+                            if (incomplete)
+                            {
+                                timeout = waitio;
+                                break;
+                            }
+                            else if (t == type::mousevtim) // vt-input-mode report:  ESC _ payload ST
                             {
                                 utf::split<true>(s, ';', [&](qiew frag)
                                 {
@@ -5744,20 +5826,15 @@ namespace netxs::os
                                 });
                                 m.changed++;
                                 m.timecod = datetime::now();
-                                if (std::isnan(m.coordxy.x))
-                                {
-                                    m.enabled = input::hids::stat::halt; // Send a mouse halt event.
-                                    mouse(m);
-                                    m.enabled = input::hids::stat::ok;
-                                }
-                                else
-                                {
-                                    mouse(m);
-                                }
+                                m.enabled = std::isnan(m.coordxy.x) ? input::hids::stat::halt // Send a mouse halt event.
+                                                                    : input::hids::stat::ok;
+                                mouse(m);
                             }
-                            else if (t == type::mouse) // ESC [ < ctrl ; xpos ; ypos M
+                            else if (t == type::mouse) // SGR mouse report:  ESC [ < ctrl ; xpos ; ypos M
                             {
+                                auto ispressed = s.pop_back() == 'M';
                                 auto tmp = s.substr(3); // Pop "\033[<"
+                                //todo use utf::split(tmp, ';', [&](auto frag){...});
                                 auto ctrl = utf::to_int(tmp);
                                 if (tmp.empty() || !ctrl) continue;
                                 tmp.pop_front(); // Pop ;
@@ -5768,13 +5845,13 @@ namespace netxs::os
                                 if (!pos_y) continue;
 
                                 auto timecode = datetime::now();
-                                auto ispressed = s.back() == 'M';
                                 auto clamp = [](auto a){ return std::clamp(a, si32min / 2, si32max / 2); };
                                 auto x = clamp(pos_x.value() - 1);
                                 auto y = clamp(pos_y.value() - 1);
                                 auto ctl = ctrl.value();
 
-                                m.enabled = {};
+                                m.timecod = timecode;
+                                m.enabled = input::hids::stat::ok;
                                 m.hzwheel = {};
                                 m.wheelfp = {};
                                 m.wheelsi = {};
@@ -5793,10 +5870,11 @@ namespace netxs::os
                                 {
                                     m.buttons = {};
                                     m.changed++;
-                                    m.timecod = timecode;
                                     mouse(m);
                                 }
-                                m.coordxy = twod{ x, y };
+                                auto prev_buttons = m.buttons;
+                                auto prev_coordxy = m.coordxy;
+                                m.coordxy = { x, y };
                                 switch (ctl)
                                 {
                                     case 0: netxs::set_bit<input::hids::buttons::left  >(m.buttons, ispressed); break;
@@ -5818,23 +5896,29 @@ namespace netxs::os
                                         break;
                                     //todo impl ext mouse buttons 129-131
                                 }
+                                if (prev_buttons != m.buttons && prev_coordxy != m.coordxy) // Move mouse before button pressed. This is a case where the button state and coords arrived simultaneously.
+                                {
+                                    std::swap(prev_buttons, m.buttons);
+                                    m.changed++;
+                                    mouse(m);
+                                    std::swap(prev_buttons, m.buttons);
+                                }
                                 if (!(dtvt::vtmode & ui::console::vt_2D) && dtvt::wheelrate) // Don't accelerate the mouse wheel if we are already inside the vtm.
                                 {
                                     m.wheelfp *= dtvt::wheelrate;
                                 }
                                 m.wheelsi = (si32)m.wheelfp;
                                 m.changed++;
-                                m.timecod = timecode;
                                 mouse(m);
                             }
-                            else if (t == type::focus)
+                            else if (t == type::focus) // Focus report:  ESC [ I/O
                             {
                                 auto state = s.back() == 'I';
                                 focus(state);
                             }
-                            else if (t == type::style)
+                            else if (t == type::style) // Line style report:  ESC [ std::to_string(ansi::ccc_stl) : n p
                             {
-                                auto tmp = s.substr(style_cmd.size());
+                                auto tmp = s.substr(style_cmd.size()); // Pop style_cmd's ESC+prefix
                                 if (auto format = utf::to_int(tmp))
                                 {
                                     style(deco{ format.value() });
@@ -5856,7 +5940,7 @@ namespace netxs::os
                                     p_txtdata = cache.substr(0, pos);
                                     if (pos != text::npos) cache.remove_prefix(pos);
                                     else                   cache.clear();
-                                    pasting_not_complete = true;
+                                    paste_not_complete = true;
                                     break;
                                 }
                             }
@@ -5865,14 +5949,40 @@ namespace netxs::os
                                 detect_key(s);
                             }
                         }
+                        else if (!utf::firstbyte(cache.front())) // The first byte is not UTF-8.
+                        {
+                            auto head = cache.begin() + 1;
+                            auto tail = cache.end();
+                            while (head != tail && !utf::firstbyte(*head++)) { } // Eat all non-UTF-8 first bytes.
+                            auto non_utf8 = qiew{ cache.begin(), head };
+                            cache.remove_prefix(non_utf8.size());
+                            detect_key(non_utf8);
+                            if constexpr (debugmode) log("%%The first byte is not UTF-8: ", prompt::os, ansi::hi(utf::debase437(non_utf8)));
+                        }
                         else
                         {
                             auto cluster = utf::cluster<true>(cache);
-                            detect_key(cluster.text);
-                            cache.remove_prefix(cluster.attr.utf8len);
+                            if (!cluster.attr.correct && cache.size() == cluster.attr.utf8len) // UTF-8 character is not complete.
+                            {
+                                timeout = waitio;
+                                break;
+                            }
+                            else
+                            {
+                                cache.remove_prefix(cluster.attr.utf8len);
+                                detect_key(cluster.text);
+                            }
                         }
                     }
-                    input = cache;
+                    input_buffer = cache;
+                };
+                auto t_proc = [&]
+                {
+                    if (input_buffer.size())
+                    {
+                        detect_key(input_buffer);
+                        input_buffer.clear();
+                    }
                 };
                 auto h_proc = [&]
                 {
@@ -5884,13 +5994,16 @@ namespace netxs::os
                             if (k.ctlstat != kbmod)
                             {
                                 k.ctlstat = kbmod;
-                                m.ctlstat = kbmod;
-                                m.hzwheel = faux;
-                                m.wheelfp = 0;
-                                m.wheelsi = 0;
-                                m.timecod = datetime::now();
-                                m.changed++;
-                                mouse(m); // Fire mouse event to update kb modifiers.
+                                if (m.enabled == input::hids::stat::ok)
+                                {
+                                    m.ctlstat = kbmod;
+                                    m.hzwheel = faux;
+                                    m.wheelfp = 0;
+                                    m.wheelsi = 0;
+                                    m.timecod = datetime::now();
+                                    m.changed++;
+                                    mouse(m); // Fire mouse event to update kb modifiers.
+                                }
                             }
                         }
                         parser(data);
@@ -5903,7 +6016,7 @@ namespace netxs::os
                                   timecod = time{},
                                   dev_map = std::unordered_map<arch, si32>{}]() mutable
                 {
-                    #if defined(__linux__)
+                    #if defined(__linux__) && !defined(__ANDROID__)
                     using namespace netxs::lixx;
                     lixx::li->libinput_dispatch();
                     while (true)
@@ -5983,6 +6096,7 @@ namespace netxs::os
                             m.coordxy = mcoord / scale;
                             m.buttons = bttns;
                             m.ctlstat = k.ctlstat;
+                            m.enabled = input::hids::stat::ok;
                             if (wheelfp)
                             {
                                 if (wheelfp.x)
@@ -6022,15 +6136,17 @@ namespace netxs::os
                     auto signal = sigt{};
                     if (io::recv(sig_fd, &signal, sizeof(signal)))
                     {
-                        switch (signal)
+                        if (signal == SIGWINCH)
                         {
-                            case SIGWINCH: w.winsize = dtvt::consize(); winsz(w); break;
-                            case SIGINT:  // App close.
-                            case SIGHUP:  // App close.
-                            case SIGTERM: // System shutdown.
-                                if constexpr (debugmode) log("%%Process %pid% received signal %signo%", prompt::tty, os::process::id.first, signal);
-                                alive = faux;
-                            default: break;
+                            w.winsize = dtvt::consize();
+                            winsz(w);
+                        }
+                        else if (signal == SIGINT   // App close.
+                              || signal == SIGHUP   // App close.
+                              || signal == SIGTERM) // System shutdown.
+                        {
+                            if constexpr (debugmode) log("%%Process %pid% received signal %signo%", prompt::tty, os::process::id.first, signal);
+                            alive = faux;
                         }
                     }
                 };
@@ -6041,12 +6157,13 @@ namespace netxs::os
 
                 while (alive)
                 {
-                    io::select(os::stdin_fd, h_proc,
+                    io::select(timeout,      t_proc,
+                               os::stdin_fd, h_proc,
                                sig_fd,       s_proc,
                                micefd,       m_proc,
                                alarm,        f_proc);
                 }
-                #if defined(__linux__)
+                #if defined(__linux__) && !defined(__ANDROID__)
                 lixx::uninitialize();
                 #endif
 

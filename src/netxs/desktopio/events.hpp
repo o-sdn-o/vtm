@@ -8,7 +8,7 @@
 #include "xml.hpp"
 
 //todo Workaround for i386 linux targets, https://sourceware.org/bugzilla/show_bug.cgi?id=31775
-#if defined(__i386__) && defined(__linux__)
+#if defined(__i386__) && defined(__linux__) && !defined(__ANDROID__)
     extern long double fmodl(long double a, long double b);
     double fmod(double a, double b) { return fmodl(a, b); }
     float  fmod(float  a, float  b) { return fmodl(a, b); }
@@ -32,17 +32,18 @@ namespace netxs::events
     {
         // Forward execution order: Execute concrete event  first. Preserve subscription order. Forward means from particular to general: 1. event::group::item, 2. event::group::any
         // Reverse execution order: Execute global   events first. Preserve subscription order. Reverse means from general to particular: 1. event::group::any,  2. event::group::item
-        static constexpr auto counter = __COUNTER__ + 1;
-        static constexpr auto release = __COUNTER__ - counter; // events: Run forwrad handlers with fixed param.
-        static constexpr auto preview = __COUNTER__ - counter; // events: Run reverse handlers with fixed a param intended to change.
-        static constexpr auto request = __COUNTER__ - counter; // events: Run forwrad a handler that provides the current value of the param. To avoid being overridden, the handler should be the only one.
-        static constexpr auto anycast = __COUNTER__ - counter; // events: Run reverse handlers along the entire visual tree.
-        static constexpr auto general = __COUNTER__ - counter; // events: Run forwrad handlers for all objects.
-        static constexpr auto mousepreview = __COUNTER__ - counter; // events: Run in subscription order for all objects.
-        static constexpr auto mouserelease = __COUNTER__ - counter; // events: Run in subscription order for all objects.
-        static constexpr auto keybdpreview = __COUNTER__ - counter; // events: Run in subscription order for all objects.
-        static constexpr auto keybdrelease = __COUNTER__ - counter; // events: Run in subscription order for all objects.
-        static constexpr auto unknown = __COUNTER__ - counter; // events: .
+        static constexpr auto counter      = __COUNTER__ + 1;
+        static constexpr auto release      = __COUNTER__ - counter; // events: Run forwrad handlers with fixed param.
+        static constexpr auto preview      = __COUNTER__ - counter; // events: Run reverse handlers with fixed a param intended to change.
+        static constexpr auto request      = __COUNTER__ - counter; // events: Run forwrad a handler that provides the current value of the param. To avoid being overridden, the handler should be the only one.
+        static constexpr auto anycast      = __COUNTER__ - counter; // events: Run reverse handlers along the entire visual tree.
+        static constexpr auto general      = __COUNTER__ - counter; // events: Run forwrad handlers for all objects.
+        static constexpr auto mousepreview = __COUNTER__ - counter; // events: Run in subscription order for object tree.
+        static constexpr auto mouserelease = __COUNTER__ - counter; // events: Run in subscription order for object tree.
+        static constexpr auto keybdpreview = __COUNTER__ - counter; // events: Run in subscription order for focused objects.
+        static constexpr auto keybdrelease = __COUNTER__ - counter; // events: Run in subscription order for focused objects.
+        static constexpr auto keybd_prerun = __COUNTER__ - counter; // events: Run in subscription order for focused objects (fires during keybdpreview stage; subscribers can reset gear.touch if their current keybdrelease subscription is not confirmed).
+        static constexpr auto unknown      = __COUNTER__ - counter; // events: .
         static constexpr auto str = std::to_array({ "release"sv,
                                                     "preview"sv,
                                                     "request"sv,
@@ -52,12 +53,14 @@ namespace netxs::events
                                                     "mouserelease"sv,
                                                     "keybdpreview"sv,
                                                     "keybdrelease"sv,
+                                                    "keybd_prerun"sv,
                                                     "unknown"sv, });
         static constexpr auto order = std::to_array({ feed::fwd,
                                                       feed::rev,
                                                       feed::fwd,
                                                       feed::rev,
                                                       feed::fwd,
+                                                      feed::none,
                                                       feed::none,
                                                       feed::none,
                                                       feed::none,
@@ -167,8 +170,13 @@ namespace netxs::events
         void run_with_gear(auto proc);
         template<class Arg = noop>
         text run(context_t& context, view script_body, Arg&& param = {});
-        text run_script(ui::base& object, view script_body);
+        template<class Arg = noop>
+        text run_script(ui::base& object, view script_body, Arg&& param = {});
         void run_ext_script(ui::base& object, auto& script);
+        si32 get_table_size();
+        bool push_function_id(view script_body);
+        void precompile_function(sptr<std::pair<ui64, text>>& script_body_ptr);
+        void remove_function(sptr<std::pair<ui64, text>>& script_body_ptr);
 
         luna(auth& indexer);
         ~luna();
@@ -176,18 +184,17 @@ namespace netxs::events
 
     struct script_ref
     {
-        std::reference_wrapper<context_t> context; // Hierarchical location index of the script owner.
-        sptr<text>                        script_body_ptr; // Script body sptr.
+        auth&                             indexer;         // script_ref: Global object indexer.
+        std::reference_wrapper<ui::base>  boss_ref;        // script_ref: Script execution context.
+        sptr<std::pair<ui64, text>>       script_body_ptr; // script_ref: Script body sptr.
 
         static text to_string(context_t& context);
 
-        script_ref(context_t& context, sptr<text> script_body_ptr)
-            : context{ context },
-              script_body_ptr{ script_body_ptr }
+        script_ref(auth& indexer, std::reference_wrapper<ui::base> boss_ref, sptr<std::pair<ui64, text>> script_body_ptr);
+        script_ref(auth& indexer, std::reference_wrapper<ui::base> boss_ref, auto&& script_body)
+            : script_ref{ indexer, boss_ref, ptr::shared(std::pair<ui64, text>{ 0, script_body }) }
         { }
-        script_ref(context_t& context, auto&& script_body_ptr)
-            : script_ref{ context, ptr::shared<text>(script_body_ptr) }
-        { }
+        ~script_ref();
     };
 
     template<class Arg>
@@ -224,9 +231,12 @@ namespace netxs::events
         {
             if (script_ptr && script_ptr->script_body_ptr)
             {
-                auto& [context, script_body_ptr] = *script_ptr;
-                auto& script_body = *script_body_ptr;
-                luafx.run(context, script_body, param);
+                auto& boss = script_ptr->boss_ref.get();
+                auto& [ref_count, script_body] = *(script_ptr->script_body_ptr);
+                //auto start = datetime::now();
+                luafx.run_script(boss, script_body, param);
+                //auto [days, hours, mins, secs, msecs, micro] = datetime::breakdown(datetime::now() - start);
+                //log("Exec duration: %sec%.%msec%.%micro%", secs, msecs, micro);
             }
             else if (auto& proc = get_inst<Arg>())
             {
@@ -282,7 +292,7 @@ namespace netxs::events
         std::unordered_map<id_t, std::reference_wrapper<ui::base>>  objects; // auth: Map of objects by object id.
         clasess_umap                              classes; // auth: Map of classes by classname.
         context_t                                 context; // auth: Default context.
-        std::reference_wrapper<context_t>         context_ref; // auth: .
+        std::vector<std::reference_wrapper<context_t>> context_refs; // auth: .
         fmap                                      general;
         generics::jobs<wptr<ui::base>>            agent;
         luna                                      luafx;
@@ -297,7 +307,7 @@ namespace netxs::events
         sptr<input::hids>                         _null_gear_sptr; // auth: Fallback gear sptr.
         core                                      _null_idmap; // auth: Fallback gear idmap.
         std::reference_wrapper<input::hids>       active_gear_ref; // auth: Active gear.
-        std::any                                  script_param; // auth: .
+        std::vector<std::any>                     script_param; // auth: .
         utf::unordered_map<text, hint>            keybd_chords; // auth: Registered keyboard chords.
         hint                                      chord_index{}; // auth: Next available keybd chord index.
         hint                                      anykey_event{};
@@ -823,11 +833,6 @@ namespace netxs::events
                 });
             }
         }
-        // bell: .
-        void _signal(si32 Tier, hint event, auto& param)
-        {
-            indexer.notify(Tier, reactor, event, param);
-        }
         auto accomplished()
         {
             return indexer.handled;
@@ -888,7 +893,6 @@ namespace netxs
     using netxs::events::tier;
     using netxs::events::hook;
     using netxs::events::wook;
-    //using netxs::events::sref;
     using netxs::events::script_ref;
 }
 namespace std

@@ -303,7 +303,7 @@ namespace netxs::events::userland
                     EVENT_XS( resized, const rect  ), // anycast: Notify about the actual window area.
                     EVENT_XS( changed, twod        ), // Event after resize, arg: diff bw old and new size.
                     EVENT_XS( dragged, input::hids ), // Event after drag.
-                    EVENT_XS( stopped, bool        ), // release: Notify that the main reading loop has exited. arg bool: fast or not.
+                    EVENT_XS( stopped, ui::sptr    ), // release: Notify that the main reading loop has exited. arg: root_ptr.
                     GROUP_XS( vtree  , ui::sptr    ), // Visual tree events, arg: parent base_sptr.
                     GROUP_XS( scroll , rack        ), // Event after scroll.
 
@@ -314,6 +314,7 @@ namespace netxs::events::userland
                     };
                     SUBSET_XS( scroll )
                     {
+                        EVENT_XS( to_box, rack ), // Scroll to the specified box (rack::window).
                         GROUP_XS( to_top, rack ), // Scroll to top.
                         GROUP_XS( to_end, rack ), // Scroll to end.
                         GROUP_XS( bycoor, rack ), // Scroll absolute.
@@ -591,6 +592,9 @@ namespace netxs::ui
         text NsInfoRotationFlipandMirror;
         text NsInfoCharacterMatrix;
         text NsInfoCharacterHalves;
+        text NsInfoTuiShadows;
+        text NsInfoTuiShadowsInner;
+        text NsInfoTuiShadowsOuter;
         text NsInfosRGBBlending;
         text NsInfoPressCtrlCaps;
 
@@ -731,7 +735,7 @@ namespace netxs::ui
             netxs::events::vtm_class::list::iterator class_iterator; // base: class_metadata.objects std::list iterator.
         };
         utf::unordered_map<text, base_class> base_classes; // base: Base classes map by classname.
-        netxs::events::context_t             scripting_context; // base: List of ids of all ancestors.
+        netxs::events::context_t             scripting_context; // base: Temp buffer for the list of ids of all ancestors.
 
         struct mfocus_node
         {
@@ -766,36 +770,53 @@ namespace netxs::ui
             }
             return netxs::sptr<T>{};
         }
-        // base: Update scripting context. Run on anycast, e2::form::upon::started.
-        void update_scripting_context()
+        // base: Return the next object in visual tree.
+        auto get_next()
+        {
+            for (auto& next_ptr : base::subset)
+            {
+                if (next_ptr) return next_ptr;
+            }
+            auto parent_ptr = base::parent();
+            auto current_ptr = base::This();
+            while (parent_ptr)
+            {
+                auto next_item_iter = std::next(current_ptr->base::holder);
+                while (next_item_iter != parent_ptr->base::subset.end())
+                {
+                    if (auto next_ptr = *next_item_iter)
+                    {
+                        return next_ptr;
+                    }
+                    ++next_item_iter;
+                }
+                current_ptr = std::exchange(parent_ptr, parent_ptr->base::parent());
+            }
+            return sptr{};
+        }
+        // base: Return the previous object in visual tree.
+        auto get_prev()
         {
             if (auto parent_ptr = base::parent())
             {
-                base::scripting_context = parent_ptr->scripting_context;
+                auto prev_item_iter = base::holder;
+                while (prev_item_iter != parent_ptr->base::subset.begin())
+                {
+                    --prev_item_iter;
+                    if (auto prev_ptr = *prev_item_iter)
+                    {
+                        while (prev_ptr->base::subset.size() && prev_ptr->base::subset.back())
+                        {
+                            prev_ptr = prev_ptr->base::subset.back();
+                        }
+                        return prev_ptr;
+                    }
+                }
+                return parent_ptr;
             }
-            base::scripting_context.emplace_back(this);
-            //todo Sort all base::base_classes.* references.
-            //for (auto& [classname, base_class_metadata] : base_classes)
-            //{
-            //    if (base_class_metadata.class_metadata)
-            //    {
-            //        auto& objects = base_class_metadata.class_metadata->objects;
-            //        auto objects_iterator = base_class_metadata.class_iterator;
-            //        auto head = objects.begin();
-            //        auto tail = objects.end();
-            //        auto next = std::next(objects_iterator);
-            //        if (next != tail)
-            //        {
-            //            // Find valid next.
-            //        }
-            //        if (objects_iterator != head)
-            //        {
-            //            // Find valid prev.
-            //            auto prev = std::prev(objects_iterator);
-            //        }
-            //    }
-            //}
+            return sptr{};
         }
+        // base: Update scripting context. Run on anycast, e2::form::upon::started.
         // base: Enqueue task.
         template<bool Sync = true>
         void enqueue(netxs::events::fx<ui::base> proc)
@@ -821,6 +842,23 @@ namespace netxs::ui
             return std::pair{ ref_count, del_count };
         }
         // base: Cleanup expired weak references.
+        auto& get_scripting_context()
+        {
+            base::scripting_context.clear();
+            base::scripting_context.push_back(this);
+            auto parent_ptr = base::father.lock();
+            while (parent_ptr)
+            {
+                base::scripting_context.push_back(parent_ptr.get());
+                if (auto next_parent_ptr = parent_ptr->base::father.lock())
+                {
+                    parent_ptr = next_parent_ptr;
+                }
+                else break;
+            }
+            return base::scripting_context;
+        }
+        // base: Cleanup expired weak references.
         void cleanup(bool show_details = faux)
         {
             if (show_details)
@@ -840,7 +878,7 @@ namespace netxs::ui
                     for (auto& boss_ref : v->objects)
                     {
                         auto& boss = boss_ref.get();
-                        log("context: %ctx%", netxs::events::script_ref::to_string(boss.scripting_context));
+                        log("context: %ctx%", netxs::events::script_ref::to_string(boss.base::get_scripting_context()));
                     }
                 }
             }
@@ -861,7 +899,7 @@ namespace netxs::ui
         void broadcast(si32 Tier, hint event, auto&& param, bool forced = true)
         {
             auto lock = bell::sync();
-            bell::_signal(Tier, event, param);
+            indexer.notify(Tier, reactor, event, param);
             for (auto item_ptr : base::subset)
             {
                 if (item_ptr && (forced || !item_ptr->master))
@@ -892,7 +930,7 @@ namespace netxs::ui
             }
             else
             {
-                bell::_signal(Tier, event, param);
+                indexer.notify(Tier, reactor, event, param);
             }
         }
         // base: Fire an event.
@@ -1080,6 +1118,7 @@ namespace netxs::ui
         // base: Calculate global coordinate.
         void global(auto& coor)
         {
+            //todo revise: negate values (+base::intpad.corner())
             coor -= base::region.coor + base::intpad.corner();
             if (base::family == base::reflow_root) return;
             auto parent_ptr = base::parent();
@@ -1181,6 +1220,13 @@ namespace netxs::ui
                 iter = fields.emplace(plugin_name<T>(), ptr::shared(std::make_any<T>(boss, std::forward<Args>(args)...))).first;
             }
             return *(std::any_cast<T>(iter->second.get()));
+        }
+        // base: Return true if an object has the specified plugin.
+        template<class T>
+        auto has_plugin()
+        {
+            auto iter = fields.find(plugin_name<T>());
+            return iter != fields.end();
         }
         // base: Return a reference to a plugin of the specified type. Create an instance of the specified plugin using the specified arguments if it does not exist.
         template<class T, class ...Args>
