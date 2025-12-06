@@ -22,7 +22,7 @@ namespace netxs::app
 
 namespace netxs::app::shared
 {
-    static const auto version = "v2025.10.21";
+    static const auto version = "v2025.12.03";
     static const auto repository = "https://github.com/directvt/vtm";
     static const auto usr_config = "~/.config/vtm/settings.xml"s;
     static const auto sys_config = "/etc/vtm/settings.xml"s;
@@ -181,20 +181,32 @@ namespace netxs::app::shared
         input::bindings::keybind(boss, bindings);
         boss.base::add_methods(basename::applet,
         {
-            //{ "FocusNext",          [&]
-            //                        {
-            //                            auto gui_cmd = e2::command::gui.param();
-            //                            auto& gear = luafx.get_gear();
-            //                            if (gear.is_real())
-            //                            {
-            //                                gui_cmd.gear_id = gear.id;
-            //                                gear.set_handled();
-            //                            }
-            //                            gui_cmd.cmd_id = syscmd::focusnextwindow;
-            //                            gui_cmd.args.emplace_back(luafx.get_args_or(1, si32{ 1 }));
-            //                            boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
-            //                            luafx.set_return();
-            //                        }},
+            { "GetTitlesHeight",    [&]
+                                    {
+                                        auto h = 0;
+                                        auto f = 0;
+                                        if (auto parent_ptr = boss.base::parent())
+                                        {
+                                            parent_ptr->base::if_plugin<pro::title>([&](auto& title)
+                                            {
+                                                h = title.head_size.y;
+                                                f = title.foot_size.y;
+                                            });
+                                        }
+                                        luafx.set_return(h, f);
+                                    }},
+            { "GetArea",            [&]
+                                    {
+                                        if (auto parent_ptr = boss.base::parent()) // Try to get window area first.
+                                        {
+                                            auto area = parent_ptr->base::area();
+                                            luafx.set_return(area);
+                                        }
+                                        else
+                                        {
+                                            luafx.set_return(boss.base::area());
+                                        }
+                                    }},
             { "Warp",               [&]
                                     {
                                         auto gui_cmd = e2::command::gui.param();
@@ -546,7 +558,7 @@ namespace netxs::app::shared
             for (auto menuitem_ptr : menuitem_ptr_list)
             {
                 auto item = menu::item{};
-                auto menuitem_context = config.settings::push_context(menuitem_ptr);
+                auto menuitem_context = config.settings::push_context(menuitem_ptr); //todo revise
                 auto script_list = config.settings::take_ptr_list_of(menuitem_ptr, "script");
                 item.alive = script_list.size();
                 item.bindings = input::bindings::load(config, script_list);
@@ -629,7 +641,7 @@ namespace netxs::app::shared
             return creator;
         }
     }
-    auto builder(text app_typename)
+    static auto builder(text app_typename)
     {
         auto& map = creator();
         auto it = map.find(app_typename);
@@ -655,11 +667,11 @@ namespace netxs::app::shared
     }
     namespace load
     {
-        auto log_load(view src_path)
+        static auto log_load(view src_path)
         {
             log("%%Loading settings from %path%...", prompt::apps, src_path);
         }
-        auto load_from_file(xml::document& config_inst, qiew file_path)
+        static auto load_from_file(xml::document& config_inst, qiew file_path)
         {
             auto [config_path, config_path_str] = os::path::expand(file_path);
             if (!config_path.empty())
@@ -685,7 +697,7 @@ namespace netxs::app::shared
             }
             return faux;
         }
-        auto attach_file_list(txts& file_list, xml::document& src_cfg)
+        static auto attach_file_list(txts& file_list, xml::document& src_cfg)
         {
             auto file_ptr_list = src_cfg.take_ptr_list<true>("/include");
             if (file_ptr_list.size())
@@ -706,7 +718,7 @@ namespace netxs::app::shared
                 }
             }
         }
-        auto overlay_config(xml::document& def_cfg, xml::document& src_cfg)
+        static auto overlay_config(xml::document& def_cfg, xml::document& src_cfg)
         {
             if (src_cfg)
             {
@@ -714,7 +726,7 @@ namespace netxs::app::shared
                 def_cfg.combine_item(src_cfg.root_ptr);
             }
         }
-        void settings(xml::settings& resultant, qiew cliopt, bool print = faux)
+        static void settings(xml::settings& resultant, qiew cliopt, bool print = faux)
         {
             static auto defaults = utf::replace_all(
                 #include "../../vtm.xml"
@@ -806,7 +818,7 @@ namespace netxs::app::shared
         std::list<text> fontlist;
     };
 
-    auto get_gui_config(settings& config)
+    static auto get_gui_config(settings& config)
     {
         os::dtvt::wheelrate = config.settings::take("/config/timings/wheelrate", 3);
         auto gui_config = gui_config_t{ .winstate = config.settings::take("/config/gui/winstate", winstate::normal, app::shared::win::options),
@@ -826,7 +838,7 @@ namespace netxs::app::shared
         }
         return gui_config;
     }
-    auto get_tui_config(settings& config, ui::skin& g)
+    static auto get_tui_config(settings& config, ui::skin& g)
     {
         using namespace std::chrono;
         os::dtvt::wheelrate = config.settings::take("/config/timings/wheelrate", 3);
@@ -948,10 +960,12 @@ namespace netxs::app::shared
         g.NsMaximizeWindow_tooltip        = config.settings::take("/Ns/MaximizeWindow/tooltip"         , ""s);
         g.NsCloseWindow_tooltip           = config.settings::take("/Ns/CloseWindow/tooltip"            , ""s);
     }
-    void splice(xipc client, gui_config_t& gc)
+    static void splice(xipc client, gui_config_t& gc)
     {
         if (os::dtvt::active || !(os::dtvt::vtmode & ui::console::gui))
         {
+            os::dtvt::flagsz = true;
+            os::dtvt::flagsz.notify_all();
             os::tty::splice(client);
         }
         else
@@ -977,7 +991,7 @@ namespace netxs::app::shared
             }
         }
     }
-    void start(text cmd, text aclass)
+    static void start(text cmd, text aclass)
     {
         //todo revise
         auto [client, server] = os::ipc::xlink();
@@ -990,6 +1004,10 @@ namespace netxs::app::shared
         {
             app::shared::splice(client, gui_config);
         }};
+        if (os::dtvt::vtmode & ui::console::gui)
+        {
+            os::dtvt::flagsz.wait(faux); // Sync with gui window. Waiting for os::dtvt::gridsz update.
+        }
         auto gate_ptr = ui::gate::ctor(server, os::dtvt::vtmode);
         auto& gate = *gate_ptr;
         gate.base::resize(os::dtvt::gridsz);
@@ -1000,6 +1018,7 @@ namespace netxs::app::shared
         applet.base::kind(base::reflow_root);
         app::shared::applet_kb_navigation(config, applet_ptr);
         gate.attach(std::move(applet_ptr));
+        gate.base::reflow(); // Fit applet_ptr to the gate size. Resize all nested objects to set base::region instead of base::socket (see dtty's ui::veer).
         ui_lock.unlock();
         gate.launch(ui_lock);
         gate.base::dequeue();

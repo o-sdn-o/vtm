@@ -42,15 +42,15 @@ The following APC sequences set/reset/request event tracking for the specified e
 
 - Set:
   ```
-  ESC _ vtm.terminal.EventReporting("Source0", ..., "SourceN") ESC \
+  ESC _ lua: vtm.terminal.EventReporting("Source0", ..., "SourceN") ESC \
   ```
 - Reset (the event tracking is deactivated if an empty string is specified.):
   ```
-  ESC _ vtm.terminal.EventReporting("") ESC \
+  ESC _ lua: vtm.terminal.EventReporting("") ESC \
   ```
 - Get a list of active sources:
   ```
-  ESC _ src_list=vtm.terminal.EventReporting() ESC \
+  ESC _ lua: src_list=vtm.terminal.EventReporting() ESC \
   ```
 
 Sources      | Events to track
@@ -476,7 +476,7 @@ Application: ESC _ event=window ; size=<Width>,<Height> ESC \
 Terminal:    ESC _ event=window ; size=<Width>,<Height> ; cursor=<X>,<Y> ; region=<Left>,<Top>,<Right>,<Bottom> ; selection=<StartX>,<StartY>,<EndX>,<EndY>,<Mode> ESC \
 ```
 
-Note that the terminal window resizing always reflows the scrollback, so the window size, cursor position, scrolling regions, and selection coordinates are subject to change during step 3. Upon receiving the resize request (step 1), a fullscreen application can prepare a scrollback by cropping visible lines to avoid unwanted line wrapping or line extrusion, then send a resize confirmation (step 2). In case the aplication's output is anchored to the current cursor position or uses scrolling regions, the application should wait after step 2 for the updated values before continuing to output.
+Note that the terminal window resizing always reflows the scrollback, so the window size, cursor position, scrolling regions, and selection coordinates are subject to change during step 3. Upon receiving the resize request (step 1), a fullscreen application can prepare a scrollback by cropping visible lines to avoid unwanted line wrapping or line extrusion, then send a resize confirmation (step 2). In case the application's output is anchored to the current cursor position or uses scrolling regions, the application should wait after step 2 for the updated values before continuing to output.
 
 Hypothetical case with Far Manager (FM):
 - FM saves visible original scrollback.

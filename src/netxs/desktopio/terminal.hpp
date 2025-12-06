@@ -126,6 +126,11 @@ namespace netxs::ui
             X(ForwardKeys          ) /* */ \
             X(ClearScrollback      ) /* */ \
             X(ScrollbackSize       ) /* */ \
+            X(SetBackground        ) /* */ \
+            X(ResetAttributes      ) /* */ \
+            X(ScrollbackPadding    ) /* */ \
+            X(TabLength            ) /* */ \
+            X(RightToLeft          ) /* */ \
             X(EventReporting       ) /* */ \
             X(Restart              ) /* */ \
             X(Quit                 ) /* */ \
@@ -1094,8 +1099,8 @@ namespace netxs::ui
 
                 // Do not use non-standard vt.
                 //vt.csier.table[csi_ccc][ccc_cup] = V{ p->cup0(q); }; // CCC_CUP
-                //vt.csier.table[csi_ccc][ccc_chx] = V{ p->chx0(q.subarg(0)); }; // CCC_СHX
-                //vt.csier.table[csi_ccc][ccc_chy] = V{ p->chy0(q.subarg(0)); }; // CCC_СHY
+                //vt.csier.table[csi_ccc][ccc_chx] = V{ p->chx0(q.subarg(0)); }; // CCC_CHX
+                //vt.csier.table[csi_ccc][ccc_chy] = V{ p->chy0(q.subarg(0)); }; // CCC_CHY
                 vt.csier.table[csi_ccc][ccc_sbs] = V{ p->owner.sbsize(q); }; // CCC_SBS: Set scrollback size.
                 vt.csier.table[csi_ccc][ccc_rst] = V{ p->owner.setdef();  }; // CCC_RST: Reset to defaults.
                 vt.csier.table[csi_ccc][ccc_sgr] = V{ p->owner.setsgr(q); }; // CCC_SGR: Set default SGR.
@@ -1724,10 +1729,19 @@ namespace netxs::ui
                     }
                 }
                 q = { head, tail };
-                if (script_body)
+                if (script_body.size() > ansi::apc_prefix_lua.size())
                 {
-                    auto& luafx = owner.bell::indexer.luafx;
-                    luafx.run_script(owner, script_body);
+                    auto payload_marker = text{ script_body.substr(0, ansi::apc_prefix_lua.size()) };
+                    if (utf::to_lower(payload_marker) == ansi::apc_prefix_lua)
+                    {
+                        script_body.remove_prefix(ansi::apc_prefix_lua.size());
+                        auto& luafx = owner.bell::indexer.luafx;
+                        luafx.run_script(owner, script_body);
+                    }
+                    else
+                    {
+                        log("%%Unsupported APC payload: %payload%. Please use the '%lua%' prefix for the payload.", prompt::term, ansi::hi(utf::debase437(script_body)), ansi::apc_prefix_lua);
+                    }
                 }
             }
             void msg(si32 cmd, qiew& q)
@@ -7448,7 +7462,7 @@ namespace netxs::ui
                 case 4:     // Insert/Replace Mode (IRM) on.
                     insmod = true;
                     break;
-                case 20:    // LNM—Line Feed/New Line Mode on.
+                case 20:    // LNM-Line Feed/New Line Mode on.
                     target->set_autocr(true);
                     break;
                 default:
@@ -7463,7 +7477,7 @@ namespace netxs::ui
                 case 4:     // Insert/Replace Mode (IRM) off.
                     insmod = faux;
                     break;
-                case 20:    // LNM—Line Feed/New Line Mode off.
+                case 20:    // LNM-Line Feed/New Line Mode off.
                     target->set_autocr(faux);
                     break;
                 default:
@@ -8750,6 +8764,66 @@ namespace netxs::ui
                                                             luafx.set_return();
                                                         }
                                                     }},
+                { methods::SetBackground,           [&]
+                                                    {
+                                                        target->flush();
+                                                        auto brush = target->brush;
+                                                        set_color(brush.txt('\0'));
+                                                        luafx.set_return();
+                                                    }},
+                { methods::ScrollbackPadding,       [&]
+                                                    {
+                                                        target->flush();
+                                                        auto args_count = luafx.args_count();
+                                                        if (!args_count)
+                                                        {
+                                                            luafx.set_return(target->getpad());
+                                                        }
+                                                        else
+                                                        {
+                                                            auto padding = luafx.get_args_or(1, 0);
+                                                            target->setpad(padding);
+                                                            luafx.set_return();
+                                                        }
+                                                    }},
+                { methods::TabLength,               [&]
+                                                    {
+                                                        target->flush();
+                                                        auto args_count = luafx.args_count();
+                                                        if (!args_count)
+                                                        {
+                                                            luafx.set_return(defcfg.def_tablen);
+                                                        }
+                                                        else
+                                                        {
+                                                            auto tablen = std::clamp(luafx.get_args_or(1, 8), 1, 256);
+                                                            defcfg.def_tablen = tablen;
+                                                            target->rtb();
+                                                            luafx.set_return();
+                                                        }
+                                                    }},
+                { methods::RightToLeft,             [&]
+                                                    {
+                                                        target->flush();
+                                                        auto args_count = luafx.args_count();
+                                                        if (!args_count)
+                                                        {
+                                                            luafx.set_return(!!target->brush.rtl());
+                                                        }
+                                                        else
+                                                        {
+                                                            auto rtl = luafx.get_args_or(1, 0);
+                                                            target->style.rtl(rtl ? rtol::rtl : rtol::ltr);
+                                                            target->brush.rtl(rtl);
+                                                            luafx.set_return();
+                                                        }
+                                                    }},
+                { methods::ResetAttributes,         [&]
+                                                    {
+                                                        target->flush();
+                                                        setdef();
+                                                        luafx.set_return();
+                                                    }},
                 { methods::EventReporting,          [&]
                                                     {
                                                         luafx.run_with_gear_wo_return([&](auto& gear){ gear.set_handled(); });
@@ -9332,6 +9406,13 @@ namespace netxs::ui
             };
             ipccon.runapp(config, base::size(), connect, receiver, [&]{ onexit(); });
         }
+        // dtvt: Return true if application has never sent its canvas.
+        auto is_nodtvt()
+        {
+            auto lock = stream.bitmap_dtvt.freeze();
+            auto& canvas = lock.thing.image;
+            return !canvas.hash(); // Canvas never resized/received.
+        }
         // dtvt: Close dtvt-object.
         void stop(bool fast, bool notify = true)
         {
@@ -9339,13 +9420,7 @@ namespace netxs::ui
             {
                 base::signal(tier::request, e2::form::proceed::quit::one, fast);
             }
-            auto nodtvt = [&]
-            {
-                auto lock = stream.bitmap_dtvt.freeze();
-                auto& canvas = lock.thing.image;
-                return !canvas.hash(); // Canvas never resized/received.
-            }();
-            if (nodtvt) // Terminate a non-dtvt-aware application that has never sent its canvas.
+            if (is_nodtvt()) // Terminate a non-dtvt-aware application that has never sent its canvas.
             {
                 ipccon.abort();
             }

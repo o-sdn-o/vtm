@@ -184,11 +184,6 @@ namespace netxs::events
         else if constexpr (std::is_same_v<T, argb>)                  luna::vtmlua_push_value(lua, v.token);
         else if constexpr (std::is_same_v<T, time>)                  luna::vtmlua_push_value(lua, v.time_since_epoch().count());
         else if constexpr (std::is_same_v<T, span>)                  luna::vtmlua_push_value(lua, v.count());
-        else if constexpr (std::is_convertible_v<T, sptr<ui::base>>) ::lua_pushlightuserdata(lua, (void*)v.get());
-        else if constexpr (!std::is_same_v<T, noop>)                 ::lua_pushlightuserdata(lua, (void*)&v);
-        else if constexpr (is_string_v)                              ::lua_pushlstring(lua, v.data(), v.size());
-        else if constexpr (is_cstring_v)                             ::lua_pushstring(lua, v);
-        else if constexpr (std::is_pointer_v<T>)                     ::lua_pushlightuserdata(lua, (void*)v);
         else if constexpr (std::is_same_v<T, twod> || std::is_same_v<T, fp2d>)
         {
             luna::vtmlua_push_value(lua, v.x);
@@ -209,6 +204,11 @@ namespace netxs::events
             luna::vtmlua_push_value(lua, v.size);
             args_count = 4;
         }
+        else if constexpr (std::is_convertible_v<T, sptr<ui::base>>) ::lua_pushlightuserdata(lua, (void*)v.get());
+        else if constexpr (std::is_same_v<T, noop>)                  ::lua_pushnil(lua); // ::lua_pushlightuserdata(lua, (void*)&v);
+        else if constexpr (is_string_v)                              ::lua_pushlstring(lua, v.data(), v.size());
+        else if constexpr (is_cstring_v)                             ::lua_pushstring(lua, v);
+        else if constexpr (std::is_pointer_v<T>)                     ::lua_pushlightuserdata(lua, (void*)v);
         else
         {
             args_count = 0;
@@ -1538,7 +1538,11 @@ namespace netxs::ui
                 head_size = new_size;
                 foot_size = new_size;
                 if (head_live) recalc(head_page, head_size);
-                if (foot_live) recalc(foot_page, foot_size);
+                if (foot_live)
+                {
+                    recalc(foot_page, foot_size);
+                    if (foot_text.empty()) foot_size.y = 0;
+                }
             }
             void header(view newtext)
             {
@@ -2103,7 +2107,7 @@ namespace netxs::ui
                             if (status == state::live)
                             {
                                 is_leaf = faux;
-                                auto& nexthop_focus = nexthop.base::template plugin<pro::focus>(); //todo Apple clang requires templtate
+                                auto& nexthop_focus = nexthop.base::template plugin<pro::focus>(); //todo Apple clang requires template
                                 nexthop_focus.for_first_focused_leaf(gear, proc);
                                 return faux;
                             }
@@ -4195,6 +4199,8 @@ namespace netxs::ui
     class veer
         : public form<veer>
     {
+        bool inform_all;
+
     protected:
         // veer: .
         void deform(rect& new_area) override
@@ -4208,16 +4214,28 @@ namespace netxs::ui
         // veer: .
         void inform(rect new_area) override
         {
-            if (base::subset.size())
-            if (auto object = base::subset.back())
+            if (inform_all)
             {
-                object->base::notify(new_area);
+                for (auto object : base::subset)
+                {
+                    object->base::notify(new_area);
+                }
+            }
+            else
+            {
+                if (base::subset.size())
+                if (auto object = base::subset.back())
+                {
+                    object->base::notify(new_area);
+                }
             }
         }
 
     public:
         static constexpr auto classname = basename::veer;
-        veer()
+
+        veer(bool inform_all = faux)
+            : inform_all{ inform_all }
         {
             LISTEN(tier::release, e2::render::any, parent_canvas)
             {

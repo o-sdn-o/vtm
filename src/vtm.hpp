@@ -633,6 +633,15 @@ namespace netxs::app::vtm
                 base::kind(base::reflow_root);
                 base::root(true);
                 base::property("window.menuid") = what.applet->base::property("applet.menuid");
+                auto& config = bell::indexer.config;
+                auto window_context = config.settings::push_context("/config/events/window/");
+                auto script_list = config.settings::take_ptr_list_for_name("script");
+                auto bindings = input::bindings::load(config, script_list);
+                input::bindings::keybind(*this, bindings);
+                base::add_methods(basename::window,  // Add the 'window' object as an event source.
+                {
+                    // n/a
+                });
                 LISTEN(tier::preview, e2::command::gui, gui_cmd)
                 {
                     auto hit = true;
@@ -1405,7 +1414,7 @@ namespace netxs::app::vtm
             auto item_ptr_list = config.settings::take_ptr_list_for_name(path::item);
             for (auto item_ptr : item_ptr_list)
             {
-                auto item_context = config.settings::push_context(item_ptr);
+                auto item_context = config.settings::push_context(item_ptr); //todo revise
                 auto is_splitter = !config.settings::take_value_list_of(item_ptr, attr::splitter).empty();
                 auto menuid = is_splitter ? "splitter_" + std::to_string(splitter_count++)
                                           : config.settings::take_value_from(item_ptr, attr::id, ""s);

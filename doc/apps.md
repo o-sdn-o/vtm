@@ -76,7 +76,7 @@ For example, outputting a pixel-art image with transparency (pwsh):
 
 #### Text-only output
 
-Outputting plain text over other colored text while preserving all SGR attributes allows changing the text inside cells without having to re-specify the color and other SGR attributes for the output string (there may be a large number of attributes, and the one who prints may not even support it). This significantly simplifies and speeds up the output of intensively updated colored text blocks. This is achieved by using the so-called "transparent" color. The "transparent" color could be enabled by setting the following values ​​for the background color: red=255, green=255, blue=255, alpha=0.
+Outputting plain text over other colored text while preserving all SGR attributes allows changing the text inside cells without having to re-specify the color and other SGR attributes for the output string (there may be a large number of attributes, and the one who prints may not even support it). This significantly simplifies and speeds up the output of intensively updated colored text blocks. This is achieved by using the so-called "transparent" color. The "transparent" color could be enabled by setting the following values for the background color: red=255, green=255, blue=255, alpha=0.
 
 For example, replacing the string `Hello` with `World` inside a colored text line:
 ```bash
@@ -97,28 +97,29 @@ printf " Hello Test\r\e[44;31m\0\0\0\0\0\0\0\e[m\n"
 The built-in terminal is capable of executing Lua scripts received via APC (Application Program Command) vt-sequences. The format of the vt-sequence is as follows:
 
 ```
-ESC _ <script body> ESC \
+ESC _ lua: <script body> ESC \
 ```
 or
 ```
-ESC _ <script body> BEL
+ESC _ lua: <script body> BEL
 ```
-where: 
-- `ESC_` is the APC vt-sequence prefix.
-- `<script body>` - Lua script sent for execution.
-- `ESC\` or `BEL` - APC vt-sequence terminator.
+where:
+- `ESC_`: APC vt-sequence prefix.
+- `lua:`: case-insensitive APC payload marker.
+- `<script body>`: Lua script body.
+- `ESC\` or `BEL`: APC vt-sequence terminator.
 
 Usage examples:
 - `bash`:
   ```
   # Print the current scrollback buffer limits
-  printf "\e_local n,m,q=vtm.terminal.ScrollbackSize(); vtm.terminal.PrintLn('size=', n, ' growstep=', m, ' maxsize=', q)\e\\"
+  printf "\e_lua: local n,m,q=vtm.terminal.ScrollbackSize(); vtm.terminal.PrintLn('size=', n, ' growstep=', m, ' maxsize=', q)\e\\"
 
   # Set the scrollback buffer limit to 10K lines
-  printf "\e_vtm.terminal.ScrollbackSize(10000)\a"
+  printf "\e_lua: vtm.terminal.ScrollbackSize(10000)\a"
 
   # Maximize the terminal window
-  printf "\e_vtm.applet.Maximize()\e\\"
+  printf "\e_lua: vtm.applet.Maximize()\e\\"
   ```
 
 A complete list of available script functions can be found in [settings.md](settings.md#event-sources).
@@ -127,9 +128,9 @@ Note: The terminal parser may incorrectly detect the boundaries of a control seq
 
 Example in bash:
 ```bash
-printf "\e_vtm.terminal.PrintLn('\\e[44mHello!\\e[m')\a"
-printf "\e_vtm.terminal.PrintLn('\\\u{1b}[44mHello!\\\u{1b}[m')\a"
-printf "\e_vtm.terminal.PrintLn('\\x1b[44mHello!\\x1b[m')\a"
+printf "\e_lua: vtm.terminal.PrintLn('\\e[44mHello!\\e[m')\a"
+printf "\e_lua: vtm.terminal.PrintLn('\\\u{1b}[44mHello!\\\u{1b}[m')\a"
+printf "\e_lua: vtm.terminal.PrintLn('\\x1b[44mHello!\\x1b[m')\a"
 ```
 
 ### Special keyboard mode for terminal window to transfer all keyboard input to the terminal as is
@@ -138,25 +139,25 @@ The special (visible in the UI as Exclusive) terminal window mode allows all key
 
 ### Private control sequences
 
-Name         | Sequence                           | Description
--------------|------------------------------------|------------
-`CCC_SBS`    | `ESC [` 24 : n : m : q `p`         | Set scrollback buffer parameters:<br>`n` Initial buffer size<br>`m` Grow step<br>`q` Grow limit
-`CCC_SGR`    | `ESC [` 28 : m `p`                 | Set terminal background SGR attribute:<br>`m` SGR attribute (attribute m may include subarguments separated by colons), 0 — reset all attributes, _default is 0_
-`CCC_SEL`    | `ESC [` 29 : n `p`                 | Set text selection mode:<br>`n = 0` Selection is off<br>`n = 1` Select and copy as plaintext (default)<br>`n = 2` Select and copy as ANSI/VT text<br>`n = 3` Select and copy as RTF-document<br>`n = 4` Select and copy as HTML-code<br>`n = 5` Select and copy as protected plaintext (suppressed preview, [details](https://learn.microsoft.com/en-us/windows/win32/dataxchg/clipboard-formats#cloud-clipboard-and-clipboard-history-formats))
-`CCC_PAD`    | `ESC [` 30 : n `p`                 | Set scrollback buffer left and right side padding:<br>`n` Width in cells, _max = 255, default is 0_
-`CCC_RST`    | `ESC [` 1 `p`                      | Reset all parameters to default
-`CCC_TBS`    | `ESC [` 5 : n `p`                  | Set tab length in cells:<br>`n` Length in cells, _max = 256, default is 8_
-`CCC_JET`    | `ESC [` 11 : n `p`                 | Set text alignment, _default is Left_:<br>`n = 0`<br>`n = 1` Left<br>`n = 2` Right<br>`n = 3` Center
-`CCC_WRP`    | `ESC [` 12 : n `p`                 | Set text autowrap mode, _default is On_:<br>`n = 0`<br>`n = 1` On<br>`n = 2` Off (_enables horizontal scrolling_)
-`CCC_RTL`    | `ESC [` 13 : n `p`                 | Set text right-to-left mode, _default is Off_:<br>`n = 0`<br>`n = 1` On<br>`n = 2` Off
+Note: Since `CSI p` sequences are used by other terminals, all private vt-sequences must be replaced with alternative ones using Lua scripting via APC.
 
-Note: It is possible to combine multiple command into a single sequence using a semicolon. For example, the following sequence disables line wrapping, enables text selection, and sets background to blue: `\e[12:2;29:1;28:44p` or `\e[12:2;29:1;28:48:2:0:0:255p`.
+APC sequence                                                   | Deprecated sequence                | Description
+---------------------------------------------------------------|------------------------------------|------------
+`ESC _ lua: vtm.terminal.ScrollbackSize(` n `,` m `,` q `) ST` | `ESC [ 24 :` n `:` m `:` q `p`     | Set scrollback buffer parameters:<br>`n` Initial buffer size<br>`m` Grow step<br>`q` Grow limit
+`ESC _ lua: vtm.terminal.Print('\x1b[#{\x1b[0;` m `m'); vtm.terminal.SetBackground(); vtm.terminal.Print('\x1b[#}') ST` | `ESC [ 28 :` m `p` | Set terminal background SGR attribute:<br>`m` SGR attribute (attribute m may include subarguments separated by colons), 0 - reset all attributes, _default is 0_
+`ESC _ lua: vtm.terminal.ClipboardFormat(` n `) ST`            | `ESC [ 29 :` n `p`                 | Set text selection mode:<br>`n = 0` Selection is off<br>`n = 1` Select and copy as plaintext (default)<br>`n = 2` Select and copy as ANSI/VT text<br>`n = 3` Select and copy as RTF-document<br>`n = 4` Select and copy as HTML-code<br>`n = 5` Select and copy as protected plaintext (suppressed preview, [details](https://learn.microsoft.com/en-us/windows/win32/dataxchg/clipboard-formats#cloud-clipboard-and-clipboard-history-formats))
+`ESC _ lua: vtm.terminal.ScrollbackPadding(` n `) ST`          | `ESC [ 30 :` n `p`                 | Set scrollback buffer left and right side padding:<br>`n` Width in cells, _max = 255, default is 0_
+`ESC _ lua: vtm.terminal.ResetAttributes() ST`                 | `ESC [ 1 p`                        | Reset all parameters to default
+`ESC _ lua: vtm.terminal.TabLength(` n `) ST`                  | `ESC [ 5 :` n `p`                  | Set tab length in cells:<br>`n` Length in cells, _max = 256, default is 8_
+`ESC _ lua: vtm.terminal.LineAlignMode(` n - 1 `) ST`          | `ESC [ 11 :` n `p`                 | Set text alignment, _default is Left_:<br>`n = 0`<br>`n = 1` Left<br>`n = 2` Right<br>`n = 3` Center
+`ESC _ lua: vtm.terminal.LineWrapMode(` 0(off) or 1(on) `) ST` | `ESC [ 12 :` n `p`                 | Set text autowrap mode, _default is On_:<br>`n = 0`<br>`n = 1` On<br>`n = 2` Off (_enables horizontal scrolling_)
+`ESC _ lua: vtm.terminal.RightToLeft(` 0(off) or 1(on) `) ST`  | `ESC [ 13 :` n `p`                 | Set text right-to-left mode, _default is Off_:<br>`n = 0`<br>`n = 1` On<br>`n = 2` Off
 
 ### UI Shadows as SGR attribute
 
 The built-in terminal supports for in-cell UI shadows, specified using a colon-separated subparameter of the SGR 2 (faint) attribute.
 
-- `ESC [` 2 : n `m`  
+- `ESC [ 2 :` n `m`  
   where n=0-255 is a bit field to specify shadows inside the cell.
 
 The subparameter is a decimal integer from 0 to 255, the value of which corresponds to the state of the bits representing cells around the cell: In the center is the shaded cell, and around it are the shading cells.  The presence of shading cells corresponds to a bit value of 1, the absence - to a bit value of 0.
@@ -168,7 +169,7 @@ Shadow bits:  0  1  2
               5  6  7
 ```
 
-The bits are enumerated from the upper left corner row by row excluding the central shaded cell. Eight bits are used, hence the range of subparameter values ​​0-255 inclusive. This approach allows shadows to be combined with each other simply by performing a binary OR operation.
+The bits are enumerated from the upper left corner row by row excluding the central shaded cell. Eight bits are used, hence the range of subparameter values 0-255 inclusive. This approach allows shadows to be combined with each other simply by performing a binary OR operation.
 
 Shadows persist as an SGR attribute and are visible in GUI mode:
 
@@ -431,7 +432,7 @@ Hotkey                       | Description
     </terminal>
     <events>  <!-- The required key combination sequence can be generated on the Info page, accessible by clicking on the label in the lower right corner of the vtm desktop. The 'key*' statement here is to clear all previous bindings and start a new list. -->
         <terminal script*>  <!-- Terminal bindings. -->
-            <script=ExclusiveKeyboardMode              on="preview: Alt+Shift+B"/>
+            <script=ExclusiveKeyboardMode   on="preview: Alt+Shift+B"/>
             <script="vtm.gear.SetHandled()" on="Esc"/> <!-- Do nothing. We use the Esc key as a modifier. Its press+release events will only be sent after the key is physically released, and only if no other keys were pressed along with Esc. -->
             <script                         on="-Esc">  --  Clear selection if it is and send Esc press and release events.
                 vtm.terminal.ClearSelection()

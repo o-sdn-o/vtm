@@ -522,7 +522,7 @@ namespace netxs::os
                 }
                 if (args.size()) mscmd.pop_back(); // Pop last space.
                 if (cmd_shim) log("%%Command line: %mscmd% (special case for cmd.exe)", prompt::os, ansi::hi(utf::debase437(mscmd)));
-                else
+                else if (mscmd.size())
                 {
                     log("%%Command line: %mscmd%", prompt::os, ansi::hi(utf::debase437(mscmd)));
                     auto original_cmd_line = utf::to_utf(mscmd);
@@ -1803,42 +1803,72 @@ namespace netxs::os
             #endif
         }
         template<class ...Args>
-        void select(span timeout, auto&& timeout_proc, Args&&... args)
+        void select(auto&& timeout, auto&& timeout_proc, Args&&... args)
         {
+            auto count = 0;
             #if defined(_WIN32)
 
-                auto timeval = timeout == netxs::maxspan ? INFINITE : datetime::round<si32, std::chrono::milliseconds>(timeout);
                 auto socks = _fd_set(std::forward<Args>(args)...);
                 // Note: ::WaitForMultipleObjects() does not work with pipes (DirectVT).
-                auto yield = ::WaitForMultipleObjects((DWORD)socks.size(), socks.data(), FALSE, timeval);
-                if (yield == WAIT_TIMEOUT) // Timeout.
+                if (timeout == netxs::maxspan) // Blocking call.
                 {
-                    timeout_proc();
+                    count = ::WaitForMultipleObjects((DWORD)socks.size(), socks.data(), FALSE, INFINITE);
                 }
-                else
+                else // Use timeout.
                 {
-                    yield -= WAIT_OBJECT_0;
-                    _handle(yield, std::forward<Args>(args)...);
+                    auto start = datetime::now();
+                    auto timeval = datetime::round<si32, std::chrono::milliseconds>(timeout);
+                    count = ::WaitForMultipleObjects((DWORD)socks.size(), socks.data(), FALSE, timeval);
+                    if (count == WAIT_TIMEOUT) // Timeout.
+                    {
+                        if constexpr (!std::is_const<std::remove_reference_t<decltype(timeout)>>::value) // Disarm timer.
+                        {
+                            timeout = netxs::maxspan;
+                        }
+                        timeout_proc();
+                        return;
+                    }
+                    else if constexpr (!std::is_const<std::remove_reference_t<decltype(timeout)>>::value) // Rearm timer.
+                    {
+                        timeout -= std::min(timeout, datetime::now() - start);
+                    }
                 }
+                count -= WAIT_OBJECT_0;
+                _handle(count, std::forward<Args>(args)...);
 
             #else
 
-                auto ssec = datetime::round<decltype(::timeval{}.tv_sec), std::chrono::seconds>(timeout);
-                auto usec = datetime::round<decltype(::timeval{}.tv_usec), std::chrono::microseconds>(timeout - std::chrono::seconds{ ssec });
-                auto timeval = ::timeval{ .tv_sec = ssec, .tv_usec = usec };
-                auto timeval_ptr = timeout == netxs::maxspan ? nullptr : &timeval;
                 auto socks = fd_set{};
                 FD_ZERO(&socks);
                 auto nfds = 1 + _fd_set(socks, std::forward<Args>(args)...);
-                auto count = ::select(nfds, &socks, 0, 0, timeval_ptr);
-                if (count == 0) // Timeout.
+                if (timeout == netxs::maxspan) // Blocking call.
                 {
-                    timeout_proc();
+                    count = ::select(nfds, &socks, 0, 0, nullptr);
                 }
-                else
+                else // Use timeout.
                 {
-                    _select(count, socks, std::forward<Args>(args)...);
+                    auto start = datetime::now();
+                    auto ssec = datetime::round<decltype(::timeval{}.tv_sec), std::chrono::seconds>(timeout);
+                    auto usec = datetime::round<decltype(::timeval{}.tv_usec), std::chrono::microseconds>(timeout - std::chrono::seconds{ ssec });
+                    auto timeval = ::timeval{ .tv_sec = ssec, .tv_usec = usec };
+                    count = ::select(nfds, &socks, 0, 0, &timeval);
+                    if (count == 0) // Timeout.
+                    {
+                        //log("timeout dt=", datetime::now() - start);
+                        if constexpr (!std::is_const<std::remove_reference_t<decltype(timeout)>>::value) // Disarm timer.
+                        {
+                            //log("  reset timeout");
+                            timeout = netxs::maxspan;
+                        }
+                        timeout_proc();
+                        return;
+                    }
+                    else if constexpr (!std::is_const<std::remove_reference_t<decltype(timeout)>>::value) // Rearm timer.
+                    {
+                        timeout -= std::min(timeout, datetime::now() - start);
+                    }
                 }
+                _select(count, socks, std::forward<Args>(args)...);
 
             #endif
         }
@@ -1851,8 +1881,10 @@ namespace netxs::os
                 while (true)
                 {
                     auto empty = true;
-                    io::select(span{}, noop{}, os::stdin_fd, [&]{
-                        empty = flush.size() != io::recv(os::stdin_fd, flush).length(); });
+                    io::select(span{}, noop{}, os::stdin_fd, [&]
+                    {
+                        empty = flush.size() != io::recv(os::stdin_fd, flush).length();
+                    });
                     if (empty) break;
                 }
             #endif
@@ -2212,10 +2244,10 @@ namespace netxs::os
 
             auto success = faux;
 
-            auto& utf8 = clipdata.utf8;
-            auto& meta = clipdata.meta;
-            auto& form = clipdata.form;
-            auto& size = clipdata.size;
+            [[maybe_unused]] auto& utf8 = clipdata.utf8;
+            [[maybe_unused]] auto& meta = clipdata.meta;
+            [[maybe_unused]] auto& form = clipdata.form;
+            [[maybe_unused]] auto& size = clipdata.size;
 
             #if defined(_WIN32)
 
@@ -3493,7 +3525,7 @@ namespace netxs::os
                         //    To signal EOF to the peer and still be able
                         //    to receive pending data the peer sent.
                         //    "shutdown() doesn't actually close the file descriptor
-                        //     — it just changes its usability.
+                        //     - it just changes its usability.
                         // To free a socket descriptor, you need to use os::close().
                         // Note: .r == .w, it is a full duplex socket handle on POSIX.
                     #endif
@@ -3794,6 +3826,7 @@ namespace netxs::os
         static auto leadin = text{}; // dtvt: The first block read from stdin.
         static auto backup = tios{}; // dtvt: Saved console state to restore at exit.
         static auto gridsz = twod{}; // dtvt: Initial window grid size.
+        static auto flagsz = flag{}; // dtvt: Initial window grid size updating flag.
         static auto client = xipc{}; // dtvt: Internal IO link.
         static auto wheelrate = 3;   // dtvt: Lines per mouse wheel step (legacy mode).
 
@@ -4169,13 +4202,20 @@ namespace netxs::os
         {
             log("%%New process '%cmd%' at the %path%", prompt::dtvt, ansi::hi(utf::debase437(cfg.cmd)), cfg.cwd.empty() ? "current directory"s : "'" + utf::debase437(cfg.cwd) + "'");
             auto result = true;
-            auto onerror = [&]()
+            auto errmsg = [&]()
             {
-                log(prompt::dtvt, ansi::err("Process creation error", ' ', utf::to_hex_0x(os::error())),
+                return utf::concat(prompt::dtvt, ansi::err("Process creation error", ' ', utf::to_hex_0x(os::error())),
                     "\r\n\tcwd: '", cfg.cwd, "'",
                     "\r\n\tcmd: '", cfg.cmd, "'");
             };
-            #if defined(_WIN32)
+            if (cfg.cmd.empty())
+            {
+                result = faux;
+                log(prompt::dtvt, ansi::err("Error creating process: No command line specified"));
+            }
+            else
+            {
+                #if defined(_WIN32)
 
                 auto wcmd = utf::to_utf(os::nt::retokenize(cfg.cmd));
                 auto wcwd = utf::to_utf(cfg.cwd);
@@ -4220,9 +4260,12 @@ namespace netxs::os
                     os::close(procsinf.hThread);
                     os::close(procsinf.hProcess);
                 }
-                else onerror();
+                else
+                {
+                    log(errmsg());
+                }
 
-            #else
+                #else
 
                 auto p_id = os::process::sysfork(); // dtvt-app can be either a real dtvt-app or a proxy
                                                     // like SSH/netcat/inetd that forwards traffic from a real dtvt-app.
@@ -4237,27 +4280,33 @@ namespace netxs::os
                         ::dup2(fds->w, STDOUT_FILENO); os::stdout_fd = STDOUT_FILENO;
                         ::dup2(fds->w, STDERR_FILENO); os::stderr_fd = STDERR_FILENO;
                         fds.reset();
+                        auto iofx = [](auto& data){ io::send(os::stdout_fd, data); };
                         if (cfg.cwd.size())
                         {
                             auto err = std::error_code{};
                             fs::current_path(cfg.cwd, err);
                             auto msg = !err ? utf::fprint("%%Change current directory to '%cwd%'", prompt::dtvt, cfg.cwd)
                                             : utf::fprint("%%%err%Failed to change current directory to '%cwd%', error code: %code%%nil%", prompt::dtvt, ansi::err(), cfg.cwd, utf::to_hex_0x(err.value()), ansi::nil());
-                            auto logs = netxs::directvt::binary::logs_t{};
-                            logs.set(os::process::id.first, os::process::id.second, msg);
-                            logs.sendfx([](auto& data){ io::send(os::stdout_fd, data); });   // Send logs to the dtvt-app hoster.
+                            auto dtvtlogs = netxs::directvt::binary::logs_t{};
+                            dtvtlogs.set(os::process::id.first, os::process::id.second, msg);
+                            dtvtlogs.sendfx(iofx); // Send logs to the dtvt-app hoster.
                         }
                         os::fdscleanup();
                         cfg.env = os::env::add(cfg.env);
                         os::signals::listener.reset();
                         os::process::execvpe(cfg.cmd, cfg.env);
-                        onerror();
+                        // Error creating process.
+                        auto dtvtlogs = netxs::directvt::binary::logs_t{};
+                        auto sysclose = netxs::directvt::binary::sysclose_t{};
+                        dtvtlogs.set(os::process::id.first, os::process::id.second, errmsg());
+                        dtvtlogs.sendfx(iofx); // Send logs to the dtvt-app hoster.
+                        sysclose.set(true);
+                        sysclose.sendfx(iofx); // Send shutdown command to the dtvt-app hoster.
                         os::process::exit<true>(0);
                     }
                     else if (p_id > 0) os::process::exit<true>(0); // Fast exit the child process and leave the grandchild process detached.
                     else
                     {
-                        onerror();
                         os::process::exit<true>(1); // Something went wrong. Fast exit anyway.
                     }
                 }
@@ -4268,16 +4317,17 @@ namespace netxs::os
                     if (WIFEXITED(stat) && WEXITSTATUS(stat) != 0)
                     {
                         result = faux;
-                        onerror(); // Catch fast exit(1).
+                        log(errmsg()); // Catch fast exit(1). Something went wrong.
                     }
                 }
                 else
                 {
                     result = faux;
-                    onerror();
+                    log(errmsg());
                 }
 
-            #endif
+                #endif
+            }
             return result;
         }
 
@@ -4289,15 +4339,19 @@ namespace netxs::os
             text                    writebuf{};
             std::mutex              writemtx{};
             std::condition_variable writesyn{};
-            fd_t                    serverfd{};
-            fd_t                    clientfd{};
+            sptr<sock>              std_link{};
 
             operator bool () { return attached; }
 
-            void abort()
+            void abort() // Hard terminate the connection.
             {
-                os::close(serverfd); // Hard terminate connection.
-                os::close(clientfd); //
+                if (std_link)
+                {
+                    auto& server_fd = std_link->w;
+                    os::close(server_fd);
+                }
+                auto& client_fd = termlink.handle.w;
+                os::close(client_fd);
             }
             void payoff()
             {
@@ -4348,16 +4402,12 @@ namespace netxs::os
                         writebuf = config + writebuf;
                     }
                     termlink = ipc::stdcon{ m_pipe_r, m_pipe_w };
-
-                    auto cmd = connect(ptr::shared<sock>(s_pipe_r, s_pipe_w));
-
-                    attached.exchange(!!termlink);
-                    if (attached)
+                    std_link = ptr::shared<sock>(s_pipe_r, s_pipe_w);
+                    auto cmd = connect(std_link);
+                    if (cmd.size() && !!termlink)
                     {
-                        serverfd = s_pipe_w;
-                        clientfd = m_pipe_w;
+                        attached.exchange(true);
                         if constexpr (debugmode) log("%%DirectVT Gateway created for process '%cmd%'", prompt::dtvt, ansi::hi(utf::debase437(cmd)));
-                        writesyn.notify_one(); // Flush temp buffer.
                         auto stdwrite = std::thread{ [&]{ writer(); } };
 
                         if constexpr (debugmode) log(prompt::dtvt, "Reading thread started", ' ', utf::to_hex_0x(std::this_thread::get_id()));
@@ -4445,7 +4495,6 @@ namespace netxs::os
                                              " cmd: "s + cfg.cmd + " "s);
                 }
                 attached.exchange(!errcode);
-                writesyn.notify_one(); // Flush temp buffer.
             }
             void writer(auto& terminal)
             {
@@ -5209,7 +5258,7 @@ namespace netxs::os
 
                 static constexpr auto waitio = 100ms;
                 static constexpr auto disarm = netxs::maxspan;
-                auto timeout = span{};
+                auto timeout = disarm;
                 auto micefd = os::invalid_fd;
                 auto buffer = text(os::pipebuf, '\0');
                 auto sig_fd = os::signals::fd{};
@@ -5709,10 +5758,6 @@ namespace netxs::os
                 };
                 auto parser = [&](view accum)
                 {
-                    if (input_buffer.size() && !paste_not_complete)
-                    {
-                        timeout = disarm;
-                    }
                     input_buffer += accum;
                     auto cache = qiew{ input_buffer };
                     while (cache.size())
@@ -5751,12 +5796,14 @@ namespace netxs::os
                             if (cache.size() == 1) // Ambiguous state, need to wait some time for additional input.
                             {
                                 timeout = waitio;
+                                //log("E. timeout=", timeout);
                                 break;
                             }
                             auto [t, s, incomplete] = take_sequence(cache);
                             if (incomplete)
                             {
                                 timeout = waitio;
+                                //log("I. timeout=", timeout);
                                 break;
                             }
                             else if (t == type::mousevtim) // vt-input-mode report:  ESC _ payload ST
@@ -5965,6 +6012,7 @@ namespace netxs::os
                             if (!cluster.attr.correct && cache.size() == cluster.attr.utf8len) // UTF-8 character is not complete.
                             {
                                 timeout = waitio;
+                                //log("C. timeout=", timeout);
                                 break;
                             }
                             else
@@ -5978,6 +6026,7 @@ namespace netxs::os
                 };
                 auto t_proc = [&]
                 {
+                    //log("T. timeout=", timeout);
                     if (input_buffer.size())
                     {
                         detect_key(input_buffer);
@@ -5986,6 +6035,8 @@ namespace netxs::os
                 };
                 auto h_proc = [&]
                 {
+                    timeout = disarm; // Disarm timer on any input.
+                    //log("H. timeout=", timeout);
                     if (auto data = io::recv(os::stdin_fd, buffer))
                     {
                         if (micefd != os::invalid_fd)
@@ -6162,6 +6213,7 @@ namespace netxs::os
                                sig_fd,       s_proc,
                                micefd,       m_proc,
                                alarm,        f_proc);
+                    //log("S. timeout=", timeout);
                 }
                 #if defined(__linux__) && !defined(__ANDROID__)
                 lixx::uninitialize();
