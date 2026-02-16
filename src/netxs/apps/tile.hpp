@@ -93,8 +93,9 @@ namespace netxs::app::tile
         using skill::boss,
               skill::memo;
 
-        netxs::sptr<ui::list> client;
-        si32                  window_state;
+        netxs::sptr<ui::list>    client;
+        si32                     window_state;
+        std::unordered_set<id_t> data_sources;
 
     public:
         items(base&&) = delete;
@@ -110,6 +111,7 @@ namespace netxs::app::tile
             };
             boss.LISTEN(tier::release, tile::events::enlist, data_src_sptr, memo)
             {
+                if (!data_src_sptr || data_sources.find(data_src_sptr->id) != data_sources.end()) return; // Deduplicate.
                 auto active_color = skin::color(tone::active);
                 auto focused_color = skin::color(tone::focused);
                 auto cF = focused_color;
@@ -124,6 +126,8 @@ namespace netxs::app::tile
                     ->invoke([&](auto& boss)
                     {
                         auto& data_shadow = boss.base::field(ptr::shadow(data_src_sptr));
+                        auto& data_src_id = boss.base::field(data_src_sptr->id);
+                        data_sources.insert(data_src_id);
                         boss.depend(data_src_sptr);
                         data_src_sptr->LISTEN(tier::release, e2::form::prop::ui::header, new_title, boss.sensors)
                         {
@@ -136,6 +140,7 @@ namespace netxs::app::tile
                         };
                         boss.LISTEN(tier::release, e2::form::upon::vtree::detached, parent)
                         {
+                            data_sources.erase(data_src_id);
                             parent->resize(); // Rebuild list.
                         };
                         data_src_sptr->LISTEN(tier::release, tile::events::delist, f, boss.sensors)
@@ -159,6 +164,7 @@ namespace netxs::app::tile
                                 data_ptr->base::signal(tier::release, e2::form::state::highlight, hovered);
                             }
                         };
+                        boss.base::resize(); // Update item's size (recalc size to apply setpad{ 1, 1 }).
                     });
             };
             boss.LISTEN(tier::release, e2::render::any, parent_canvas, memo)
@@ -172,6 +178,7 @@ namespace netxs::app::tile
             };
             boss.LISTEN(tier::anycast, e2::form::upon::started, root_ptr, memo)
             {
+                data_sources.clear();
                 client->clear();
                 if (auto parent_ptr = boss.base::parent())
                 {
@@ -286,7 +293,41 @@ namespace netxs::app::tile
                                 };
                             };
                         }))
-                    ->branch(slot::_2, what.applet);
+                    ->branch(slot::_2, what.applet)
+                    ->invoke([&](auto& boss)
+                    {
+                        auto& zorder           = what.applet->base::property("applet.zorder", zpos::plain);
+                        auto& accesslock_gears = what.applet->base::property("applet.accesslock_gears", e2::form::state::keybd::enlist.param());
+                        auto& accesslock_token = boss.base::field(subs{});
+                        if (auto accesslock_state = (si32)!accesslock_gears.empty()) // Rearm the current accesslock state.
+                        {
+                            app::shared::track_accesslock(boss, accesslock_gears, accesslock_token, accesslock_state, id_t{});
+                        }
+                        boss.LISTEN(tier::preview, e2::command::gui, gui_cmd)
+                        {
+                            auto hit = true;
+                            if (gui_cmd.cmd_id == syscmd::accesslock)
+                            {
+                                if (auto args_count = gui_cmd.args.size())
+                                {
+                                    auto accesslock_state = netxs::any_get_or(gui_cmd.args[0], 0);
+                                    app::shared::track_accesslock(boss, accesslock_gears, accesslock_token, accesslock_state, gui_cmd.gear_id);
+                                }
+                            }
+                            else if (gui_cmd.cmd_id == syscmd::zorder) // Update vtm.applet["applet.zorder"] and do nothing: there is no z-order state in the window manager.
+                            {
+                                if (auto args_count = gui_cmd.args.size())
+                                {
+                                    zorder = netxs::any_get_or(gui_cmd.args[0], zpos::plain);
+                                }
+                            }
+                            else
+                            {
+                                hit = faux;
+                            }
+                            if (!hit) boss.bell::passover();
+                        };
+                    });
         };
         auto build_node = [](auto tag, auto slot1, auto slot2, auto grip_width, auto grip_bindings_ptr)
         {
@@ -511,6 +552,25 @@ namespace netxs::app::tile
                     menu_block->alignment({ snap::head, snap::head })
                 );
         };
+        static const auto accesslocked = [](auto& item_ptr, id_t allowed_gear_id)
+        {
+            if (item_ptr)
+            {
+                item_ptr->base::riseup(tier::request, e2::form::prop::window::accesslock, allowed_gear_id); // Access is not allowed if returned zero.
+            }
+            return !allowed_gear_id;
+        };
+        static const auto filter_by_accesslock = [](auto item_ptr, auto& gear_id_list)
+        {
+            if (item_ptr)
+            {
+                std::erase_if(gear_id_list, [&](auto allowed_gear_id)
+                {
+                    item_ptr->base::riseup(tier::request, e2::form::prop::window::accesslock, allowed_gear_id); // Access is not allowed if returned zero.
+                    return !allowed_gear_id;
+                });
+            }
+        };
         auto node_veer = [](auto&& node_veer, auto min_state, auto grip_bindings_ptr) -> netxs::sptr<ui::veer>
         {
             return ui::veer::ctor()
@@ -536,12 +596,9 @@ namespace netxs::app::tile
                             {
                                 boss.attach(item_ptr);
                                 item_ptr->base::broadcast(tier::anycast, e2::form::upon::started);
-                                if (item_ptr->base::kind() == base::client) // Restore side list item (it was deleted on detach).
-                                {
-                                    item_ptr->base::riseup(tier::release, tile::events::enlist, item_ptr);
-                                }
                             }
                             else item_ptr = boss.This();
+                            filter_by_accesslock(boss.back(), gear_id_list);
                             pro::focus::set(boss.back(), gear_id_list, solo::off);
                         }
                         else
@@ -664,10 +721,6 @@ namespace netxs::app::tile
                         newnode->base::broadcast(tier::anycast, e2::form::upon::started);
                         pro::focus::set(slot_1->back(), gear_id_list, solo::off); // Handover all foci.
                         pro::focus::set(slot_2->back(), gear_id_list, solo::off);
-                        if (curitem->base::kind() == base::client) // Restore side list item (it was deleted on detach).
-                        {
-                            curitem->base::riseup(tier::release, tile::events::enlist, curitem);
-                        }
                     };
                     boss.LISTEN(tier::anycast, e2::form::proceed::quit::any, fast)
                     {
@@ -933,6 +986,7 @@ namespace netxs::app::tile
                 {
                     boss.LISTEN(tier::anycast, e2::form::proceed::quit::any, fast)
                     {
+                        //todo closeby
                         boss.base::riseup(tier::release, e2::form::proceed::quit::one, fast);
                     };
                 });
@@ -1139,8 +1193,9 @@ namespace netxs::app::tile
                         if (nothing_to_iterate()) return;
                         auto prev_item_ptr = sptr{};
                         auto next_item_ptr = sptr{};
-                        foreach(id_t{}, [&](auto& item_ptr, si32 /*item_type*/, auto)
+                        foreach(id_t{}, [&](auto& item_ptr, si32 item_type, auto)
                         {
+                            if (item_type != item_type::grip && accesslocked(item_ptr, gear.id)) return;
                             if (pro::focus::is_focused(item_ptr, gear.id))
                             {
                                 prev_item_ptr = next_item_ptr;
@@ -1176,8 +1231,9 @@ namespace netxs::app::tile
                         auto prev_item_ptr = sptr{};
                         auto next_item_ptr = sptr{};
                         auto temp_item_ptr = sptr{};
-                        foreach(id_t{}, [&](auto& item_ptr, si32 /*item_type*/, auto)
+                        foreach(id_t{}, [&](auto& item_ptr, si32 item_type, auto)
                         {
+                            if (item_type != item_type::grip && accesslocked(item_ptr, gear.id)) return;
                             if (!temp_item_ptr)
                             {
                                 temp_item_ptr = item_ptr; // Fallback item.
@@ -1221,7 +1277,7 @@ namespace netxs::app::tile
                         auto next_item_ptr = sptr{};
                         foreach(id_t{}, [&](auto& item_ptr, si32 item_type, auto)
                         {
-                            if (item_type != item_type::grip)
+                            if (item_type != item_type::grip && !accesslocked(item_ptr, gear.id))
                             {
                                 if (pro::focus::is_focused(item_ptr, gear.id))
                                 {
@@ -1261,7 +1317,7 @@ namespace netxs::app::tile
                         auto temp_item_ptr = sptr{};
                         foreach(id_t{}, [&](auto& item_ptr, si32 item_type, auto)
                         {
-                            if (item_type != item_type::grip)
+                            if (item_type != item_type::grip && !accesslocked(item_ptr, gear.id))
                             {
                                 if (!temp_item_ptr)
                                 {
@@ -1463,8 +1519,9 @@ namespace netxs::app::tile
                     {
                         foreach(id_t{}, [&](auto& item_ptr, si32 item_type, auto)
                         {
-                            if (item_type != item_type::grip) pro::focus::set(item_ptr, gear.id, solo::off);
-                            else                              pro::focus::off(item_ptr, gear.id);
+                            auto focused = item_type != item_type::grip && !accesslocked(item_ptr, gear.id);
+                            if (focused) pro::focus::set(item_ptr, gear.id, solo::off);
+                            else         pro::focus::off(item_ptr, gear.id);
                         });
                         gear.set_handled();
                     };
@@ -1513,12 +1570,29 @@ namespace netxs::app::tile
                     {
                         foreach(gear.id, [&](auto& item_ptr, si32 item_type, auto)
                         {
-                            if (item_type != item_type::grip)
+                            if (item_type != item_type::grip && !accesslocked(item_ptr, gear.id))
                             {
                                 item_ptr->base::riseup(tier::preview, e2::form::proceed::quit::one, true);
                                 gear.set_handled();
                             }
                         });
+                    };
+                    boss.LISTEN(tier::anycast, e2::form::proceed::closeby, gear) // Check access to close.
+                    {
+                        auto locked_count = 0;
+                        foreach(id_t{}, [&](auto& item_ptr, si32 item_type, auto) // Check if the gear owner is allowed to close the window manager.
+                        {
+                            if (item_type != item_type::grip)
+                            if (accesslocked(item_ptr, gear.id))
+                            {
+                                locked_count++;
+                            }
+                        });
+                        if (locked_count)
+                        {
+                            log("%%Closing the window manager was interrupted by the presence of %% locked window(s)", prompt::hall, locked_count);
+                            gear.set_handled();
+                        }
                     };
                 });
             return object;

@@ -1036,6 +1036,159 @@ namespace netxs::generics
             }
         }
     };
+
+    // generics: Coroutine evaluation generator (pre C++23).
+    template<class T>
+    struct generator
+    {
+        struct promise_type
+        {
+            T const* current_value;
+
+            auto get_return_object()      { return generator{ handle_type::from_promise(*this) }; }
+            auto initial_suspend()        { return std::suspend_always{}; }
+            auto final_suspend() noexcept { return std::suspend_always{}; }
+            auto unhandled_exception()    { std::terminate(); }
+            auto return_void()            { }
+            auto yield_value(T const& value)
+            {
+                current_value = std::addressof(value);
+                return std::suspend_always{};
+            }
+        };
+
+        using handle_type = std::coroutine_handle<promise_type>;
+
+        handle_type h;
+
+        generator(generator const&) = delete;
+        generator(generator&& other) noexcept
+            : h{ std::exchange(other.h, nullptr) }
+        { }
+        generator(handle_type h)
+            : h{ h }
+        { }
+        ~generator()
+        {
+            if (h) h.destroy();
+        }
+
+        struct iterator
+        {
+            handle_type h;
+            bool        done;
+
+            void operator++()                            { h.resume(); done = h.done(); }
+            auto& operator*() const                      { return *(h.promise().current_value); }
+            auto operator!=(iterator const& other) const { return done != other.done; }
+        };
+
+        auto begin()
+        {
+            if (!h) return iterator{ nullptr, true };
+            h.resume();
+            return iterator{ h, h.done() };
+        }
+        auto end()
+        {
+            return iterator{ nullptr, true };
+        }
+        static generator merge(generator g1, generator g2)
+        {
+            for (auto& item : g1) co_yield item;
+            for (auto& item : g2) co_yield item;
+        }
+        friend auto operator | (generator&& g1, generator&& g2)
+        {
+            return merge(std::move(g1), std::move(g2));
+        }
+    };
+
+    // generics: Dense slot map.
+    template<class T>
+    struct smap
+    {
+        using type = T;
+
+        std::vector<T>    thing_vec; // Object set (dense).
+        std::vector<ui32> index_map; // Object order (sparse).
+        std::vector<ui32> erase_map; // Reverse index.
+        ui32              empty_key{ -1 };
+
+        template<bool IsConst>
+        struct Iterator
+        {
+            using iterator_category = std::forward_iterator_tag;
+            using value_type        = std::pair<ui32 const, std::conditional_t<IsConst, T const&, T&>>;
+            using reference         = value_type;
+            using difference_type   = std::ptrdiff_t;
+            using pointer           = void; 
+
+            std::conditional_t<IsConst, T const*, T*> val_ptr;
+            ui32 const*                               key_ptr;
+
+            auto  operator == (Iterator const& other) const { return val_ptr == other.val_ptr; }
+            auto  operator != (Iterator const& other) const { return val_ptr != other.val_ptr; }
+            auto  operator *  () const                      { return reference{ *key_ptr, *val_ptr }; }
+            auto& operator ++ ()                            { key_ptr++; val_ptr++; return *this; }
+            auto  operator ++ (int)                         { auto tmp = *this; key_ptr++; val_ptr++; return tmp; }
+        };
+
+        auto  begin() const { return Iterator<true>{ thing_vec.data(), erase_map.data() }; }
+        auto  begin()       { return Iterator<faux>{ thing_vec.data(), erase_map.data() }; }
+        auto  end()   const { return Iterator<true>{ thing_vec.data() + thing_vec.size(), erase_map.data() + erase_map.size() }; }
+        auto  end()         { return Iterator<faux>{ thing_vec.data() + thing_vec.size(), erase_map.data() + erase_map.size() }; }
+        //auto  begin()             { return thing_vec.begin(); }
+        //auto  end()               { return thing_vec.end(); }
+        //auto  begin()       const { return thing_vec.begin(); }
+        //auto  end()         const { return thing_vec.end(); }
+        auto& get(ui32 key)       { return thing_vec[index_map[key]]; }
+        auto& get(ui32 key) const { return thing_vec[index_map[key]]; }
+        ui32 insert(T val)
+        {
+            auto key = ui32{};
+            if (empty_key == (ui32)-1) // Grow.
+            {
+                key = (ui32)index_map.size();
+                index_map.push_back((ui32)thing_vec.size());
+            }
+            else // Resuse.
+            {
+                key = std::exchange(empty_key, index_map[empty_key]);
+                index_map[key] = (ui32)thing_vec.size();
+            }
+            thing_vec.push_back(std::move(val));
+            erase_map.push_back(key);
+            return key;
+        }
+        void erase(ui32 key)
+        {
+            auto data_idx = index_map[key];
+            auto last_key = erase_map.back();
+            erase_map.pop_back();
+            if (data_idx != erase_map.size())
+            {
+                thing_vec[data_idx] = std::move(thing_vec.back());
+                erase_map[data_idx] = last_key;
+                index_map[last_key] = data_idx;
+            }
+            thing_vec.pop_back();
+            index_map[key] = std::exchange(empty_key, key);
+        }
+        void reserve(ui32 n)
+        {
+            thing_vec.reserve(n);
+            index_map.reserve(n);
+            erase_map.reserve(n);
+        }
+        void clear()
+        {
+            thing_vec.clear();
+            index_map.clear();
+            erase_map.clear();
+            empty_key = (ui32)-1;
+        }
+    };
 }
 
 // generics: Map helpers.

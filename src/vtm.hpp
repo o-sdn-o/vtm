@@ -443,17 +443,17 @@ namespace netxs::app::vtm
             using skill::boss,
                   skill::memo;
 
-            bool drags;
-            id_t under;
-            fp2d coord;
-            wptr cover;
+            id_t gear_id; // d_n_d: Mouse cursor id.
+            id_t dest_id; // d_n_d: Id of the object under the mouse cursor.
+            fp2d coordxy; // d_n_d: Mouse cursor coords.
+            wptr dst_ptr; // d_n_d: Weak reference of the object under the mouse cursor.
 
             void proceed(bool keep, hids& gear)
             {
-                drags = faux;
+                gear_id = {};
                 boss.base::signal(tier::anycast, e2::form::prop::lucidity, 0xFF); // Make target opaque.
                 auto boss_ptr = boss.This();
-                if (auto dest_ptr = cover.lock())
+                if (auto dest_ptr = dst_ptr.lock())
                 {
                     auto& dest = *dest_ptr;
                     if (keep)
@@ -470,68 +470,73 @@ namespace netxs::app::vtm
                     }
                     else dest.base::signal(tier::release, vtm::events::d_n_d::abort, boss.This());
                 }
-                cover.reset();
-                under = {};
+                dst_ptr.reset();
+                dst_ptr = {};
+            }
+            auto action_allowed(hids& gear)
+            {
+                auto allowed = !gear.meta(hids::anyMod);
+                return allowed;
             }
 
         public:
             d_n_d(base&&) = delete;
             d_n_d(base& boss)
                 : skill{ boss },
-                  drags{ faux },
-                  under{      }
+                gear_id{      },
+                dest_id{      }
             {
                 boss.LISTEN(tier::release, e2::form::drag::start::any, gear, memo)
                 {
-                    if (!drags && boss.size().inside(gear.coord) && !gear.meta(hids::anyMod))
+                    if (!gear_id && boss.size().inside(gear.coord) && action_allowed(gear))
                     {
-                        drags = true;
-                        coord = gear.coord;
-                        under = {};
+                        gear_id = gear.id;
+                        coordxy = gear.coord;
+                        dest_id = {};
                     }
                 };
                 boss.LISTEN(tier::release, e2::form::drag::pull::any, gear, memo)
                 {
-                    if (!drags) return;
-                    if (gear.meta(hids::anyMod)) proceed(faux, gear);
-                    else                         coord = gear.coord - gear.delta.get();
+                    if (!gear_id) return;
+                    if (action_allowed(gear)) coordxy = gear.coord - gear.delta.get();
+                    else                      proceed(faux, gear);
                 };
                 boss.LISTEN(tier::release, e2::form::drag::stop::any, gear, memo)
                 {
-                    if (!drags) return;
-                    if (gear.meta(hids::anyMod)) proceed(faux, gear);
-                    else                         proceed(true, gear);
+                    if (!gear_id) return;
+                    auto allowed = action_allowed(gear);
+                    proceed(allowed, gear);
                 };
-                boss.LISTEN(tier::release, e2::form::drag::cancel::any, gear, memo)
-                {
-                    if (!drags) return;
-                    if (gear.meta(hids::anyMod)) proceed(faux, gear);
-                    else                         proceed(true, gear);
-                };
-                boss.dup_handler(tier::general, input::events::halt.id, memo.back());
+                boss.on(tier::release, e2::form::drag::cancel::any.id, memo.back());
+                boss.on(tier::general, input::events::halt.id,         memo.back());
                 boss.LISTEN(tier::release, e2::render::background::prerender, parent_canvas, memo)
                 {
-                    if (!drags) return;
+                    if (!gear_id) return;
                     auto area = parent_canvas.core::area();
-                    auto coor = coord - area.coor;
+                    auto coor = coordxy - area.coor;
                     if (area.size.inside(coor))
                     {
                         auto& c = parent_canvas[coor];
-                        auto new_under = c.link();
-                        if (under != new_under)
+                        auto new_dest_id = c.link();
+                        if (dest_id != new_dest_id)
                         {
                             auto object = vtm::events::d_n_d::ask.param();
-                            if (auto old_object = boss.base::getref(under))
+                            if (auto old_object = boss.base::getref(dest_id))
                             {
                                 old_object->base::riseup(tier::release, vtm::events::d_n_d::abort, object);
                             }
-                            if (auto new_object = boss.base::getref(new_under))
+                            if (auto new_object = boss.base::getref(new_dest_id))
                             {
-                                new_object->base::riseup(tier::release, vtm::events::d_n_d::ask, object);
+                                auto check_gear_id = gear_id;
+                                new_object->base::riseup(tier::request, e2::form::prop::window::accesslock, check_gear_id); // Check access for gear_id.
+                                if (check_gear_id)
+                                {
+                                    new_object->base::riseup(tier::release, vtm::events::d_n_d::ask, object);
+                                }
                             }
                             boss.base::signal(tier::anycast, e2::form::prop::lucidity, object ? 0x80 : 0xFF); // Make it semi-transparent on success and opaque otherwise.
-                            cover = object;
-                            under = new_under;
+                            dst_ptr = object;
+                            dest_id = new_dest_id;
                         }
                     }
                 };
@@ -549,6 +554,8 @@ namespace netxs::app::vtm
         {
             hall& world;
             si32& zorder;
+            decltype(e2::form::state::keybd::enlist)::type& accesslock_gears;
+            subs accesslock_token;
             bool highlighted = faux;
             bool active = faux;
             tone color = { tone::brighter, tone::shadower };
@@ -573,12 +580,21 @@ namespace netxs::app::vtm
             {
                 base::enqueue([gear_id](auto& boss) // Keep the focus tree intact while processing events.
                 {
-                    if (auto gear_ptr = boss.base::template getref<hids>(gear_id)) //todo Apple clang requires template
+                    if (auto gear_ptr = boss.base::template getref<hids>(gear_id); gear_ptr->is_real()) //todo Apple clang requires template
                     {
                         auto& gear = *gear_ptr;
+                        gear.alive = true; //todo unify
                         gear.set_multihome();
+                        boss.base::signal(tier::anycast, e2::form::proceed::closeby, gear); // Check access to close.
+                        if (gear) //todo unify: make call the e2::form::proceed::quit::one with gear
+                        {
+                            boss.base::signal(tier::anycast, e2::form::proceed::quit::one, true);
+                        }
+                        else
+                        {
+                            log("%%Window closing was interrupted due to a locked state", prompt::hall);
+                        }
                     }
-                    boss.base::signal(tier::anycast, e2::form::proceed::quit::one, true);
                 });
             }
             void window_state(id_t gear_id, auto state)
@@ -618,7 +634,8 @@ namespace netxs::app::vtm
             static constexpr auto classname = basename::window;
             window_t(hall& owner, applink& what)
                 : world{ owner },
-                  zorder{ what.applet->base::property("applet.zorder", zpos::plain) }
+                            zorder{ what.applet->base::property("applet.zorder", zpos::plain) },
+                  accesslock_gears{ what.applet->base::property("applet.accesslock_gears", e2::form::state::keybd::enlist.param()) }
             {
                 base::plugin<pro::mouse>();
                 base::plugin<pro::d_n_d>();
@@ -642,6 +659,10 @@ namespace netxs::app::vtm
                 {
                     // n/a
                 });
+                if (auto accesslock_state = (si32)!accesslock_gears.empty()) // Rearm the current accesslock state.
+                {
+                    app::shared::track_accesslock(*this, accesslock_gears, accesslock_token, accesslock_state, id_t{});
+                }
                 LISTEN(tier::preview, e2::command::gui, gui_cmd)
                 {
                     auto hit = true;
@@ -649,17 +670,25 @@ namespace netxs::app::vtm
                     {
                         if (gui_cmd.args.size() == 4)
                         {
-                            auto warp = dent{ any_get_or(gui_cmd.args[0]),
-                                              any_get_or(gui_cmd.args[1]),
-                                              any_get_or(gui_cmd.args[2]),
-                                              any_get_or(gui_cmd.args[3]) };
+                            auto warp = dent{ netxs::any_get_or(gui_cmd.args[0]),
+                                              netxs::any_get_or(gui_cmd.args[1]),
+                                              netxs::any_get_or(gui_cmd.args[2]),
+                                              netxs::any_get_or(gui_cmd.args[3]) };
                             window_swarp(warp);
                         }
                     }
                     else if (gui_cmd.cmd_id == syscmd::zorder)
                     {
                         auto args_count = gui_cmd.args.size();
-                        window_zorder(args_count, args_count ? any_get_or(gui_cmd.args[0], zpos::plain) : zpos::plain);
+                        window_zorder(args_count, args_count ? netxs::any_get_or(gui_cmd.args[0], zpos::plain) : zpos::plain);
+                    }
+                    else if (gui_cmd.cmd_id == syscmd::accesslock)
+                    {
+                        if (gui_cmd.args.size())
+                        {
+                            auto accesslock_state = netxs::any_get_or(gui_cmd.args[0], 0);
+                            app::shared::track_accesslock(*this, accesslock_gears, accesslock_token, accesslock_state, gui_cmd.gear_id);
+                        }
                     }
                     else if (gui_cmd.cmd_id == syscmd::close)
                     {
@@ -937,6 +966,7 @@ namespace netxs::app::vtm
                     {
                         if (++next != world.base::subset.end() && !area.trim((*next)->region))
                         {
+                            //todo revise: it crashes
                             world.base::subset.erase(base::holder);
                             while (++next != world.base::subset.end() && !area.trim((*next)->region))
                             { }
@@ -983,6 +1013,8 @@ namespace netxs::app::vtm
         ui::base& app_model = *app_model_ptr;
         desk::usrs& usrs_list = *usrs_list_ptr;
         desk::menu& app_configs = *app_configs_ptr;
+
+        std::optional<id_t> admin_gear_id; // hall: Admin's gear id (the first connected user's gear).
 
         auto& menumodel_get_appconfig(qiew menuid)
         {
@@ -1183,6 +1215,11 @@ namespace netxs::app::vtm
                     return faux;
                 }
             }
+            auto count = base::subset.size();
+            if (count < 1)
+            {
+                return true;
+            }
             gear.owner.base::signal(tier::preview, e2::form::size::restore);
 
             auto window_ptr = base::signal(tier::request, e2::form::layout::go::item); // Take current window.
@@ -1190,8 +1227,17 @@ namespace netxs::app::vtm
 
             auto current = window_ptr;
             window_ptr.reset();
-            if (go_forward) base::signal(tier::request, e2::form::layout::go::prev, window_ptr); // Take prev window.
-            else            base::signal(tier::request, e2::form::layout::go::next, window_ptr); // Take next window.
+            while (true)
+            {
+                if (go_forward) base::signal(tier::request, e2::form::layout::go::prev, window_ptr); // Take prev window.
+                else            base::signal(tier::request, e2::form::layout::go::next, window_ptr); // Take next window.
+                auto allowed_gear_id = gear.id;
+                if (window_ptr)
+                {
+                    window_ptr->base::signal(tier::request, e2::form::prop::window::accesslock, allowed_gear_id); // Access is not allowed if returned zero.
+                }
+                if (allowed_gear_id || --count == 0) break; // Try the next window if access is not allowed.
+            }
 
             if (window_ptr)
             {
@@ -1205,6 +1251,16 @@ namespace netxs::app::vtm
             }
             return true;
         }
+        static auto expand_conf_rec(auto& conf_rec)
+        {
+            auto current_module_file = os::process::binary();
+            utf::replace_all(conf_rec.title,      "$0", current_module_file);
+            utf::replace_all(conf_rec.footer,     "$0", current_module_file);
+            utf::replace_all(conf_rec.label,      "$0", current_module_file);
+            utf::replace_all(conf_rec.tooltip,    "$0", current_module_file);
+            utf::replace_all(conf_rec.appcfg.cmd, "$0", current_module_file);
+            utf::replace_all(conf_rec.appcfg.env, "$0", current_module_file);
+        }
 
     public:
         static constexpr auto classname = basename::desktop;
@@ -1213,7 +1269,14 @@ namespace netxs::app::vtm
               robot{ base::plugin<pro::robot>() }
         {
             auto& canal = *server;
-
+            auto& server_online   = base::field(true);
+            auto& server_shutdown = base::field([&]
+            {
+                if (std::exchange(server_online, faux))
+                {
+                    canal.stop();
+                }
+            });
             auto& config = bell::indexer.config;
             app::shared::get_tui_config(config, ui::skin::globals());
 
@@ -1291,11 +1354,12 @@ namespace netxs::app::vtm
                                             auto ok = !args_count || !base::signal(tier::request, e2::form::layout::go::item);
                                             if (ok)
                                             {
-                                                base::signal(tier::general, e2::shutdown, utf::concat(prompt::repl, "Server shutdown"));
+                                                base::signal(tier::release, e2::shutdown::command, utf::concat(prompt::repl, "Server shutdown"));
+                                                ok = bell::accomplished();
                                             }
                                             luafx.set_return(ok);
                                         }},
-                { "Disconnect",         [&] //todo Disconnect(gear_id)
+                { "Disconnect",         [&]
                                         {
                                             auto& gear = luafx.get_gear();
                                             auto ok = gear.is_real();
@@ -1379,7 +1443,6 @@ namespace netxs::app::vtm
                                         }},
             });
 
-            auto current_module_file = os::process::binary();
             auto  free_list = std::list<std::pair<text, desk::spec>>{};
             auto  temp_list = free_list;
             auto  dflt_spec = desk::spec{ .hidden   = faux,
@@ -1401,15 +1464,6 @@ namespace netxs::app::vtm
 
             auto splitter_count = 0;
             auto auto_id = 0;
-            auto expand = [&](auto& conf_rec)
-            {
-                utf::replace_all(conf_rec.title,      "$0", current_module_file);
-                utf::replace_all(conf_rec.footer,     "$0", current_module_file);
-                utf::replace_all(conf_rec.label,      "$0", current_module_file);
-                utf::replace_all(conf_rec.tooltip,    "$0", current_module_file);
-                utf::replace_all(conf_rec.appcfg.cmd, "$0", current_module_file);
-                utf::replace_all(conf_rec.appcfg.env, "$0", current_module_file);
-            };
             auto taskbar_context = config.settings::push_context(path::taskbar);
             auto item_ptr_list = config.settings::take_ptr_list_for_name(path::item);
             for (auto item_ptr : item_ptr_list)
@@ -1428,7 +1482,7 @@ namespace netxs::app::vtm
                     auto& conf_rec = proto;
                     conf_rec.fixed = true;
                     hall::loadspec(conf_rec, conf_rec, item_ptr, menuid, is_splitter);
-                    expand(conf_rec);
+                    hall::expand_conf_rec(conf_rec);
                 }
                 else // New item.
                 {
@@ -1436,7 +1490,7 @@ namespace netxs::app::vtm
                     conf_rec.fixed = true;
                     auto& dflt = dflt_spec;  // New item.
                     hall::loadspec(conf_rec, dflt, item_ptr, menuid, is_splitter);
-                    expand(conf_rec);
+                    hall::expand_conf_rec(conf_rec);
                     if (conf_rec.hidden) temp_list.emplace_back(std::move(conf_rec.menuid), std::move(conf_rec));
                     else                 free_list.emplace_back(std::move(conf_rec.menuid), std::move(conf_rec));
                 }
@@ -1469,16 +1523,78 @@ namespace netxs::app::vtm
                 if (auto gear_ptr = base::getref<hids>(gui_cmd.gear_id))
                 {
                     auto& gear = *gear_ptr;
-                    auto dir = gui_cmd.args.size() ? any_get_or(gui_cmd.args[0], 1) : 1;
+                    auto dir = gui_cmd.args.size() ? netxs::any_get_or(gui_cmd.args[0], 1) : 1;
                     focus_next_window(gear, dir);
                     hit = true;
                 }
                 if (!hit) bell::passover();
             };
-            LISTEN(tier::general, e2::shutdown, msg)
+            LISTEN(tier::release, e2::shutdown::bygear, gear)
             {
+                if (!server_online) return;
+                auto gear_id = admin_gear_id.value_or(id_t{});
+                if (gear_id && gear_id == gear.id) // The administrator has the privilege to unconditionally shut down the server.
+                {
+                    log("%%The server is unconditionally shut down by the administrator", prompt::desk);
+                    for (auto usergate_ptr : usrs_list) if (usergate_ptr) // Prepare for shutting down.
+                    {
+                        usergate_ptr->base::signal(tier::release, e2::form::size::restore);
+                    }
+                    server_shutdown();
+                }
+                else
+                {
+                    for (auto& item_ptr : base::subset) if (item_ptr)
+                    {
+                        item_ptr->base::signal(tier::anycast, e2::form::proceed::closeby, gear); // Check access to close.
+                        if (!gear) break;
+                    }
+                    if (gear)
+                    {
+                        base::signal(tier::release, e2::shutdown::command, utf::concat(prompt::desk, "Server shutdown"));
+                    }
+                    else
+                    {
+                        log("%%Server shutdown was interrupted due to locked windows", prompt::hall);
+                    }
+                }
+            };
+            LISTEN(tier::release, e2::shutdown::command, msg)
+            {
+                if (!server_online) return;
                 if constexpr (debugmode) log(prompt::host, msg);
-                canal.stop();
+                auto allow_shutdown = true;
+                if (usrs_list.size()) // Shutdown if there are no users.
+                {
+                    // Check if users have accesslocked windows.
+                    auto accesslock_list = base::signal(tier::request, e2::form::state::accesslock::enlist);
+                    allow_shutdown = accesslock_list.empty();
+                    if (!allow_shutdown)
+                    {
+                        log("%%Server shutdown was interrupted due to %% locked window(s)", prompt::hall, accesslock_list.size());
+                    }
+                    else // Check if users have fullscreen windows.
+                    {
+                        for (auto usergate_ptr : usrs_list)
+                        {
+                            auto has_fullscreen = usergate_ptr->base::subset.size() > 1;
+                            if (has_fullscreen)
+                            {
+                                allow_shutdown = faux;
+                                log("%%Server shutdown was interrupted due to user '%%' fullscreen window", prompt::hall, usergate_ptr->base::signal(tier::request, e2::form::prop::name));
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (allow_shutdown)
+                {
+                    server_shutdown();
+                }
+                else
+                {
+                    base::passover();
+                }
             };
             LISTEN(tier::general, e2::config::creator, world_ptr)
             {
@@ -1541,6 +1657,33 @@ namespace netxs::app::vtm
                             app_model.remove(menumodel_item_ptr);
                         }
                         break;
+                    }
+                }
+            };
+
+            LISTEN(tier::request, e2::form::state::accesslock::master, accesslock_gears) // Add admin's gear id if it is.
+            {
+                if (auto gear_id = admin_gear_id.value_or(id_t{}))
+                if (accesslock_gears.size() && std::ranges::find(accesslock_gears, gear_id) == accesslock_gears.end())
+                {
+                    accesslock_gears.push_back(gear_id);
+                }
+                bell::expire(); // No one else can process it further.
+            };
+            LISTEN(tier::preview, e2::form::state::accesslock::enlist, accesslock_list)
+            {
+                base::signal(tier::request, e2::form::state::accesslock::enlist, accesslock_list);
+                base::signal(tier::release, e2::form::state::accesslock::count, (si32)accesslock_list.size());
+            };
+            LISTEN(tier::request, e2::form::state::accesslock::enlist, accesslock_list)
+            {
+                accesslock_list.clear();
+                for (auto& item_ptr : base::subset) if (item_ptr)
+                {
+                    auto window_ptr = item_ptr->This<window_t>();
+                    if (window_ptr->accesslock_gears.size())
+                    {
+                        accesslock_list.push_back(item_ptr);
                     }
                 }
             };
@@ -1807,6 +1950,7 @@ namespace netxs::app::vtm
                             layers[i].push_back(item_ptr);
                         }
                     }
+                    //todo implement access lock visualization?
                     for (auto& layer : layers)
                     {
                         for (auto& item_ptr : layer)
@@ -1831,6 +1975,7 @@ namespace netxs::app::vtm
                         {
                             auto& user_name = *uname.lyric;
                             auto  half_x = user_name.size().x / 2;
+                            static auto gear_color = cell{"▀"};
                             for (auto& [ext_gear_id, gear_ptr] : usergate.gears)
                             {
                                 auto& gear = *gear_ptr;
@@ -1840,8 +1985,12 @@ namespace netxs::app::vtm
                                     coor.y -= 1;
                                     coor.x -= half_x;
                                     user_name.move(coor);
-                                    parent_canvas.fill(user_name, cell::shaders::contrast); //todo revise: segfault?
+                                    parent_canvas.fill(user_name, cell::shaders::contrast);
                                     usergate.fill_pointer(gear, parent_canvas);
+                                    // Draw a color focus mark next to the cursor.
+                                    auto area = rect{{ coor.x + user_name.size().x + 1, coor.y }, dot_11 };
+                                    gear_color.fgc(hids::get_color(gear.gear_index));
+                                    parent_canvas.fill(area, cell::shaders::fuse(gear_color));
                                 }
                             }
                         }
@@ -1912,7 +2061,24 @@ namespace netxs::app::vtm
             usergate.props.background_color.link(bell::id);
             base::signal(tier::release, desk::events::usrs, usrs_list_ptr);
 
-            auto& memo = base::field<subs>();
+            auto& memo = usergate.base::field<subs>();
+            if (!admin_gear_id.has_value()) // Can only be assigned once.
+            {
+                admin_gear_id = {};
+                auto& onerun = usergate.base::field(hook{});
+                usergate.LISTEN(tier::release, input::events::invite, gear, onerun) // Wait for the first gear.
+                {
+                    if (gear.use_index())
+                    {
+                        admin_gear_id = gear.id;
+                        usergate.base::unfield(onerun); // Unsubscribe.
+                    }
+                };
+                usergate.LISTEN(tier::release, e2::form::upon::stopped, root_ptr) // Reset admin's gear id on disconnect.
+                {
+                    admin_gear_id = {};
+                };
+            }
             usergate.LISTEN(tier::release, e2::form::size::restore, p)
             {
                 if (memo.empty()) return;
@@ -2118,7 +2284,7 @@ namespace netxs::app::vtm
         void stop()
         {
             log(prompt::hall, "Server shutdown");
-            base::signal(tier::general, e2::conio::quit); // Trigger to disconnect all users and monitors.
+            base::signal(tier::general, e2::conio::quit); // Trigger to close all windows and disconnect all users and monitors.
             async.stop(); // Wait until all users and monitors are disconnected.
             if constexpr (debugmode) log(prompt::hall, "Session control stopped");
             base::dequeue(); // Wait until all cleanups are completed.

@@ -39,7 +39,7 @@ namespace netxs::app::desk
             EVENT_XS( usrs, netxs::sptr<desk::usrs> ), // List of connected users.
             EVENT_XS( menu, netxs::sptr<desk::menu> ), // List of registered apps.
             EVENT_XS( exec, spec                    ), // Request to run app.
-            EVENT_XS( quit, bool                    ), // Request to close all instances.
+            EVENT_XS( quit, input::hids             ), // Request to close all instances.
             GROUP_XS( apps, netxs::ui::sptr         ),
             GROUP_XS( ui  , text                    ),
 
@@ -105,7 +105,9 @@ namespace netxs::app::desk
                 {
                     boss.on(tier::mouserelease, input::key::LeftDoubleClick, [&](hids& gear)
                     {
-                        if (gear.meta(hids::anyAlt)) // Pull window.
+                        auto check_gear_id = gear.id;
+                        window.base::signal(tier::request, e2::form::prop::window::accesslock, check_gear_id);
+                        if (gear.meta(hids::anyAlt) && check_gear_id) // Pull window.
                         {
                             window.base::riseup(tier::preview, e2::form::layout::expose);
                             auto viewport = gear.owner.base::signal(tier::request, e2::form::prop::viewport);
@@ -174,7 +176,6 @@ namespace netxs::app::desk
                 });
             auto app_label = item_area.attach(slot::_1, ui::item::ctor(current_title))
                 ->active()
-                //todo taskbar keybd navigation
                 ->template plugin<pro::focus>(pro::focus::mode::focused, true, faux, weight_app_label)
                 ->template plugin<pro::keybd>()
                 ->shader(c3, e2::form::state::focus::count)
@@ -192,7 +193,6 @@ namespace netxs::app::desk
                 });
             auto app_close = item_area.attach(slot::_2, ui::item::ctor("×"))
                 ->active()
-                //todo taskbar keybd navigation
                 ->template plugin<pro::focus>(pro::focus::mode::focused, true, faux, weight_ui_button)
                 ->template plugin<pro::keybd>()
                 ->shader(c1, e2::form::state::focus::count)
@@ -225,12 +225,30 @@ namespace netxs::app::desk
                     };
                     item_area.LISTEN(tier::release, e2::form::upon::vtree::attached, app_list_block, boss.sensors)
                     {
-                        app_list_block->LISTEN(tier::release, desk::events::quit, fast, boss.sensors) // Close all apps in a block.
+                        app_list_block->LISTEN(tier::release, desk::events::quit, gear, boss.sensors) // Close all apps in a block.
                         {
-                            window.base::enqueue([&](auto& /*boss*/) // Enqueue in order to pass focus one by one.
+                            auto logmsg = []{ log("%%Locked windows cannot be closed when the group is closed", prompt::desk); };
+                            auto accesslock_list = window.base::riseup(tier::request, e2::form::state::accesslock::enlist); // Get the list of locked windows.
+                            auto iter = std::ranges::find(accesslock_list, window.This());
+                            if (iter != accesslock_list.end()) // When closing the app group, check the accesslock list, if it is not empty, the closing will be aborted and logged.
                             {
-                                window.base::signal(tier::anycast, e2::form::proceed::quit::one, fast); // Show closing process.
-                            });
+                                logmsg();
+                            }
+                            else
+                            {
+                                window.base::signal(tier::anycast, e2::form::proceed::closeby, gear); // Check access to close.
+                                if (gear) //todo unify: make call the e2::form::proceed::quit::one with gear
+                                {
+                                    window.base::enqueue([](auto& boss) // Enqueue in order to pass focus one by one.
+                                    {
+                                        boss.base::signal(tier::anycast, e2::form::proceed::quit::one, true); // Show closing process.
+                                    });
+                                }
+                                else
+                                {
+                                    logmsg();
+                                }
+                            }
                         };
                     };
                     boss.on(tier::mouserelease, input::key::LeftClick, [&](hids& gear)
@@ -240,7 +258,26 @@ namespace netxs::app::desk
                     });
                     boss.LISTEN(tier::release, desk::events::ui::activate, gear)
                     {
-                        window.base::signal(tier::anycast, e2::form::proceed::quit::one, faux); // Show closing process.
+                        auto logmsg = []{ log("%%The non-owner's application closure was aborted.", prompt::desk); };
+                        auto check_gear_id = gear.id;
+                        window.base::signal(tier::request, e2::form::prop::window::accesslock, check_gear_id);
+                        if (!check_gear_id) // Filter out for non-owners.
+                        {
+                            logmsg();
+                            gear.owner.base::signal(tier::release, e2::form::layout::jumpto, window);
+                        }
+                        else
+                        {
+                            window.base::signal(tier::anycast, e2::form::proceed::closeby, gear); // Check access to close.
+                            if (gear) //todo unify: make call the e2::form::proceed::quit::one with gear
+                            {
+                                window.base::signal(tier::anycast, e2::form::proceed::quit::one, faux); // Show closing process.
+                            }
+                            else
+                            {
+                                logmsg();
+                            }
+                        }
                     };
                 });
             return item_area_ptr;
@@ -286,7 +323,6 @@ namespace netxs::app::desk
                     ->flexible()
                     ->setpad({ 0, 0, tall, tall })
                     ->active()
-                    //todo taskbar keybd navigation
                     ->template plugin<pro::focus>(pro::focus::mode::focused, true, faux, weight_app_group)
                     ->template plugin<pro::keybd>()
                     ->shader(c3, e2::form::state::focus::count)
@@ -358,7 +394,6 @@ namespace netxs::app::desk
                 auto fold_bttn_ptr = bttn_fork.attach(slot::_1, ui::item::ctor(isfolded ? "…" : "<"))
                     ->setpad({ 2, 2, tall, tall })
                     ->active()
-                    //todo taskbar keybd navigation
                     ->template plugin<pro::focus>(bttn_rail.base::hidden ? pro::focus::mode::focusable : pro::focus::mode::focused, true, faux, weight_ui_button) // Skip (make it just focusable) this item when moving focus if there are no apps running.
                     ->template plugin<pro::keybd>()
                     ->shader(c3, e2::form::state::focus::count)
@@ -393,7 +428,6 @@ namespace netxs::app::desk
                 auto drop_bttn_ptr = bttn_fork.attach(slot::_2, ui::item::ctor("×"))
                     ->setpad({ 2, 2, tall, tall })
                     ->active()
-                    //todo taskbar keybd navigation
                     ->template plugin<pro::focus>(bttn_rail.base::hidden ? pro::focus::mode::focusable : pro::focus::mode::focused, true, faux, weight_ui_button) // Skip (make it just focusable) this item when moving focus if there are no apps running.
                     ->template plugin<pro::keybd>()
                     ->shader(c1, e2::form::state::focus::count)
@@ -408,7 +442,7 @@ namespace netxs::app::desk
                         });
                         boss.LISTEN(tier::release, desk::events::ui::activate, gear)
                         {
-                            insts.base::signal(tier::release, desk::events::quit, faux); // Show closing process.
+                            insts.base::signal(tier::release, desk::events::quit, gear); // Show closing process.
                         };
                         boss.LISTEN(tier::release, e2::form::state::focus::count, count)
                         {
@@ -550,17 +584,57 @@ namespace netxs::app::desk
                 auto highlight_color = cell{ skin::globals().winfocus };
                 auto c3 = highlight_color;
                 auto cE = active_color;
-                auto user = ui::item::ctor(escx(" &").nil().add(" ").wrp(wrap::off)
-                        .fgx(data_src->id == my_id ? cE.fgc() : argb{}).add(utf8).nil())
+                auto user = ui::item::ctor("User")
                     ->flexible()
                     ->setpad({ 1, 0, tall, tall }, { 0, 0, -tall, 0 })
                     ->active()
-                    //todo taskbar keybd navigation
                     ->template plugin<pro::focus>(pro::focus::mode::focused, true, faux, weight_app_label)
                     ->template plugin<pro::keybd>()
                     ->shader(c3, e2::form::state::focus::count)
                     ->shader(cell::shaders::xlight, e2::form::state::hover)
-                    ->template plugin<pro::notes>(skin::globals().NsUser_tooltip);
+                    ->template plugin<pro::notes>(skin::globals().NsUser_tooltip)
+                    ->invoke([&](auto& boss)
+                    {
+                        auto& base_name = boss.base::field(escx{}.nil().wrp(wrap::off)
+                            .fgx(data_src->id == my_id ? cE.fgc() : argb{}).add(utf8).nil());
+                        auto& gear_list = boss.base::field(std::unordered_set<si32>{});
+                        static const auto update_name = [](auto& boss, auto& base_name, auto& gear_list)
+                        {
+                            auto new_name = base_name;
+                            for (auto gear_index : gear_list)
+                            {
+                                new_name.fgx(input::hids::get_color(gear_index)).add(" ▀");
+                            }
+                            new_name.nil();
+                            boss.set(new_name);
+                            boss.base::deface();
+                        };
+                        auto gate_ptr = data_src->template This<ui::gate>();
+                        for (auto& [ext_gear_id, gear_ptr] : gate_ptr->gears)
+                        {
+                            if (gear_ptr->use_index())
+                            {
+                                gear_list.insert(gear_ptr->gear_index);
+                            }
+                        }
+                        update_name(boss, base_name, gear_list);
+                        data_src->LISTEN(tier::release, input::events::invite, gear, boss.sensors)
+                        {
+                            if (gear.use_index())
+                            {
+                                gear_list.insert(gear.gear_index);
+                                update_name(boss, base_name, gear_list);
+                            }
+                        };
+                        data_src->LISTEN(tier::release, input::events::die, gear, boss.sensors)
+                        {
+                            if (gear.use_index())
+                            {
+                                gear_list.erase(gear.gear_index);
+                                update_name(boss, base_name, gear_list);
+                            }
+                        };
+                    });
                 return user;
             };
             auto user_list_template = [user_template](auto& /*data_src*/, auto& usr_list)
@@ -673,7 +747,6 @@ namespace netxs::app::desk
                 taskbar_grips.base::reflow();
             });
             taskbar_grips_ptr->limits({ menu_min_size, -1 }, { menu_min_size, -1 })
-                //todo taskbar keybd navigation
                 ->plugin<pro::focus>()
                 ->plugin<pro::keybd>()
                 ->plugin<pro::timer>()
@@ -732,9 +805,6 @@ namespace netxs::app::desk
                 ->limits({ 1, -1 }, { 1, -1 })
                 ->template plugin<pro::notes>(skin::globals().NsTaskbarGrips_tooltip)
                 ->active()
-                //todo taskbar keybd navigation
-                //->template plugin<pro::focus>(pro::focus::mode::focusable) //todo revise: no need to focus taskbar resize grip
-                //->shader(c3, e2::form::state::focus::count)
                 ->shader(cell::shaders::xlight, e2::form::state::hover)
                 ->invoke([&](auto& boss)
                 {
@@ -772,7 +842,7 @@ namespace netxs::app::desk
             auto taskbar_park = taskbar_grips.attach(slot::_1, ui::cake::ctor());
             auto taskbar = taskbar_park->attach(ui::fork::ctor(axis::Y)->alignment({ snap::head, snap::head }, { snap::head, snap::tail }));
             auto apps_users = taskbar->attach(slot::_1, ui::fork::ctor(axis::Y, 0, 100))
-                ->setpad({}, { 0, 0, 0, -tall }); // To place above Disconnect button.
+                ->setpad({}, { 0, 0, 0, -tall }); // To place above the Disconnect button.
             auto applist_area = apps_users->attach(slot::_1, ui::cake::ctor());
             auto tasks_scrl_ptr = applist_area->attach(ui::rail::ctor(axes::Y_only))
                 ->plugin<pro::notes>(skin::globals().NsTaskbar_tooltip)
@@ -819,7 +889,6 @@ namespace netxs::app::desk
             auto userlist_hidden = true;
             auto bttn_ptr = label_bttn->attach(slot::_2, ui::item::ctor(userlist_hidden ? "…" : "<"))
                 ->active()
-                //todo taskbar keybd navigation
                 ->template plugin<pro::focus>(pro::focus::mode::focused, true, faux, weight_app_group)
                 ->template plugin<pro::keybd>()
                 ->shader(c3, e2::form::state::focus::count)
@@ -883,7 +952,6 @@ namespace netxs::app::desk
                 ->limits(bttn_min_size, bttn_max_size);
             auto disconnect_park_ptr = bttns->attach(slot::_1, ui::cake::ctor())
                 ->active()
-                //todo taskbar keybd navigation
                 ->template plugin<pro::focus>(pro::focus::mode::focused, true, faux, weight_app_group)
                 ->template plugin<pro::keybd>()
                 ->shader(c3, e2::form::state::focus::count)
@@ -908,11 +976,11 @@ namespace netxs::app::desk
                 ->alignment({ snap::head, snap::center });
             auto shutdown_park = bttns->attach(slot::_2, ui::cake::ctor())
                 ->active()
-                //todo taskbar keybd navigation
                 ->template plugin<pro::focus>(pro::focus::mode::focused, true, faux, weight_ui_button)
                 ->template plugin<pro::keybd>()
                 ->shader(c1, e2::form::state::focus::count)
                 ->shader(c1, e2::form::state::hover)
+                ->shader(cA, e2::form::state::accesslock::count, world_ptr)
                 ->plugin<pro::notes>(skin::globals().NsShutdown_tooltip)
                 ->invoke([&](auto& boss)
                 {
@@ -923,7 +991,16 @@ namespace netxs::app::desk
                     });
                     boss.LISTEN(tier::release, desk::events::ui::activate, gear)
                     {
-                        boss.base::signal(tier::general, e2::shutdown, utf::concat(prompt::desk, "Server shutdown"));
+                        world.base::signal(tier::release, e2::shutdown::bygear, gear);
+                        if (!world.bell::accomplished())
+                        {
+                            auto accesslock_list = world.base::signal(tier::request, e2::form::state::accesslock::enlist);
+                            if (accesslock_list.size())
+                            if (auto accesslocked_window_ptr = accesslock_list.front())
+                            {
+                                gear.owner.base::signal(tier::release, e2::form::layout::jumpto, *accesslocked_window_ptr);
+                            }
+                        }
                     };
                 });
             auto shutdown = shutdown_park->attach(ui::item::ctor(skin::globals().NsShutdown_label))

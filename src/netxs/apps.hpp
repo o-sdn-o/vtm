@@ -274,7 +274,7 @@ namespace netxs::app::shared
                 {
                     boss.on(tier::mouserelease, input::key::LeftClick, [&](hids& gear)
                     {
-                        boss.base::riseup(tier::anycast, e2::form::proceed::quit::one, true);
+                        boss.base::signal(tier::anycast, e2::form::proceed::quit::one, true);
                         gear.dismiss();
                     });
                 });
@@ -307,7 +307,7 @@ namespace netxs::app::shared
                 {
                     boss.on(tier::mouserelease, input::key::LeftClick, [&](hids& gear)
                     {
-                        boss.base::riseup(tier::anycast, e2::form::proceed::quit::one, true);
+                        boss.base::signal(tier::anycast, e2::form::proceed::quit::one, true);
                         gear.dismiss();
                     });
                 });
@@ -794,7 +794,7 @@ namespace netxs::app::shared
                 app::shared::base_kb_navigation(config, scroll, boss);
                 input::bindings::keybind(boss, "Any", "vtm.infopage.UpdateChordPreview()");
                 input::bindings::keybind(boss,
-                    #if defined(WIN32)
+                    #if defined(_WIN32)
                     "preview:Ctrl-Alt | Alt-Ctrl",
                     #else
                     "preview:Alt+Shift+B",

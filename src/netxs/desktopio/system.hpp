@@ -2459,7 +2459,7 @@ namespace netxs::os
 
                     auto source = view{ data.data(), data.size() + 1/*trailing null*/ };
                     auto handle = ::CreateFileMappingA(os::invalid_fd, nullptr, PAGE_READWRITE, 0, (DWORD)source.size(), cfpath.c_str()); ok(handle, "::CreateFileMappingA()", os::unexpected);
-                    auto buffer = ::MapViewOfFile(handle, FILE_MAP_WRITE, 0, 0, 0);                                                          ok(buffer, "::MapViewOfFile()", os::unexpected);
+                    auto buffer = ::MapViewOfFile(handle, FILE_MAP_WRITE, 0, 0, 0);                                                       ok(buffer, "::MapViewOfFile()", os::unexpected);
                     std::copy(std::begin(source), std::end(source), (char*)buffer);
                     ok(::UnmapViewOfFile(buffer), "::UnmapViewOfFile()", os::unexpected);
                     return handle;
@@ -4093,22 +4093,23 @@ namespace netxs::os
                     auto tty_name = text(os::pipebuf, '\0');
                     ok(::ttyname_r(os::stdout_fd, tty_name.data(), tty_name.size()), "::ttyname_r(os::stdout_fd)", os::unexpected);
                     log("%%Pseudoterminal %pts%", prompt::tty, tty_name.data());
-                    if (interactive && (term == "linux" || os::linux_console || colorterm == "kmscon"))
+                    if (interactive && (term == "linux" || os::linux_console || colorterm == "kmscon" || term == "yaft-256color"))
                     {
                         dtvt::vtmode |= ui::console::mouse;
                     }
                 #endif
                 if (colorterm != "truecolor" && colorterm != "24bit" &&  colorterm != "kmscon")
                 {
-                    auto vt16colors = { // https://github.com//termstandard/colors
+                    auto vt16colors = { // https://github.com/termstandard/colors
                         "ansi",
                         "linux",
                         "xterm-color",
-                        "dvtm", //todo track: https://github.com/martanne/dvtm/issues/10
+                        "dvtm",
                         "fbcon",
                     };
                     auto vt256colors = {
                         "rxvt-unicode-256color",
+                        "yaft-256color",
                     };
                     if (term.ends_with("16color") || term.ends_with("16colour"))
                     {

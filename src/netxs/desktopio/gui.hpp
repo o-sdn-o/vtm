@@ -35,6 +35,27 @@ namespace netxs::gui
 
     static constexpr auto debug_foci = faux;
 
+    struct cfg_t
+    {
+        struct axis_vals_t
+        {
+            fp32 base_value;
+            fp32 regular{};
+            fp32 bold{};
+            fp32 italic{};
+            fp32 bold_italic{};
+        };
+
+        si32                        win_state{};    // cfg_t: .
+        bool                        antialiasing{}; // cfg_t: .
+        span                        blink_rate{};   // cfg_t: .
+        twod                        wincoord{};     // cfg_t: .
+        twod                        gridsize{};     // cfg_t: .
+        si32                        cell_height{};  // cfg_t: .
+        std::list<text>             font_names;     // cfg_t: Font family list.
+        std::map<text, axis_vals_t> font_axes;      // cfg_t: Ordered map <axis_4byte_tag, <values>>.
+    };
+
     struct layer
     {
         static constexpr auto hidden = twod{ -32000, -32000 };
@@ -128,6 +149,7 @@ namespace netxs::gui
             ui32                  index{ ~0u };
             bool                  color{ faux };
             bool                  fixed{ faux }; // Preserve specified font order.
+            bool                  monospaced{ faux };
             text                  font_name;
 
             typeface() = default;
@@ -435,15 +457,17 @@ namespace netxs::gui
                 u.base_x_height = std::max(1, (si32)m.xHeight);
                 u.base_ascent = std::max(1.f, m.ascent + m.lineGap / 2.0f);
                 u.base_descent = std::max(1.f, m.descent + m.lineGap / 2.0f);
-                auto glyph_metrics = DWRITE_GLYPH_METRICS{};
                 // Take metrics for "x" or ".notdef" in case of missing 'x'. Note: ".notdef" is double sized ("x" is narrow) in CJK fonts.
                 //auto code_points = ui32{ 'x' };
-                auto code_points = ui32{ 'U' }; // U is approximately half an emoji square in the Segoe Emoji font.
-                auto glyph_index = ui16{ 0 };
-                faceinst->GetGlyphIndices(&code_points, 1, &glyph_index);
-                faceinst->GetDesignGlyphMetrics(&glyph_index, 1, &glyph_metrics, faux);
+                u.monospaced = faceinst->IsMonospacedFont();
+                auto code_points = std::to_array<ui32>({ ' ' }); // Test W for monospaced and test U for proportional font.
+                code_points[0] = u.monospaced ? 'W' : 'U';       // U is approximately half an emoji square in the Segoe Emoji font. W and M may be cut in size. This is a compromise for proportional fonts. Otherwise, emoji become too small.
+                auto glyph_index = std::array<ui16, code_points.size()>{};
+                auto glyph_metrics = std::array<DWRITE_GLYPH_METRICS, code_points.size()>{};
+                faceinst->GetGlyphIndices(code_points.data(), (ui32)code_points.size(), glyph_index.data());
+                faceinst->GetDesignGlyphMetrics(glyph_index.data(), (ui32)code_points.size(), glyph_metrics.data(), faux);
                 u.facesize.y = (fp32)std::max(2, m.ascent + m.descent + m.lineGap);
-                u.facesize.x = glyph_metrics.advanceWidth ? (fp32)glyph_metrics.advanceWidth : u.facesize.y / 2;
+                u.facesize.x = glyph_metrics[0].advanceWidth ? (fp32)glyph_metrics[0].advanceWidth : u.facesize.y / 2;
                 u.ratio = u.facesize.x / u.facesize.y;
                 u.color = iscolor(faceinst);
             }
@@ -566,7 +590,7 @@ namespace netxs::gui
                 : fcache{ fcache }
             { }
 
-            fp32 generate_glyph_run(std::vector<utf::prop>& codepoints, ui16 script, BOOL is_rtl, fp32 em_height, fp32 transform)
+            fp32 generate_glyph_run(std::vector<utf::prop>& codepoints, ui16 script, BOOL is_rtl, fp32 em_height, fp32 transform, bool is_monospaced, fp32 grid_step)
             {
                 //todo use otf tables directly: GSUB etc
                 //gindex.resize(codepoints.size());
@@ -628,18 +652,39 @@ namespace netxs::gui
                                                          glyf_steps.data(),       // _Out_writes_(glyphCount) FLOAT* glyphAdvances,
                                                          glyf_align.data());      // _Out_writes_(glyphCount) DWRITE_GLYPH_OFFSET* glyphOffsets
                 if (hr != S_OK) return 0;
-                hr = faceinst->GetDesignGlyphMetrics(glyf_index.data(), glyf_count, glyf_sizes.data(), faux);
+                hr = faceinst->GetDesignGlyphMetrics(glyf_index.data(), glyf_count, glyf_sizes.data(), faux); // Non-normalized.
                 if (hr != S_OK) return 0;
                 auto length = fp32{};
-                auto penpos = fp32{};
-                for (auto i = 0u; i < glyf_count; ++i)
+                if (is_monospaced)
                 {
-                    auto w = glyf_sizes[i].advanceWidth;
-                    auto r = glyf_sizes[i].rightSideBearing;
-                    auto bearing = ((si32)w - r) * transform;
-                    auto right_most = penpos + glyf_align[i].advanceOffset + bearing;
-                    length = std::max(length, right_most);
-                    penpos += glyf_steps[i];
+                    for (auto i = 0u; i < glyf_count; ++i)
+                    {
+                        auto& w = glyf_steps[i];
+                        if (w) w = grid_step; // Fit to our grid.
+                        length += w;
+                    }
+                }
+                else // Render glyphs as is.
+                {
+                    auto revpad = fp32{};
+                    auto penpos = fp32{};
+                    for (auto i = 0u; i < glyf_count; ++i)
+                    {
+                        auto w = glyf_sizes[i].advanceWidth;
+                        auto f = glyf_sizes[i].rightSideBearing;
+                        auto r = glyf_sizes[i].leftSideBearing;
+                        if (is_rtl) std::swap(f, r); // Convert side bearings to the rtl direction.
+                        auto fwd_bearing = ((si32)w - f) * transform; // Convert from design units to our scale (glyf_sizes).
+                        auto rev_bearing = -r * transform;    //
+                        auto glyphpos = penpos + glyf_align[i].advanceOffset; // It is already in our scale.
+                        auto rev_most = glyphpos - rev_bearing;
+                        auto fwd_most = glyphpos + fwd_bearing;
+                        revpad = std::min(revpad, rev_most); // Negative or 0.
+                        penpos += glyf_steps[i]; // It is already in our scale.
+                        length = std::max(length, fwd_most);
+                    }
+                    length = std::max(length, penpos);
+                    length += -revpad; // revpad is negative or 0.
                 }
                 return length;
             }
@@ -757,7 +802,7 @@ namespace netxs::gui
             index_ready = 10;
             if (bgworker.joinable()) bgworker.join();
         }
-        fonts(std::list<text>& family_names, si32 cell_height, auto signal_to_redraw)
+        fonts(std::list<text>& family_names, std::map<text, cfg_t::axis_vals_t>& /*font_axes*/, si32 cell_height, auto signal_to_redraw)
             : oslocale(LOCALE_NAME_MAX_LENGTH, '\0')
         {
             ::DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)factory2.GetAddressOf());
@@ -885,14 +930,14 @@ namespace netxs::gui
                     //...
                 }
             };
-            fp32 generate_glyph_run(std::vector<utf::prop>& /*codepoints*/, ui16 /*script*/, bool /*is_rtl*/, fp32 /*em_height*/, fp32 /*transform*/)
+            fp32 generate_glyph_run(std::vector<utf::prop>& /*codepoints*/, ui16 /*script*/, bool /*is_rtl*/, fp32 /*em_height*/, fp32 /*transform*/, bool /*is_monospaced*/ , fp32 /*grid_step*/)
             {
                 return fp32{};
             }
         };
 
         shaper fontshaper{ *this };
-        fonts(std::list<text>& /*family_names*/, si32 /*cell_height*/, auto ...)
+        fonts(std::list<text>& /*family_names*/, std::map<text, cfg_t::axis_vals_t>& /*font_axes*/ , si32 /*cell_height*/, auto ...)
         { }
         auto& take_font(utfx /*base_char*/)
         {
@@ -1243,28 +1288,32 @@ namespace netxs::gui
             auto base_line = f.fontface[format].base_line;
             //auto actual_sz = f.fontface[format].actual_sz;
             auto actual_height = (fp32)cellsz.y;
+            auto grid_step = (fp32)cellsz.x;
             auto mtx = c.mtx();
             auto matrix = fp2d{ mtx * cellsz };
             auto swapxy = flipandrotate & 1;
             if (swapxy)
             {
                 std::swap(matrix.x, matrix.y);
+                std::swap(mtx.x, mtx.y);
                 transform *= f.ratio;
                 em_height *= f.ratio;
                 base_line *= f.ratio;
                 actual_height *= f.ratio;
+                grid_step *= f.ratio;
             }
             auto script = unidata::script(codepoints.front().cdpoint);
             auto is_rtl = script >= 100 && script <= 199;
-            auto length = fcache.fontshaper.generate_glyph_run(codepoints, script, is_rtl, em_height, transform);
+            auto length = fcache.fontshaper.generate_glyph_run(codepoints, script, is_rtl, em_height, transform, f.monospaced, grid_step); // Generate glyph run and get its length in pixels (fp32).
             if (!length) return;
             auto actual_width = swapxy ? std::max(1.f, length) :
                         is_box_drawing ? std::max(1.f, std::floor((length / cellsz.x))) * cellsz.x
-                                       : std::max(1.f, std::ceil(((length - (0.114f/*min=0.113: Bold+Italic Courier V*/) * cellsz.x) / cellsz.x))) * cellsz.x;
+                                       : std::max(1.f, std::ceil(((length - (mtx.y/*glyph scale*/ * 0.114f/*min=0.113: Bold+Italic Courier V*/) * cellsz.x) / cellsz.x))) * cellsz.x;
             auto k = 1.f;
             if (actual_width > matrix.x) // Check if the glyph exceeds the matrix width. (scale down)
             {
                 k = matrix.x / length;
+                length = matrix.x;
                 actual_width = matrix.x;
                 actual_height *= k;
                 em_height *= k;
@@ -1274,6 +1323,7 @@ namespace netxs::gui
             else if (actual_height < matrix.y || actual_width < matrix.x) // Check if the glyph is too small for the matrix. (scale up)
             {
                 k = std::min(matrix.x / actual_width, matrix.y / actual_height);
+                length *= k;
                 actual_width *= k;
                 actual_height *= k;
                 base_line *= k;
@@ -1282,11 +1332,34 @@ namespace netxs::gui
                 for (auto& [h, v] : fcache.fontshaper.glyf_align) h *= k;
                 k = 1.f;
             }
-            if (img_alignment.x != snap::none && actual_width < matrix.x)
+            if (!f.monospaced && !is_box_drawing)
             {
-                     if (img_alignment.x == snap::center) base_line.x += (matrix.x - actual_width) / 2.f;
-                else if (img_alignment.x == snap::tail  ) base_line.x += matrix.x - actual_width;
-                //else if (img_alignment.x == snap::head  ) base_line.x = 0;
+                auto offset = matrix.x - length; // This (using length) will allow us to seamlessly connect the two fragments.
+                if (img_alignment.x == snap::none || img_alignment.x == snap::center)
+                {
+                    if (is_rtl) base_line.x -= offset / 2.f; // Centrify actual proportional glyph as is.
+                    else        base_line.x += offset / 2.f; //
+                }
+                else if (img_alignment.x == snap::tail)
+                {
+                    if (is_rtl) base_line.x -= offset;
+                    else        base_line.x += offset;
+                }
+            }
+            else if (img_alignment.x != snap::none && actual_width < matrix.x)
+            {
+                auto offset = matrix.x - actual_width;
+                if (img_alignment.x == snap::center)
+                {
+                    if (is_rtl) base_line.x -= offset / 2.f; // Center the cell containing the glyph, not the glyph outline itself.
+                    else        base_line.x += offset / 2.f; //
+                }
+                else if (img_alignment.x == snap::tail)
+                {
+                    if (is_rtl) base_line.x -= offset;
+                    else        base_line.x += offset;
+                }
+                //else if (img_alignment.x == snap::head) base_line.x = 0;
             }
             if (img_alignment.y != snap::none && actual_height < matrix.y)
             {
@@ -2051,7 +2124,19 @@ namespace netxs::gui
             }
             void handle(s11n::xs::gui_command      lock)
             {
-                owner.sys_command(lock.thing.cmd_id, lock.thing.args);
+                auto& gui_cmd = lock.thing;
+                if (gui_cmd.cmd_id == syscmd::accesslock)
+                {
+                    if (gui_cmd.args.size())
+                    {
+                        gui_cmd.args[0] = 0;
+                        s11n::gui_command.send(intio, gui_cmd);
+                    }
+                }
+                else
+                {
+                    owner.sys_command(gui_cmd.cmd_id, gui_cmd.args);
+                }
             }
 
             link(winbase& owner, ui::pipe& intio)
@@ -2071,6 +2156,7 @@ namespace netxs::gui
             }
         };
 
+        cfg_t config; // winbase: User specified settings.
         title titles; // winbase: UI header/footer.
         focus wfocus; // winbase: UI focus.
         layer master; // winbase: Layer for Client.
@@ -2129,13 +2215,14 @@ namespace netxs::gui
         bool  fake_ctrl; // winbase: Fake ctrl key event on AltGr press/release (non-US kb layouts).
         bool  wait_ralt; // winbase: Wait RightAlt right after the fake LeftCtrl.
 
-        winbase(auth& indexer, std::list<text>& font_names, si32 cell_height, bool antialiasing, span blink_rate, twod grip_cell)
+        winbase(auth& indexer, cfg_t& config, twod grip_cell)
             : base{ indexer },
+              config{ config },
               titles{ *this, "", "", faux },
               wfocus{ *this, ui::pro::focus::mode::relay },
-              fcache{ font_names, cell_height, [&]{ netxs::set_flag<task::all>(reload); window_post_command(ipc::no_command); } },
-              gcache{ fcache, antialiasing },
-              blinks{ .init = blink_rate },
+              fcache{ config.font_names, config.font_axes, config.cell_height, [&]{ netxs::set_flag<task::all>(reload); window_post_command(ipc::no_command); } },
+              gcache{ fcache, config.antialiasing },
+              blinks{ .init = config.blink_rate },
               cellsz{ fcache.cellsize },
               origsz{ fcache.cellsize.y },
               height{ (fp32)cellsz.y },
@@ -3253,7 +3340,7 @@ namespace netxs::gui
         }
         void IncreaseCellHeight(many const& args)
         {
-            auto dir = args.size() ? any_get_or(args.front(), 0.f) : 0.f;
+            auto dir = args.size() ? netxs::any_get_or(args.front(), 0.f) : 0.f;
             change_cell_size(faux, dir);
             sync_cellsz();
             update_gui();
@@ -3279,7 +3366,7 @@ namespace netxs::gui
         void RollFontList(many const& args)
         {
             if (fcache.families.empty()) return;
-            auto dir = args.size() ? any_get_or<si32>(args.front()) : 0;
+            auto dir = args.size() ? netxs::any_get_or<si32>(args.front()) : 0;
             auto& families = fcache.families;
             if (dir >= 0)
             {
@@ -3296,7 +3383,7 @@ namespace netxs::gui
         void MoveWindow(many const& args)
         {
             if (args.size() != 2) return;
-            if (auto delta = twod{ any_get_or(args[0]), any_get_or(args[1]) })
+            if (auto delta = twod{ netxs::any_get_or(args[0]), netxs::any_get_or(args[1]) })
             {
                 move_window(delta);
             }
@@ -3304,15 +3391,15 @@ namespace netxs::gui
         void WarpWindow(many const& args)
         {
             if (args.size() != 4) return;
-            auto warp = dent{ any_get_or(args[0]),
-                              any_get_or(args[1]),
-                              any_get_or(args[2]),
-                              any_get_or(args[3]) };
+            auto warp = dent{ netxs::any_get_or(args[0]),
+                              netxs::any_get_or(args[1]),
+                              netxs::any_get_or(args[2]),
+                              netxs::any_get_or(args[3]) };
             warp_window(warp * cellsz);
         }
         void FocusNextWindow(many const& args)
         {
-            auto dir = args.size() ? any_get_or<si32>(args.front()) : 0;
+            auto dir = args.size() ? netxs::any_get_or<si32>(args.front()) : 0;
             if (dir >= 0)
             {
                 //todo implement
@@ -3324,7 +3411,7 @@ namespace netxs::gui
         }
         void ZOrder(many const& args)
         {
-            auto state = args.size() ? any_get_or(args.front(), zpos::plain) : zpos::plain;
+            auto state = args.size() ? netxs::any_get_or(args.front(), zpos::plain) : zpos::plain;
             window_send_command(master.hWnd, state ? ipc::make_ontop : ipc::set_normal);
         }
 
@@ -3500,7 +3587,7 @@ namespace netxs::gui
             if (menucmd == syscmd::update && !reload) return;
             if (menucmd == syscmd::tunecellheight)
             {
-                if (isbusy.exchange(true) || args.empty() || any_get_or(args.front(), 0.f) == 0.f)
+                if (isbusy.exchange(true) || args.empty() || netxs::any_get_or(args.front(), 0.f) == 0.f)
                 {
                     return;
                 }
@@ -3559,10 +3646,10 @@ namespace netxs::gui
                 f.coor += win_area.coor;
             }
         }
-        void connect(si32 win_state, twod wincoord, twod gridsize)
+        void connect()
         {
             sync_os_settings();
-            if (!(layer_create(master, this, wincoord, gridsize, border, cellsz)
+            if (!(layer_create(master, this, config.wincoord, config.gridsize, border, cellsz)
                && layer_create(blinky)
                && layer_create(header)
                && layer_create(footer)
@@ -3580,7 +3667,7 @@ namespace netxs::gui
                 auto lock = bell::sync();
                 normsz = master.area;
                 size_window();
-                set_state(win_state);
+                set_state(config.win_state);
                 update_gui();
                 window_initilize();
 

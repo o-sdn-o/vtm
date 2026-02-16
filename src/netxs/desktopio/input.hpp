@@ -14,6 +14,7 @@ namespace netxs::events::userland
             EVENT_XS( die      , input::hids ), // release::global: Notify about the mouse controller is gone. Signal to delete gears inside dtvt-objects.
             EVENT_XS( halt     , input::hids ), // release::global: Notify about the mouse controller is outside.
             EVENT_XS( clipboard, input::hids ), // release/request: Set/get clipboard data.
+            EVENT_XS( invite   , input::hids ), // release: Notify about the mouse controller is registered.
             GROUP_XS( keybd    , input::hids ), // Keybd related events.
             GROUP_XS( focus    , input::foci ), // Focus related events.
             GROUP_XS( device   , input::hids ), // Primary device event group for fast forwarding.
@@ -829,6 +830,10 @@ namespace netxs::input
 
         si32 pressed_count{}; // mouse: The number of pressed physical buttons.
 
+        si32 dtvt_digest{}; // mouse: Synchronized digest with ui::dtvt (per mouse device).
+        fp2d dtvt_coords{}; // mouse: Synchronized coords with ui::dtvt (per mouse device).
+        ui32 dtvt_serial{}; // mouse: Synchronized serial with ui::dtvt (per mouse device).
+
         // mouse: Forward the extended mouse event.
         virtual void fire(hint cause) = 0; //, si32 index = mouse::noactive) = 0;
         // mouse: Try to forward the mouse event intact.
@@ -1582,6 +1587,7 @@ namespace netxs::input
         si32 countdown = 0;
 
         si32 gear_index; // hids: Gear visual index.
+        argb gear_color; // hids: Gear's focus color.
         kmap other_key; // hids: Dynamic key-vt mapping.
 
         bool shared_event = faux; // hids: The key event was touched by another procees/handler. See pro::keybd(release, key::post) for detailts.
@@ -1594,7 +1600,7 @@ namespace netxs::input
               idmap{ idmap },
               alive{ faux },
               timer{ base::plugin<ui::pro::timer>() },
-              gear_index{ use_index ? indexer.take_gear_available_index() : 16 - 4 + 256 - 4/*vt256[0xFF000000], see pro::title*/ },
+              gear_index{ indexer.take_gear_available_index(use_index) },
               other_key{ build_other_key(key::KeySlash, key::KeySlash | (hids::anyShift << 8)) }, // Defaults for US layout.
               multihome{ owner.base::property<multihome_t>("multihome") }
         {
@@ -1610,7 +1616,7 @@ namespace netxs::input
         {
             mouse_leave(owner);
             release_if_captured();
-            if (gear_index != 16 - 4 + 256 - 4) bell::indexer.release_gear_index(gear_index);
+            bell::indexer.release_gear_index(gear_index);
             base::signal(tier::release, input::events::halt, *this);
             base::signal(tier::general, input::events::halt, *this);
             base::signal(tier::release, input::events::die, *this);
@@ -1623,6 +1629,16 @@ namespace netxs::input
             return alive;
         }
 
+        // hids: The gear has visual index.
+        bool use_index()
+        {
+            return gear_index != auth::non_index;
+        }
+        static argb get_color(si32 gear_index)
+        {
+            auto color = argb::vt256[4 + gear_index % (256 - 4)];
+            return color;
+        }
         bool is_real()
         {
             return id != 0;
@@ -1991,6 +2007,16 @@ namespace netxs::input
                         redirect_mouse_focus(next);
                         pass(tier::mouserelease, next, gate_coor, true);
                     }
+                    else // Pass mouse events through accesslocked objects.
+                    {
+                        alive = true;
+                        if (auto world_ptr = multihome.world_wptr.lock())
+                        {
+                            forward(tier::mouserelease, *world_ptr); // Pass event to the ui::hall.
+                            tooltip.recalc(new_cause);
+                            return;
+                        }
+                    }
                 }
                 else
                 {
@@ -2020,8 +2046,19 @@ namespace netxs::input
                     auto& next = *next_ptr;
                     auto  temp = m_sys.coordxy;
                     m_sys.coordxy += idmap.coor();
-                    next.global(m_sys.coordxy);
-                    next.base::signal(tier::release, input::events::device::mouse::on, *this);
+                    next.global(m_sys.coordxy, [&](auto& parent) // Ask parents.
+                    {
+                        parent.base::signal(tier::preview, input::events::device::mouse::on, *this);
+                        return alive;
+                    });
+                    if (alive)
+                    {
+                        next.base::signal(tier::release, input::events::device::mouse::on, *this);
+                    }
+                    else // Redirect mouse focus when rejected objects are detected.
+                    {
+                        redirect_mouse_focus(owner);
+                    }
                     m_sys.coordxy = temp;
                     if (!alive) // Clear one-shot events on success.
                     {

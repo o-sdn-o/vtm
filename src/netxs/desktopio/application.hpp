@@ -22,7 +22,7 @@ namespace netxs::app
 
 namespace netxs::app::shared
 {
-    static const auto version = "v2025.12.12";
+    static const auto version = "v2026.02.16";
     static const auto repository = "https://github.com/directvt/vtm";
     static const auto usr_config = "~/.config/vtm/settings.xml"s;
     static const auto sys_config = "/etc/vtm/settings.xml"s;
@@ -108,6 +108,98 @@ namespace netxs::app::shared
             }
         }
     };
+    const auto track_accesslock = [](base& boss, auto& accesslock_gears, auto& accesslock_token, auto& accesslock_state, id_t gear_id) // Use an empty gear_id to rearm subscriptions.
+    {
+        if (gear_id)
+        {
+            accesslock_gears.clear();
+            accesslock_token.clear();
+            if (accesslock_state) //todo unify - same code at application.hpp:250 (LockAccess)
+            {
+                boss.base::riseup(tier::request, e2::form::state::keybd::enlist, accesslock_gears); // Get window owner list.
+                accesslock_state = (si32)!accesslock_gears.empty();
+            }
+        }
+        if (accesslock_state)
+        {
+            boss.base::riseup(tier::request, e2::form::state::accesslock::master, accesslock_gears); // Add a desktop admin's gear id to the window owner list if it is.
+            boss.LISTEN(tier::release, e2::form::state::focus::on, gear_id, accesslock_token) // Don't set input focus for non-owners.
+            {
+                if (gear_id)
+                {
+                    auto iter = std::ranges::find(accesslock_gears, gear_id);
+                    if (iter == accesslock_gears.end()) // Filter out for non-owners.
+                    {
+                        boss.base::enqueue([&, gear_id](auto&)
+                        {
+                            if (auto gear_ptr = boss.base::getref<hids>(gear_id)) // Refocus to gate.
+                            {
+                                auto& gear = *gear_ptr;
+                                pro::focus::off(boss.This(), gear.id);
+                                pro::focus::set(gear.owner.This(), gear.id, solo::off);
+                            }
+                        });
+                    }
+                }
+            };
+            boss.LISTEN(tier::preview, input::events::device::mouse::on, gear, accesslock_token)
+            {
+                auto iter = std::ranges::find(accesslock_gears, gear.id);
+                if (iter == accesslock_gears.end()) // Filter out for non-owners.
+                {
+                    gear.dismiss();
+                    boss.bell::expire();
+                }
+                else
+                {
+                    boss.bell::passover();
+                }
+            };
+            boss.on(tier::mousepreview, input::key::MouseAny, accesslock_token.back());
+            boss.on(tier::preview, input::events::keybd::any.id, accesslock_token.back());
+            boss.LISTEN(tier::general, input::events::die, gear, accesslock_token)
+            {
+                auto iter = std::ranges::find(accesslock_gears, gear.id);
+                if (iter != accesslock_gears.end()) // Remove disconnected gear.
+                {
+                    accesslock_gears.erase(iter);
+                    if (accesslock_gears.empty())
+                    {
+                        boss.base::riseup(tier::preview, e2::form::state::accesslock::count); // Sync with ui::hall.
+                        log("%%Window [%%] access unlocked", prompt::vtm, boss.id);
+                        accesslock_token.clear();
+                    }
+                }
+            };
+            boss.LISTEN(tier::request, e2::form::prop::window::accesslock, check_gear_id, accesslock_token) // Check access for gear_id.
+            {
+                if (check_gear_id)
+                {
+                    auto iter = std::ranges::find(accesslock_gears, check_gear_id);
+                    if (iter == accesslock_gears.end()) // This gear_id is not allowed.
+                    {
+                        check_gear_id = {};
+                    }
+                }
+            };
+        }
+        if (gear_id)
+        {
+            boss.base::riseup(tier::preview, e2::form::state::accesslock::count); // Sync with ui::hall.
+            if (auto gear_ptr = boss.base::getref<hids>(gear_id)) // Notify back dependent UI elements.
+            {
+                gear_ptr->base::signal(tier::release, e2::form::prop::accesslock, accesslock_state);
+            }
+        }
+        if (accesslock_state)
+        {
+            log("%%Window [%%] access locked by %% user(s)", prompt::vtm, boss.id, accesslock_gears.size());
+        }
+        else
+        {
+            log("%%Window [%%] access unlocked", prompt::vtm, boss.id);
+        }
+    };
     const auto base_kb_navigation = [](settings& config, ui::sptr scroll_ptr, base& boss)
     {
         auto& scroll_inst = *scroll_ptr;
@@ -159,11 +251,23 @@ namespace netxs::app::shared
                                         }},
             { "Close",                  [&]
                                         {
-                                            boss.base::enqueue([](auto& boss) // Keep the focus tree intact while processing events.
+                                            if (auto& gear = luafx.get_gear(); gear.is_real())
                                             {
-                                                boss.base::riseup(tier::release, e2::form::proceed::quit::one, true);
-                                            });
-                                            luafx.get_gear().set_handled();
+                                                gear.alive = true; //todo unify
+                                                boss.base::signal(tier::anycast, e2::form::proceed::closeby, gear); // Check access to close.
+                                                if (gear) //todo unify: make call the e2::form::proceed::quit::one with gear
+                                                {
+                                                    boss.base::enqueue([](auto& boss) // Keep the focus tree intact while processing events.
+                                                    {
+                                                        boss.base::riseup(tier::release, e2::form::proceed::quit::one, true);
+                                                    });
+                                                    gear.set_handled();
+                                                }
+                                                else
+                                                {
+                                                    log("%%Applet closing is supressed", prompt::lua);
+                                                }
+                                            }
                                             luafx.set_return();
                                         }},
         });
@@ -179,6 +283,7 @@ namespace netxs::app::shared
         auto script_list = config.settings::take_ptr_list_for_name("script");
         bindings = input::bindings::load(config, script_list);
         input::bindings::keybind(boss, bindings);
+        auto& accesslock_state = boss.base::property("applet.accesslock_state", 0);
         boss.base::add_methods(basename::applet,
         {
             { "GetTitlesHeight",    [&]
@@ -224,7 +329,7 @@ namespace netxs::app::shared
                                         boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
                                         luafx.set_return();
                                     }},
-            { "ZOrder",            [&]
+            { "ZOrder",             [&]
                                     {
                                         auto args_count = luafx.args_count();
                                         auto& zorder = boss.base::property("applet.zorder", zpos::plain);
@@ -245,17 +350,88 @@ namespace netxs::app::shared
                                         gear.set_handled();
                                         luafx.set_return(zorder);
                                     }},
+            { "LockAccess",         [&]
+                                    {
+                                        auto args_count = luafx.args_count();
+                                        if (args_count)
+                                        {
+                                            if (auto& gear = luafx.get_gear(); gear.is_real())
+                                            {
+                                                auto& oneshot = boss.base::field(subs{}); // Oneshot subscription token.
+                                                gear.LISTEN(tier::release, input::events::die, gear, oneshot) // Reset on disconnect.
+                                                {
+                                                    boss.base::unfield(oneshot); // Reset subscriptions.
+                                                };
+                                                gear.LISTEN(tier::release, e2::form::prop::accesslock, new_accesslock_state, oneshot) // Wait for reply.
+                                                {
+                                                    accesslock_state = new_accesslock_state;
+                                                    if constexpr (debugmode) log("%%Access lock reply received: accesslock_state=%%", prompt::apps, accesslock_state);
+                                                    if (accesslock_state) // Track currently focused gears and access lock.
+                                                    {
+                                                        auto gear_id_list = boss.base::riseup(tier::request, e2::form::state::keybd::enlist); // Get window owner list.
+                                                        if (gear_id_list.size())
+                                                        {
+                                                            auto& accesslock_gears2 = boss.base::field(std::move(gear_id_list));
+                                                            auto& oneshot2 = boss.base::field(subs{}); // Oneshot subscription token.
+                                                            boss.LISTEN(tier::release, e2::form::prop::accesslock, new_accesslock_state, oneshot2)
+                                                            {
+                                                                if (!new_accesslock_state)
+                                                                {
+                                                                    boss.base::unfield(accesslock_gears2);
+                                                                    boss.base::unfield(oneshot2); // Stop tracking.
+                                                                }
+                                                            };
+                                                            boss.LISTEN(tier::general, input::events::die, gear, oneshot2) // Track disconnecting gears.
+                                                            {
+                                                                accesslock_gears2.remove(gear.id);
+                                                                if (accesslock_gears2.empty())
+                                                                {
+                                                                    accesslock_state = 0;
+                                                                    boss.base::riseup(tier::release, e2::form::prop::accesslock, accesslock_state); // Notify UI elements.
+                                                                    boss.base::unfield(accesslock_gears2);
+                                                                    boss.base::unfield(oneshot2); // Stop tracking.
+                                                                }
+                                                            };
+                                                        }
+                                                    }
+                                                    boss.base::riseup(tier::release, e2::form::prop::accesslock, accesslock_state); // Notify UI elements.
+                                                    boss.base::unfield(oneshot); // Reset subscriptions.
+                                                };
+                                                auto new_accesslock_state = luafx.get_args_or(1, 0);
+                                                auto gui_cmd = e2::command::gui.param();
+                                                gui_cmd.gear_id = gear.id;
+                                                gui_cmd.cmd_id = syscmd::accesslock;
+                                                gui_cmd.args.emplace_back(new_accesslock_state);
+                                                boss.base::riseup(tier::preview, e2::command::gui, gui_cmd); // Send request to set accesslock.
+                                                gear.set_handled();
+                                            }
+                                            luafx.set_return();
+                                        }
+                                        else
+                                        {
+                                            luafx.set_return(accesslock_state);
+                                        }
+                                    }},
             { "Close",              [&]
                                     {
-                                        auto gui_cmd = e2::command::gui.param();
-                                        auto& gear = luafx.get_gear();
-                                        if (gear.is_real())
+                                        if (auto& gear = luafx.get_gear(); gear.is_real())
                                         {
-                                            gui_cmd.gear_id = gear.id;
-                                            gear.set_handled();
+                                            gear.alive = true;
+                                            boss.base::signal(tier::anycast, e2::form::proceed::closeby, gear); // Check access to close.
+                                            if (gear) //todo unify: make call the e2::command::gui with gear
+                                            {
+                                                auto gui_cmd = e2::command::gui.param();
+                                                gui_cmd.gear_id = gear.id;
+                                                gear.set_handled();
+                                                gui_cmd.cmd_id = syscmd::close;
+                                                boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
+                                            }
+                                            else
+                                            {
+                                                log("%%Applet closing was interrupted due to a locked state", prompt::lua);
+                                                gear.set_handled();
+                                            }
                                         }
-                                        gui_cmd.cmd_id = syscmd::close;
-                                        boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
                                         luafx.set_return();
                                     }},
             { "Minimize",           [&]
@@ -431,7 +607,15 @@ namespace netxs::app::shared
                         boss.on(tier::mouserelease, input::key::LeftClick, [&](hids& gear)
                         {
                             auto backup = boss.This(); //todo revise backup
-                            boss.base::signal(tier::anycast, e2::form::proceed::quit::one, faux); // fast=faux: Show closing process.
+                            boss.base::signal(tier::anycast, e2::form::proceed::closeby, gear); // Check access to close.
+                            if (gear) //todo unify: make call the e2::form::proceed::quit::one with gear
+                            {
+                                boss.base::signal(tier::anycast, e2::form::proceed::quit::one, faux); // fast=faux: Show closing process.
+                            }
+                            else
+                            {
+                                log("%%Window closing was interrupted due to a locked state", prompt::lua);
+                            }
                             gear.dismiss();
                         });
                     }},
@@ -723,7 +907,7 @@ namespace netxs::app::shared
             if (src_cfg)
             {
                 log(prompt::pads, "Merging settings from ", src_cfg.page.file);
-                def_cfg.combine_item(src_cfg.root_ptr);
+                def_cfg.combine_item(src_cfg);
             }
         }
         static void settings(xml::settings& resultant, qiew cliopt, bool print = faux)
@@ -807,70 +991,86 @@ namespace netxs::app::shared
             map[app_typename] = builder;
         }
     };
-    struct gui_config_t
-    {
-        si32 winstate{};
-        bool aliasing{};
-        span blinking{};
-        twod wincoord{};
-        twod gridsize{};
-        si32 cellsize{};
-        std::list<text> fontlist;
-    };
 
     static auto get_gui_config(settings& config)
     {
         os::dtvt::wheelrate = config.settings::take("/config/timings/wheelrate", 3);
-        auto gui_config = gui_config_t{ .winstate = config.settings::take("/config/gui/winstate", winstate::normal, app::shared::win::options),
-                                        .aliasing = config.settings::take("/config/gui/antialiasing", faux),
-                                        .blinking = config.settings::take("/config/gui/blinkrate", span{ 400ms }),
-                                        .wincoord = config.settings::take("/config/gui/wincoor", dot_mx),
-                                        .gridsize = config.settings::take("/config/gui/gridsize", dot_mx),
-                                        .cellsize = std::clamp(config.settings::take("/config/gui/cellheight", si32{ 20 }), 0, 256) };
-        if (gui_config.cellsize == 0) gui_config.cellsize = 20;
+        auto gui_config = gui::cfg_t{ .win_state    = config.settings::take("/config/gui/winstate", winstate::normal, app::shared::win::options),
+                                      .antialiasing = config.settings::take("/config/gui/antialiasing", faux),
+                                      .blink_rate   = config.settings::take("/config/gui/blinkrate", span{ 400ms }),
+                                      .wincoord     = config.settings::take("/config/gui/wincoor", dot_mx),
+                                      .gridsize     = config.settings::take("/config/gui/gridsize", dot_mx),
+                                      .cell_height  = std::clamp(config.settings::take("/config/gui/cellheight", si32{ 20 }), 0, 256) };
+        if (gui_config.cell_height == 0) gui_config.cell_height = 20;
         if (gui_config.gridsize.x == 0 || gui_config.gridsize.y == 0) gui_config.gridsize = dot_mx;
         auto fonts_context = config.settings::push_context("/config/gui/fonts/");
         auto font_list = config.settings::take_ptr_list_for_name("font");
+        if (font_list.size())
+        {
+            auto& primary_font_ptr = font_list.front();
+            auto axis_ptr_list = config.take_ptr_list_of(primary_font_ptr);
+            for (auto& axis_rec_ptr : axis_ptr_list)
+            {
+                if (axis_rec_ptr->name)
+                {
+                    auto& axes_name = axis_rec_ptr->name.value()->utf8;
+                    auto base_value_str = config.settings::take_value(axis_rec_ptr);
+                    auto base_value     = xml::take_or(base_value_str                                 , netxs::fp32nan);
+                    auto regular        = config.settings::take_value_from(axis_rec_ptr, "regular"    , netxs::fp32nan);
+                    auto bold           = config.settings::take_value_from(axis_rec_ptr, "bold"       , netxs::fp32nan);
+                    auto italic         = config.settings::take_value_from(axis_rec_ptr, "italic"     , netxs::fp32nan);
+                    auto bold_italic    = config.settings::take_value_from(axis_rec_ptr, "bold_italic", netxs::fp32nan);
+                    if (std::isfinite(base_value) || std::isfinite(regular) || std::isfinite(bold) || std::isfinite(italic) || std::isfinite(bold_italic))
+                    {
+                        auto& font_axis = gui_config.font_axes[axes_name];
+                        font_axis.base_value  = base_value;
+                        font_axis.regular     = regular;
+                        font_axis.bold        = bold;
+                        font_axis.italic      = italic;
+                        font_axis.bold_italic = bold_italic;
+                    }
+                }
+            }
+        }
         for (auto& font_ptr : font_list)
         {
-            //todo implement 'fonts/font/file' - font file path/url
-            gui_config.fontlist.push_back(config.settings::take_value(font_ptr));
+            gui_config.font_names.push_back(config.settings::take_value(font_ptr));
         }
         return gui_config;
     }
     static auto get_tui_config(settings& config, ui::skin& g)
     {
         using namespace std::chrono;
-        os::dtvt::wheelrate = config.settings::take("/config/timings/wheelrate", 3);
-        g.window_clr     = config.settings::take("/config/colors/window"     , cell{ whitespace });
-        g.winfocus       = config.settings::take("/config/colors/focus"      , cell{ whitespace });
-        g.brighter       = config.settings::take("/config/colors/brighter"   , cell{ whitespace });
-        g.shadower       = config.settings::take("/config/colors/shadower"   , cell{ whitespace });
-        g.warning        = config.settings::take("/config/colors/warning"    , cell{ whitespace });
-        g.danger         = config.settings::take("/config/colors/danger"     , cell{ whitespace });
-        g.action         = config.settings::take("/config/colors/action"     , cell{ whitespace });
-        g.selected       = config.settings::take("/config/desktop/taskbar/colors/selected"  , cell{ whitespace });
-        g.active         = config.settings::take("/config/desktop/taskbar/colors/active"    , cell{ whitespace });
-        g.focused        = config.settings::take("/config/desktop/taskbar/colors/focused"   , cell{ whitespace });
-        g.inactive       = config.settings::take("/config/desktop/taskbar/colors/inactive"  , cell{ whitespace });
-        g.spd            = config.settings::take("/config/timings/kinetic/spd"      , 10  );
-        g.pls            = config.settings::take("/config/timings/kinetic/pls"      , 167 );
-        g.spd_accel      = config.settings::take("/config/timings/kinetic/spd_accel", 1   );
-        g.spd_max        = config.settings::take("/config/timings/kinetic/spd_max"  , 100 );
-        g.ccl            = config.settings::take("/config/timings/kinetic/ccl"      , 120 );
-        g.ccl_accel      = config.settings::take("/config/timings/kinetic/ccl_accel", 30  );
-        g.ccl_max        = config.settings::take("/config/timings/kinetic/ccl_max"  , 1   );
-        g.switching      = config.settings::take("/config/timings/switching"        , span{ 200ms });
-        g.deceleration   = config.settings::take("/config/timings/deceleration"     , span{ 2s    });
-        g.blink_period   = config.settings::take("/config/cursor/blink"             , span{ 400ms });
-        g.menu_timeout   = config.settings::take("/config/desktop/taskbar/timeout"  , span{ 250ms });
-        g.leave_timeout  = config.settings::take("/config/timings/leave_timeout"    , span{ 1s    });
-        g.repeat_delay   = config.settings::take("/config/timings/repeat_delay"     , span{ 500ms });
-        g.repeat_rate    = config.settings::take("/config/timings/repeat_rate"      , span{ 30ms  });
-        g.maxfps         = config.settings::take("/config/timings/fps"              , 60);
-        g.max_value      = config.settings::take("/config/desktop/windowmax"        , twod{ 3000, 2000  });
-        g.macstyle       = config.settings::take("/config/desktop/macstyle"         , faux);
-        g.menuwide       = config.settings::take("/config/desktop/taskbar/wide"     , faux);
+        os::dtvt::wheelrate = config.settings::take("/config/timings/wheelrate"              , 3);
+        g.window_clr        = config.settings::take("/config/colors/window"                  , cell{ whitespace });
+        g.winfocus          = config.settings::take("/config/colors/focus"                   , cell{ whitespace });
+        g.brighter          = config.settings::take("/config/colors/brighter"                , cell{ whitespace });
+        g.shadower          = config.settings::take("/config/colors/shadower"                , cell{ whitespace });
+        g.warning           = config.settings::take("/config/colors/warning"                 , cell{ whitespace });
+        g.danger            = config.settings::take("/config/colors/danger"                  , cell{ whitespace });
+        g.action            = config.settings::take("/config/colors/action"                  , cell{ whitespace });
+        g.selected          = config.settings::take("/config/desktop/taskbar/colors/selected", cell{ whitespace });
+        g.active            = config.settings::take("/config/desktop/taskbar/colors/active"  , cell{ whitespace });
+        g.focused           = config.settings::take("/config/desktop/taskbar/colors/focused" , cell{ whitespace });
+        g.inactive          = config.settings::take("/config/desktop/taskbar/colors/inactive", cell{ whitespace });
+        g.spd               = config.settings::take("/config/timings/kinetic/spd"            , 10  );
+        g.pls               = config.settings::take("/config/timings/kinetic/pls"            , 167 );
+        g.spd_accel         = config.settings::take("/config/timings/kinetic/spd_accel"      , 1   );
+        g.spd_max           = config.settings::take("/config/timings/kinetic/spd_max"        , 100 );
+        g.ccl               = config.settings::take("/config/timings/kinetic/ccl"            , 120 );
+        g.ccl_accel         = config.settings::take("/config/timings/kinetic/ccl_accel"      , 30  );
+        g.ccl_max           = config.settings::take("/config/timings/kinetic/ccl_max"        , 1   );
+        g.switching         = config.settings::take("/config/timings/switching"              , span{ 200ms });
+        g.deceleration      = config.settings::take("/config/timings/deceleration"           , span{ 2s    });
+        g.blink_period      = config.settings::take("/config/cursor/blink"                   , span{ 400ms });
+        g.menu_timeout      = config.settings::take("/config/desktop/taskbar/timeout"        , span{ 250ms });
+        g.leave_timeout     = config.settings::take("/config/timings/leave_timeout"          , span{ 1s    });
+        g.repeat_delay      = config.settings::take("/config/timings/repeat_delay"           , span{ 500ms });
+        g.repeat_rate       = config.settings::take("/config/timings/repeat_rate"            , span{ 30ms  });
+        g.maxfps            = config.settings::take("/config/timings/fps"                    , 60);
+        g.max_value         = config.settings::take("/config/desktop/windowmax"              , twod{ 3000, 2000  });
+        g.macstyle          = config.settings::take("/config/desktop/macstyle"               , faux);
+        g.menuwide          = config.settings::take("/config/desktop/taskbar/wide"           , faux);
         if (g.maxfps <= 0) g.maxfps = 60;
 
         g.NsTextbasedDesktopEnvironment   = config.settings::take("/Ns/TextbasedDesktopEnvironment"    , ""s);
@@ -960,7 +1160,7 @@ namespace netxs::app::shared
         g.NsMaximizeWindow_tooltip        = config.settings::take("/Ns/MaximizeWindow/tooltip"         , ""s);
         g.NsCloseWindow_tooltip           = config.settings::take("/Ns/CloseWindow/tooltip"            , ""s);
     }
-    static void splice(xipc client, gui_config_t& gc)
+    static void splice(xipc client, gui::cfg_t& gc)
     {
         if (os::dtvt::active || !(os::dtvt::vtmode & ui::console::gui))
         {
@@ -975,8 +1175,8 @@ namespace netxs::app::shared
             {
                 //todo sync settings with tui_domain (auth::config)
                 auto gui_event_domain = netxs::events::auth{};
-                auto window = gui_event_domain.create<gui::window>(gui_event_domain, gc.fontlist, gc.cellsize, gc.aliasing, gc.blinking, dot_21);
-                window->connect(gc.winstate, gc.wincoord, gc.gridsize);
+                auto window = gui_event_domain.create<gui::window>(gui_event_domain, gc, dot_21);
+                window->connect();
             };
             if (os::stdout_fd != os::invalid_fd)
             {

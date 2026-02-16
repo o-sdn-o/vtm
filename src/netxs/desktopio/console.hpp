@@ -242,6 +242,18 @@ namespace netxs::ui
                 lock.unlock();
                 owner.disconnect();
             }
+            void handle(s11n::xs::gui_command lock)
+            {
+                owner.base::enqueue([&, gui_cmd = lock.thing](auto& /*boss*/) mutable
+                {
+                    auto ext_gear_id = gui_cmd.gear_id;
+                    if (auto gear_ptr = owner.get_int_gear_ptr(ext_gear_id)) // Notify oneshot requesters.
+                    {
+                        auto accesslock_state = gui_cmd.args.size() ? netxs::any_get_or(gui_cmd.args[0], 0) : 0;
+                        gear_ptr->base::signal(tier::release, e2::form::prop::accesslock, accesslock_state);
+                    }
+                });
+            }
         };
 
         // gate: Bitmap forwarder.
@@ -554,6 +566,7 @@ namespace netxs::ui
                                         }},
                 });
                 gear.base::father = This(); // Gear has a fixed parent.
+                base::signal(tier::release, input::events::invite, gear);
             }
             auto& [ext_gear_id, gear_ptr] = *gear_it;
             auto& gear = *gear_ptr;
@@ -591,12 +604,27 @@ namespace netxs::ui
         {
             auto int_gear_id = id_t{};
             auto gear_it = gears.find(ext_gear_id);
-            if (gear_it != gears.end()) int_gear_id = gear_it->second->id;
+            if (gear_it != gears.end())
+            {
+                int_gear_id = gear_it->second->id;
+            }
             return int_gear_id;
+        }
+        netxs::sptr<input::hids> get_int_gear_ptr(id_t ext_gear_id)
+        {
+            auto int_gear_ptr = netxs::sptr<input::hids>{};
+            auto gear_it = gears.find(ext_gear_id);
+            if (gear_it != gears.end())
+            {
+                int_gear_ptr = gear_it->second;
+            }
+            return int_gear_ptr;
         }
         void fill_pointer(hids& gear, face& parent_canvas)
         {
-            static const auto idle = cell{}.txt("\xE2\x96\x88"/*\u2588 █ */).bgc(0x00).fgc(0xFF00ff00);
+            //static const auto idle = cell{}.txt("\xE2\x96\x88"/*\u2588 █ */).bgc(0x00).fgc(0xFF00ff00); // This is the only way to render a green cursor in 8+8 16-color in Linux VGA Console.
+            //static const auto idle = cell{}.txt(' ').bgc(0xFF00ff00); // Show the white cursor in Linux VGA Console, but green in yaft.
+            static const auto idle = cell{}.txt("\xE2\x96\x88"/*\u2588 █ */).bgc(0xFF00ff00).fgc(0xFF00ff00); // Boom! Show green cursor in Linux VGA Console and green in yaft.
             static const auto busy = cell{}.bgc(reddk).fgc(0xFFffffff);
             auto brush = gear.m_sys.buttons ? cell{ busy }.txt(64 + (char)gear.m_sys.buttons/*A-Z...*/)
                                             : idle;
@@ -1149,7 +1177,7 @@ namespace netxs::ui
                 if (gear_ptr)
                 {
                     conio.clipdata_request.send(canal, ext_gear_id, from_gear.board::cargo.hash);
-                    clipdata.wait();
+                    clipdata.wait(); //todo (maybe) sync it the same way as accesslock, or just track updates in realtime
                     if (clipdata.thing.hash != from_gear.board::cargo.hash)
                     {
                         from_gear.board::cargo.set(clipdata.thing);
