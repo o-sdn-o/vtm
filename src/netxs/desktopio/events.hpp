@@ -166,6 +166,7 @@ namespace netxs::events
         void read_args(si32 index, auto add_item);
         auto get_args_or(si32 idx, auto fallback = {});
         void set_gear(input::hids& gear);
+        void reset_gear();
         input::hids& get_gear();
         bool run_with_gear_wo_return(auto proc);
         void run_with_gear(auto proc);
@@ -290,7 +291,7 @@ namespace netxs::events
             static constexpr auto not_handled = __COUNTER__ - _counter;
         };
 
-        id_t                                      next_id;
+        generics::indexer<id_t>                   id_pool;
         std::recursive_mutex                      mutex;
         std::unordered_map<id_t, std::reference_wrapper<ui::base>>  objects; // auth: Map of objects by object id.
         clasess_umap                              classes; // auth: Map of classes by classname.
@@ -468,6 +469,10 @@ namespace netxs::events
             auto& target_reactor = Tier == tier::general ? general : reactor;
             _notify(Tier, target_reactor, event, param);
         }
+        void notify_general(hint event, auto& param)
+        {
+            _notify(tier::general, general, event, param);
+        }
         // auth: Interrupt current invocation.
         void expire()
         {
@@ -564,11 +569,18 @@ namespace netxs::events
         // auth: Returns the next available id. The default gear has id = 0.
         auto new_id()
         {
-            while (netxs::on_key(objects, next_id))
+            auto id = id_pool.get_new();
+            if (!id) [[unlikely]]
             {
-                next_id++;
+                log("%%No object indexes available", prompt::auth);
+                std::terminate();
             }
-            return next_id++;
+            return id;
+        }
+        // auth: Returns the next available id.
+        auto release_id(id_t id)
+        {
+            id_pool.release(id);
         }
         // auth: .
         template<bool Sync = true>
@@ -894,7 +906,10 @@ namespace netxs::events
             : indexer{ indexer },
               id{ indexer.new_id() }
         { }
-        virtual ~bell() = default;
+        virtual ~bell()
+        {
+            indexer.release_id(id);
+        }
     };
 }
 namespace netxs

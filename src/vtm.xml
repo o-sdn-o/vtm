@@ -13,22 +13,26 @@ R"==(<include*/>  <!-- Ordered list of <include="/path/to/settings.xml"/>. Clear
         <blinkrate=400ms/>    <!-- Cursor/text blink rate (SGR 5/6). Set to zero to disable blinking. -->
         <fonts>  <!-- Ordered font fallback list. Other available system fonts will be loaded dynamically. -->
             <font*/>  <!-- Clear previously defined fonts to start a new list. -->
-            <font="Cascadia Mono">  <!-- Primary font: the first in the list. Its metrics define the cell geometry and set the default axis values for all subsequent fonts in the fallback list. -->
-                <!-- You can specify base axis values for each of the four font styles supported by the primary font: 'regular', 'bold', 'italic', and 'bold_italic'. -->
-                <!-- If the primary font is not a variable font, all specified axis values are ignored. If no values are provided, the font's default settings will be used. -->
-                <!-- To view the list of available system fonts and their supported axes, use the 'vtm \-\-fontlist' command. -->
-                <wdth="" regular="" bold="" italic="" bold_italic=""/>  <!-- [wdth] axis: 50-200 (percentage). Typical values: 75% for 'Condensed', 100% for 'Normal', 150% for 'Extended'. Example: '<wdth=75/>' applies 75% width to all styles. -->
-                <wght="" regular="" bold="" italic="" bold_italic=""/>  <!-- [wght] axis: 1-1000 (weight units). Typical values: 400 for 'Regular', 700 for 'Bold', 900 for 'Black'. Example: '<wght regular=200 bold=500/>' sets a thin weight (200) for 'regular' and a near-normal weight (500) for 'bold'. -->
-                <slnt="" regular="" bold="" italic="" bold_italic=""/>  <!-- [slnt] axis: -90 to +90 (degrees). Vertical tilt angle. Example: '<slnt regular=0 bold=0 italic=-12 bold_italic=-10/>'. -->
-                <!-- <GRAD="" regular="" bold="" italic="" bold_italic=""/> --> <!-- Grade: Modifies the optical weight without changing glyph width. -->
-                <!-- <SOFT="" regular="" bold="" italic="" bold_italic=""/> --> <!-- Softness: Adjusts corner rounding. -->
-                <!-- <SERF="" regular="" bold="" italic="" bold_italic=""/> --> <!-- Serif Shape: Modifies the shape or size of serifs. -->
-                <!-- <YTLC="" regular="" bold="" italic="" bold_italic=""/> --> <!-- Axes for adjusting the height of ascenders and descenders. -->
-                <!-- <YTRA="" regular="" bold="" italic="" bold_italic=""/> --> <!-- // -->
-            </font>
+            <font="Cascadia Mono"/>  <!-- Primary font: the first in the list. Its metrics define the cell geometry and set the default axis values for all subsequent fonts in the fallback list. -->
             <font="Courier New"/>
             <font="NSimSun"/>
             <font="Noto Sans Devanagari"/>
+            <!-- You can specify base axis values for each of the four font styles supported by the primary font:
+                'regular', 'bold', 'italic', and 'bold_italic'. -->
+            <!-- If no values are provided, the primary font family defaults will be used. -->
+            <!-- To view the list of available system fonts and their supported axes, use the 'vtm \-\-fontlist' command. -->
+            <regular     wdth="100"        wght="350"        ital="0"          />
+            <italic      wdth=regular/wdth wght=regular/wght ital="1"          />
+            <bold        wdth=regular/wdth wght="700"        ital=regular/ital />
+            <bold_italic wdth=regular/wdth wght=bold/wght    ital=italic/ital  />
+            <!-- [wdth]: 50-200 (percentage). Typical values: 75% for 'Condensed', 100% for 'Normal', 150% for 'Extended'. -->
+            <!-- [wght]: 1-1000 (weight units). Typical values: 400 for 'Regular', 700 for 'Bold', 900 for 'Black'. -->
+            <!-- [ital]: 0-1 (boolean). Switch between Roman (0, upright) and true italic letterforms (1). -->
+            <!-- [slnt]: -90 to +90 (degrees). Vertical tilt angle. -->
+            <!-- [GRAD]: Grade: Modifies the optical weight without changing glyph width. -->
+            <!-- [SOFT]: Softness: Adjusts corner rounding. -->
+            <!-- [SERF]: Serif Shape: Modifies the shape or size of serifs. -->
+            <!-- [... ]: ... -->
         </fonts>
     </gui>
     <cursor>
@@ -143,7 +147,7 @@ R"==(
             <height=1/>  <!-- Reserved space at the top of the desktop. -->
         </panel>
         <background>  <!-- Desktop background settings. -->
-            <color fgc=whitedk bgc= #00003f80/>  <!-- Background color. -->
+            <color fgc=whitedk bgc= #00007fFF/>  <!-- Background color. -->
             <tile=""/>                           <!-- Optional: Truecolor ANSI-art for the background. -->
         </background>
     </desktop>
@@ -160,7 +164,7 @@ R"==(
             <wrap=true     />   <!-- Enable or disable line wrapping. -->
             <reset onkey=true onoutput=false/>  <!-- Conditions to reset the scrollback viewport position to the bottom. -->
             <altscroll=true/>   <!-- Enable alternate scroll mode (e.g., for mouse wheel support in man/vim). -->
-            <oversize=0 opacity=0xC0/>  <!-- Horizontal scrollback padding (left and right). -->
+            <oversize=0    />   <!-- Horizontal scrollback padding (left and right). -->
         </scrollback>
         <colors>  <!-- Terminal color palette. -->
             <color0  = pureblack  />
@@ -179,16 +183,15 @@ R"==(
             <color13 = magentalt  />
             <color14 = cyanlt     />
             <color15 = whitelt    />
-            <default fgc=whitedk bgc=pureblack/>  <!-- Default terminal colors (SGR 39/49). -->
-            <bground = DefaultColor/>  <!-- Background color of the scrollback canvas. Set to 0x00ffffff or DefaultColor to sync with the default SGR 49 background. -->
+            <default fgc=whitedk bgc=pureblack/>  <!-- Default terminal colors (SGR 39/49, set by OSC 10/11). -->
             <match fx="color" fgc=whitelt bgc= #007F00/>  <!-- Appearance of selected text matches. Available shaders (fx): "xlight", "color", "invert", "reverse". -->
             <selection>
-                <text      fx="color"  fgc=whitelt bgc=bluelt/>  <!-- Selection highlighting for plaintext clipboard mode. -->
-                <protected fx="color"  fgc=whitelt bgc=bluelt/>  <!-- Note: bgc and fgc attributes only apply when fx="color". -->
-                <ansi      fx="xlight" fgc=whitelt bgc=bluelt/>
-                <rich      fx="xlight" fgc=whitelt bgc=bluelt/>
-                <html      fx="xlight" fgc=whitelt bgc=bluelt/>
-                <none      fx="color"  fgc=whitedk bgc=blacklt/>  <!-- Appearance of an inactive selection. -->
+                <text      fx="color" inv=true bgc=whitelt fgc=bluelt/>  <!-- Selection highlighting for plaintext clipboard mode. -->
+                <protected fx="color" inv=true bgc=whitelt fgc=bluelt/>  <!-- Notes: -->
+                <ansi      fx="color" inv=true bgc=whitelt fgc=bluelt/>  <!--   - inv=true ensures that the embedded image becomes translucent (see AnyPlex Protocol). -->
+                <rich      fx="color" inv=true bgc=whitelt fgc=bluelt/>  <!--   - bgc and fgc attributes only apply when fx="color".            -->
+                <html      fx="color" inv=true bgc=whitelt fgc=bluelt/>
+                <none      fx="color" inv=true bgc=whitedk fgc=blacklt/>  <!-- Appearance of an inactive selection. -->
             </selection>
             <names=/X11ColorNames>  <!-- Color name mappings for OSC 4, 10-12. -->
                 <!--  <name="New Dark Orange" rgb= #FF8C00 /> -->

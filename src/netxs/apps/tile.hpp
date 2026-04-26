@@ -396,32 +396,30 @@ namespace netxs::app::tile
                         {
                             { methods::MoveGrip,        [&]
                                                         {
-                                                            auto delta = luafx.get_args_or(1, dot_00);
-                                                            boss.base::riseup(tier::preview, app::tile::events::ui::grips::move, delta);
-                                                            auto& gear = luafx.get_gear();
-                                                            gear.set_handled();
-                                                            luafx.set_return();
+                                                            luafx.run_with_gear([&](auto& gear)
+                                                            {
+                                                                auto delta = luafx.get_args_or(1, dot_00);
+                                                                boss.base::riseup(tier::preview, app::tile::events::ui::grips::move, delta);
+                                                                gear.set_handled();
+                                                            });
                                                         }},
                             { methods::ResizeGrip,      [&]
                                                         {
-                                                            auto delta = luafx.get_args_or(1, si32{});
-                                                            boss.base::riseup(tier::preview, app::tile::events::ui::grips::resize, delta);
-                                                            auto& gear = luafx.get_gear();
-                                                            gear.set_handled();
-                                                            luafx.set_return();
+                                                            luafx.run_with_gear([&](auto& gear)
+                                                            {                                                            auto delta = luafx.get_args_or(1, si32{});
+                                                                boss.base::riseup(tier::preview, app::tile::events::ui::grips::resize, delta);
+                                                                gear.set_handled();
+                                                            });
                                                         }},
                             { methods::FocusNextGrip,   [&]
                                                         {
-                                                            auto& gear = luafx.get_gear();
-                                                            auto ok = gear.is_real();
-                                                            if (ok)
+                                                            luafx.run_with_gear([&](auto& gear)
                                                             {
                                                                 auto delta = luafx.get_args_or(1, si32{ 1 });
                                                                 delta > 0 ? boss.base::riseup(tier::preview, app::tile::events::ui::focus::nextgrip, gear)
                                                                           : boss.base::riseup(tier::preview, app::tile::events::ui::focus::prevgrip, gear);
                                                                 gear.set_handled();
-                                                            }
-                                                            luafx.set_return(ok);
+                                                            });
                                                         }},
                         });
                     }));
@@ -796,14 +794,14 @@ namespace netxs::app::tile
         auto parse_data = [](auto&& parse_data, view& utf8, auto min_ratio, auto grip_bindings_ptr) -> netxs::sptr<ui::veer>
         {
             auto slot_ptr = node_veer(node_veer, min_ratio, grip_bindings_ptr);
-            utf::trim_front(utf8, ", ");
+            utf::trim_front(utf8, netxs::whitespaces_and<','>);
             if (utf8.empty()) return slot_ptr;
             auto tag = utf8.front();
             if ((tag == 'h' || tag == 'v') && utf8.find('(') < utf8.find(','))
             {
                 // add split
                 utf8.remove_prefix(1);
-                utf::trim_front(utf8, ' ');
+                utf::trim_front(utf8, netxs::whitespaces);
                 auto s1 = si32{ 1 };
                 auto s2 = si32{ 1 };
                 auto w  = si32{-1 };
@@ -815,14 +813,14 @@ namespace netxs::app::tile
                     if (auto r = utf::to_int(utf8)) // Right side ratio
                     {
                         s2 = std::abs(r.value());
-                        utf::trim_front(utf8, ' ');
+                        utf::trim_front(utf8, netxs::whitespaces);
                         if (!utf8.empty() && utf8.front() == ':') // Grip width.
                         {
                             utf8.remove_prefix(1);
                             if (auto g = utf::to_int(utf8))
                             {
                                 w = std::abs(g.value());
-                                utf::trim_front(utf8, ' ');
+                                utf::trim_front(utf8, netxs::whitespaces);
                             }
                         }
                     }
@@ -834,15 +832,15 @@ namespace netxs::app::tile
                 auto slot1 = node->attach(slot::_1, parse_data(parse_data, utf8, ui::fork::min_ratio, grip_bindings_ptr));
                 auto slot2 = node->attach(slot::_2, parse_data(parse_data, utf8, ui::fork::max_ratio, grip_bindings_ptr));
                 slot_ptr->attach(node);
-                utf::trim_front(utf8, ") ");
+                utf::trim_front(utf8, netxs::whitespaces_and<')'>);
             }
             else  // Add application.
             {
-                utf::trim_front(utf8, ' ');
-                auto menuid = utf::take_front(utf8, " ,)").str();
+                utf::trim_front(utf8, netxs::whitespaces);
+                auto menuid = utf::take_front(utf8, netxs::whitespaces_and<',', ')'>).str();
                 if (menuid.empty()) return slot_ptr;
 
-                utf::trim_front(utf8, " ,");
+                utf::trim_front(utf8, netxs::whitespaces_and<','>);
                 if (utf8.size() && utf8.front() == ')') utf8.remove_prefix(1); // pop ')';
 
                 auto& s = *slot_ptr;

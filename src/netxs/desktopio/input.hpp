@@ -520,7 +520,7 @@ namespace netxs::input
                 auto take = [](qiew& chord)
                 {
                     auto k = key_t{};
-                    utf::trim(chord, ' ');
+                    utf::trim(chord, netxs::whitespaces);
                     if (chord.empty()) return k;
                     if (auto pos = chord.find("::"); pos != text::npos) // Environment event.
                     {
@@ -534,7 +534,7 @@ namespace netxs::input
                         {
                             auto event_str = chord;
                             event_str.remove_prefix(tier::str[event_tier].size());
-                            utf::trim(event_str, ": ");
+                            utf::trim(event_str, netxs::whitespaces_and<':'>);
                             auto& rtti = netxs::events::rtti();
                             auto iter = rtti.find(event_str);
                             if (iter != rtti.end())
@@ -555,7 +555,7 @@ namespace netxs::input
                     if (chord.starts_with(tier::str[tier::preview])) // Drop the "preview:" prefix (it is not used here).
                     {
                         chord.remove_prefix(tier::str[tier::preview].size());
-                        utf::trim_front(chord, ": ");
+                        utf::trim_front(chord, netxs::whitespaces_and<':'>);
                     }
                     auto c = chord.front();
                     if (c != '-') // Is pressed.
@@ -563,7 +563,7 @@ namespace netxs::input
                         if (c == '+')
                         {
                             chord.pop_front(); // Pop '+'.
-                            utf::trim(chord, ' ');
+                            utf::trim(chord, netxs::whitespaces);
                             if (chord.empty()) return k;
                             c = chord.front();
                         }
@@ -572,11 +572,11 @@ namespace netxs::input
                     {
                         k.sign |= input::key::unpressed_sign;
                         chord.pop_front(); // Pop '-'.
-                        utf::trim(chord, ' ');
+                        utf::trim(chord, netxs::whitespaces);
                         if (chord.empty()) return k;
                         c = chord.front();
                     }
-                    utf::trim(chord, ' ');
+                    utf::trim(chord, netxs::whitespaces);
                     if (chord.empty()) return k;
                     if (auto isscancode = chord.starts_with("0x") || chord.starts_with("0X"); isscancode)
                     {
@@ -641,7 +641,7 @@ namespace netxs::input
                             k.code2 = n2 ? code + 1 : 0;
                         }
                     }
-                    utf::trim(chord, ' ');
+                    utf::trim(chord, netxs::whitespaces);
                     return k;
                 };
                 // Split.
@@ -1715,10 +1715,10 @@ namespace netxs::input
                 auto alt     = s & hids::anyAlt ? 1 : 0;
                 auto l_ctrl  = s & hids::LCtrl  ? 1 : 0;
                 auto r_ctrl  = s & hids::RCtrl  ? 1 : 0;
-                     if (l_ctrl && alt) netxs::_k2 += m.wheelsi > 0 ? 1 : -1; // LCtrl+Alt+Wheel.
-                else if (l_ctrl)        netxs::_k0 += m.wheelsi > 0 ? 1 : -1; // LCtrl+Wheel.
-                else if (alt)           netxs::_k1 += m.wheelsi > 0 ? 1 : -1; // Alt+Wheel.
-                else if (r_ctrl)        netxs::_k3 += m.wheelsi > 0 ? 1 : -1; // RCtrl+Wheel.
+                     if (l_ctrl && alt) { netxs::_k2 += m.wheelsi > 0 ? 1 : -1; log("_k2=", _k2); } // LCtrl+Alt+Wheel.
+                else if (l_ctrl)        { netxs::_k0 += m.wheelsi > 0 ? 1 : -1; log("_k0=", _k0); } // LCtrl+Wheel.
+                else if (alt)           { netxs::_k1 += m.wheelsi > 0 ? 1 : -1; log("_k1=", _k1); } // Alt+Wheel.
+                else if (r_ctrl)        { netxs::_k3 += m.wheelsi > 0 ? 1 : -1; log("_k3=", _k3); } // RCtrl+Wheel.
             }
             #endif
             mouse_disabled = faux;
@@ -2233,7 +2233,6 @@ namespace netxs::input
                                 {
                                     log("%%Event source '%src_name%' not found", prompt::lua, src_name);
                                 }
-                                
                             }
                         }
                     });

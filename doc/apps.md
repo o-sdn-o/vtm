@@ -47,36 +47,406 @@
 
 ### True color with alpha transparency
 
-The built-in terminal is capable of outputting alpha transparent (from 0 to 255, in the RGBA sense) text and thus making "holes" in the GUI terminal window. Transparency can be set for both the text background and the foreground using the SGR attributes `48:2` and `38:2`:
+The built-in terminal has support for transparent color overlays as follows:
+
+- Store an alpha channel for background and foreground colors of each scrollback cell.
+- Inherit the foreground alpha for underline colors.
+- Handle the terminal window rendering by:
+  - Blending the semi-transparent background color of the scrollback rows with the global background color (set by OSC 11).
+  - Blending the semi-transparent foreground (and underline) color of the scrollback rows with the global foreground color (set by OSC 10).
+
+The alpha transparency can be set from 0 to 255 (in the RGBA sense) for both the text background and the foreground using the SGR attributes `48:2` and `38:2`:
 
   - `ESC` `[` `48` `:` `2` `:` [ `:` ] `red` `:` `green` `:` `blue` [ `:alpha` ] `m`
   - `ESC` `[` `38` `:` `2` `:` [ `:` ] `red` `:` `green` `:` `blue` [ `:alpha` ] `m`
 
-Note: If you need correct alpha blending, you should specify [premultiplied-alpha](https://en.wikipedia.org/wiki/Alpha_compositing#Straight_versus_premultiplied) color values. (We use straight-alpha color values to overbright UI elements such as scrollbars and resize grips to make it visible regardless of the underlying colors).
+An example of using color brushes that are independent of the global background:
 
-For example, outputting a pixel-art image with transparency (pwsh):
-
-```pwsh
-" `e[48:2:0:0:0:255m`e[38:2:0:0:0:255m   `e[38:2:4:0:0:4m▄`e[38:2:20:0:0:20m▄`e[48:2:3:0:0:3m`e[38:2:51:0:0:51m▄`e[48:2:9:0:0:9m`e[38:2:95:0:0:95m▄`e[48:2:11:0:0:11m`e[38:2:104:0:0:104m▄`e[48:2:8:0:0:8m`e[38:2:83:0:0:83m▄`e[48:2:2:0:0:2m`e[38:2:38:0:0:38m▄`e[48:2:0:0:0:255m`e[38:2:14:0:0:14m▄`e[38:2:3:0:0:3m▄`e[38:2:15:0:0:15m▄`e[48:2:2:0:0:2m`e[38:2:39:0:0:39m▄`e[48:2:8:0:0:8m`e[38:2:84:0:0:84m▄`e[48:2:10:0:0:10m`e[38:2:104:0:0:104m▄`e[48:2:9:0:0:9m`e[38:2:93:0:0:93m▄`e[48:2:3:0:0:3m`e[38:2:50:0:0:50m▄`e[48:2:0:0:0:255m`e[38:2:19:0:0:19m▄`e[38:2:4:0:0:4m▄`e[38:2:0:0:0:255m   ";`
-"  `e[38:2:5:0:0:5m▄`e[48:2:8:0:0:8m`e[38:2:57:0:0:57m▄`e[48:2:54:0:0:54m`e[38:2:193:0:0:193m▄`e[48:2:157:0:0:157m`e[38:2:243:0:0:243m▄`e[48:2:224:0:0:224m`e[38:2:254:0:0:254m▄`e[48:2:237:0:0:237m`e[38:2:255:0:0:255m▄`e[48:2:238:0:0:238m▄`e[48:2:234:0:0:234m▄`e[48:2:211:0:0:211m`e[38:2:252:0:0:252m▄`e[48:2:125:0:0:125m`e[38:2:239:0:0:239m▄`e[48:2:49:0:0:49m`e[38:2:219:0:0:219m▄`e[48:2:128:0:0:128m`e[38:2:240:0:0:240m▄`e[48:2:212:0:0:212m`e[38:2:253:0:0:253m▄`e[48:2:234:0:0:234m`e[38:2:255:0:0:255m▄`e[48:2:238:0:0:238m▄`e[48:2:237:0:0:237m▄`e[48:2:224:0:0:224m`e[38:2:254:0:0:254m▄`e[48:2:153:0:0:153m`e[38:2:242:0:0:242m▄`e[48:2:50:0:0:50m`e[38:2:192:0:0:192m▄`e[48:2:7:0:0:7m`e[38:2:54:0:0:54m▄`e[48:2:0:0:0:255m`e[38:2:4:0:0:4m▄`e[38:2:0:0:0:255m ";`
-" `e[48:2:1:0:0:1m`e[38:2:5:0:0:5m▄`e[48:2:23:0:0:23m`e[38:2:66:0:0:66m▄`e[48:2:168:0:0:168m`e[38:2:228:0:0:228m▄`e[48:2:244:0:0:244m`e[38:2:254:0:0:254m▄`e[48:2:255:0:0:255m`e[38:2:255:0:0:255m       `e[48:2:253:0:0:253m▄`e[48:2:255:0:0:255m       `e[48:2:243:0:0:243m`e[38:2:254:0:0:254m▄`e[48:2:162:0:0:162m`e[38:2:226:0:0:226m▄`e[48:2:22:0:0:22m`e[38:2:58:0:0:58m▄`e[48:2:0:0:0:255m`e[38:2:4:0:0:4m▄`e[38:2:0:0:0:255m";`
-" `e[48:2:11:0:0:11m`e[38:2:12:0:0:12m▄`e[48:2:108:0:0:108m`e[38:2:119:0:0:119m▄`e[48:2:239:0:0:239m`e[38:2:240:0:0:240m▄`e[48:2:255:0:0:255m`e[38:2:255:0:0:255m                 `e[48:2:238:0:0:238m`e[38:2:239:0:0:239m▄`e[48:2:102:0:0:102m`e[38:2:107:0:0:107m▄`e[48:2:10:0:0:10m`e[38:2:11:0:0:11m▄`e[48:2:0:0:0:255m`e[38:2:0:0:0:255m";`
-" `e[48:2:9:0:0:9m`e[38:2:3:0:0:3m▄`e[48:2:95:0:0:95m`e[38:2:44:0:0:44m▄`e[48:2:236:0:0:236m`e[38:2:213:0:0:213m▄`e[48:2:255:0:0:255m`e[38:2:253:0:0:253m▄`e[38:2:255:0:0:255m               `e[38:2:252:0:0:252m▄`e[48:2:235:0:0:235m`e[38:2:210:0:0:210m▄`e[48:2:88:0:0:88m`e[38:2:40:0:0:40m▄`e[48:2:8:0:0:8m`e[38:2:2:0:0:2m▄`e[48:2:0:0:0:255m`e[38:2:0:0:0:255m";`
-"  `e[48:2:15:0:0:15m`e[38:2:1:0:0:1m▄`e[48:2:124:0:0:124m`e[38:2:26:0:0:26m▄`e[48:2:232:0:0:232m`e[38:2:144:0:0:144m▄`e[48:2:254:0:0:254m`e[38:2:235:0:0:235m▄`e[48:2:255:0:0:255m`e[38:2:254:0:0:254m▄`e[38:2:255:0:0:255m           `e[38:2:254:0:0:254m▄`e[48:2:254:0:0:254m`e[38:2:235:0:0:235m▄`e[48:2:232:0:0:232m`e[38:2:144:0:0:144m▄`e[48:2:117:0:0:117m`e[38:2:25:0:0:25m▄`e[48:2:14:0:0:14m`e[38:2:1:0:0:1m▄`e[48:2:0:0:0:255m`e[38:2:0:0:0:255m ";`
-"   `e[48:2:2:0:0:2m▄`e[48:2:29:0:0:29m`e[38:2:2:0:0:2m▄`e[48:2:144:0:0:144m`e[38:2:29:0:0:29m▄`e[48:2:235:0:0:235m`e[38:2:144:0:0:144m▄`e[48:2:254:0:0:254m`e[38:2:235:0:0:235m▄`e[48:2:255:0:0:255m`e[38:2:254:0:0:254m▄`e[38:2:255:0:0:255m       `e[38:2:254:0:0:254m▄`e[48:2:254:0:0:254m`e[38:2:233:0:0:233m▄`e[48:2:234:0:0:234m`e[38:2:140:0:0:140m▄`e[48:2:144:0:0:144m`e[38:2:28:0:0:28m▄`e[48:2:29:0:0:29m`e[38:2:2:0:0:2m▄`e[48:2:2:0:0:2m`e[38:2:0:0:0:255m▄`e[48:2:0:0:0:255m  ";`
-"     `e[48:2:2:0:0:2m▄`e[48:2:29:0:0:29m`e[38:2:2:0:0:2m▄`e[48:2:144:0:0:144m`e[38:2:28:0:0:28m▄`e[48:2:234:0:0:234m`e[38:2:137:0:0:137m▄`e[48:2:254:0:0:254m`e[38:2:232:0:0:232m▄`e[48:2:255:0:0:255m`e[38:2:253:0:0:253m▄`e[38:2:255:0:0:255m   `e[38:2:253:0:0:253m▄`e[48:2:253:0:0:253m`e[38:2:227:0:0:227m▄`e[48:2:230:0:0:230m`e[38:2:119:0:0:119m▄`e[48:2:130:0:0:130m`e[38:2:24:0:0:24m▄`e[48:2:26:0:0:26m`e[38:2:2:0:0:2m▄`e[48:2:2:0:0:2m`e[38:2:0:0:0:255m▄`e[48:2:0:0:0:255m    ";`
-"       `e[48:2:2:0:0:2m▄`e[48:2:25:0:0:25m`e[38:2:1:0:0:1m▄`e[48:2:126:0:0:126m`e[38:2:23:0:0:23m▄`e[48:2:229:0:0:229m`e[38:2:116:0:0:116m▄`e[48:2:253:0:0:253m`e[38:2:227:0:0:227m▄`e[48:2:255:0:0:255m`e[38:2:251:0:0:251m▄`e[48:2:253:0:0:253m`e[38:2:226:0:0:226m▄`e[48:2:226:0:0:226m`e[38:2:111:0:0:111m▄`e[48:2:112:0:0:112m`e[38:2:20:0:0:20m▄`e[48:2:21:0:0:21m`e[38:2:1:0:0:1m▄`e[48:2:1:0:0:1m`e[38:2:0:0:0:255m▄`e[48:2:0:0:0:255m      ";`
-"         `e[48:2:1:0:0:1m▄`e[48:2:21:0:0:21m`e[38:2:1:0:0:1m▄`e[48:2:110:0:0:110m`e[38:2:15:0:0:15m▄`e[48:2:205:0:0:205m`e[38:2:48:0:0:48m▄`e[48:2:110:0:0:110m`e[38:2:15:0:0:15m▄`e[48:2:20:0:0:20m`e[38:2:1:0:0:1m▄`e[48:2:1:0:0:1m`e[38:2:0:0:0:255m▄`e[48:2:0:0:0:255m        ";`
-"            `e[48:2:3:0:0:3m▄`e[48:2:0:0:0:255m           ";`
-"`e[m ";
+```bash
+printf "\e[39;49m
+ \e[35b\n  \e[48:2::0:0:255:128m Some Text Fragment \e[49m  
+ \e[35b\n  \e[48:2::0:255:0:128m Some Text Fragment \e[49m  
+ \e[35b\n  \e[48:2::255:0:0:128m Some Text Fragment \e[49m  
+ \e[35b\n  \e[48:2::0:255:255:128m Some Text Fragment \e[49m  
+ \e[35b\n  \e[48:2::255:255:0:128m Some Text Fragment \e[49m  
+ \e[35b\n  \e[48:2::255:0:255:128m Some Text Fragment \e[49m  
+ \e[36b\n\e[m"
 
 ```
+
+#### A test to play around with blending against different color schemes
+
+Tinting the global foreground color with a translucent color (with an alpha channel) allows colored text to be displayed independently of the color scheme.
+
+- Just create `settings.xml` and run `vtm -r term`.
+<details><summary>settings.xml</summary>
+
+- `~/.config/vtm/settings.xml`:
+  ```xml
+  <config>
+      <terminal>
+          <menu>
+              <item*/>
+              <item label=" Clear " script=TerminalClearScrollback|OnLeftClick/>
+              <item label=" \e[38:2::0:255:0mPrint Test\e[m " tooltip=" Click to print a test page ">
+                  <script=OnLeftClick>
+                      terminal.LineWrapMode(0)
+                      terminal.Print("\\n\\nBlending Test\\n\\n")
+                      local function print_color_row(start_code)
+                          terminal.Print("    ")
+                          for i = 0, 7 do
+                              local code = start_code + i
+                              terminal.Print("\\x1b["..code.."m  \\x1b[m")
+                          end
+                      end
+                      print_color_row(40)
+                      terminal.Print("\\n")
+                      print_color_row(100)
+                      terminal.Print("\\n\\n")
+                      local function colored_text(r1, g1, b1, a1, r2, g2, b2, a2)
+                          local text = "  Some Text Fragment  "
+                          local len = #text
+                          local result = "    "
+                          for i = 1, len do
+                              local ratio = (len > 1) and ((i - 1) / (len - 1)) or 0
+                              local r = math.floor(r1 + (r2 - r1) * ratio)
+                              local g = math.floor(g1 + (g2 - g1) * ratio)
+                              local b = math.floor(b1 + (b2 - b1) * ratio)
+                              local a = math.floor(a1 + (a2 - a1) * ratio)
+                              local char = text:sub(i, i)
+                              result = result .. string.format("\\x1b[48:2:%d:%d:%d:%dm%s", r, g, b, a, char)
+                          end
+                          local tail = 64
+                          for i = 1, tail do
+                              local ratio = (i - 1) / (tail - 1)
+                              local a = math.floor(a2 * (1 - ratio))
+                              result = result .. string.format("\\x1b[48:2:%d:%d:%d:%dm ", r2, g2, b2, a)
+                          end
+                          result = result.."\\x1b[m\\n"
+                          return result
+                      end
+                      local alpha = 64
+                      terminal.Print(colored_text(255, 255, 0,   alpha,  255, 0,   0,   alpha))
+                      terminal.Print(colored_text(255, 0,   255, alpha,  0,   0,   255, alpha))
+                      terminal.Print(colored_text(0,   255, 255, alpha,  0,   255, 0,   alpha))
+                      terminal.Print(colored_text(128, 128, 128, alpha,  255, 255, 255, alpha))
+                      alpha = 128
+                      terminal.Print(colored_text(255, 255, 0,   alpha,  255, 0,   0,   alpha))
+                      terminal.Print(colored_text(255, 0,   255, alpha,  0,   0,   255, alpha))
+                      terminal.Print(colored_text(0,   255, 255, alpha,  0,   255, 0,   alpha))
+                      terminal.Print(colored_text(128, 128, 128, alpha,  255, 255, 255, alpha))
+                      terminal.Print('\\n')
+                      local bgs = { "49m  Test  ",
+                                    "48:2:0:0:0:96m  Test  ",
+                                    "48:2:255:0:0:96m  Test  ",
+                                    "48:2:0:255:0:96m  Test  ",
+                                    "48:2:255:255:0:96m  Test  ",
+                                    "48:2:0:0:255:96m  Test  ",
+                                    "48:2:255:0:255:96m  Test  ",
+                                    "48:2:0:255:255:96m  Test  ",
+                                    "48:2:255:255:255:96m  Test  " }
+                      local fgs = { "39",
+                                    "38:2:0:0:0:128",
+                                    "38:2:255:0:0:128",
+                                    "38:2:0:255:0:128",
+                                    "38:2:255:255:0:128",
+                                    "38:2:0:0:255:128",
+                                    "38:2:255:0:255:128",
+                                    "38:2:0:255:255:128",
+                                    "38:2:255:255:255:128" }
+                      for _, bg in ipairs(bgs) do
+                          local row = "   "
+                          for _, fg in ipairs(fgs) do
+                              row = row .. " \\x1b[" .. fg .. ";" .. bg .. "\\x1b[m"
+                          end
+                          terminal.Print(row, '\\n')
+                      end
+                      terminal.Print('\\n')
+                      terminal.LineWrapMode(1)
+                  </script>
+              </item>
+              <item=Ubuntu24/>
+              <item=CampbellPowershell/>
+              <item=VSCodeLightModern/>
+              <item=VSCodeDarkModern/>
+              <item=CGA/>
+              <item=OneHalfLight/>
+              <item=OneHalfDark/>
+              <item=SolarizedLight/>
+              <item=SolarizedDark/>
+              <item=TangoLight/>
+              <item=TangoDark/>
+              <item=Dimidium/>
+              <item=Ottosson/>
+              <item=Campbell/>
+              <item=Vintage/>
+              <item=DarkPlus/>
+              <item=IBM5153/>
+              <item=Green/>
+              <item=Red/>
+              <item=Blue/>
+              <item=GreenLt/>
+              <item=RedLt/>
+              <item=BlueLt/>
+              <item=WhiteLt/>
+              <item=Yellow/>
+              <item=Magenta/>
+              <item=Cyan/>
+              <item=YellowLt/>
+              <item=MagentaLt/>
+              <item=CyanLt/>
+          </menu>
+      </terminal>
+  </config>
+  <Dimidium label=" Dimidium ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:BA/B7/B6\\x07")
+          terminal.Print("\\x1b]11;rgb:14/14/14\\x07")
+          terminal.Print("\\x1b]12;rgb:37/E5/7B\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/00/00;1;rgb:CF/49/4C;2;rgb:60/B4/42;3;rgb:DB/9C/11;4;rgb:05/75/D8;5;rgb:AF/5E/D2;6;rgb:1D/B6/BB;7;rgb:BA/B7/B6;8;rgb:81/7E/7E;9;rgb:FF/64/3B;10;rgb:37/E5/7B;11;rgb:FC/CD/1A;12;rgb:68/8D/FD;13;rgb:ED/6F/E9;14;rgb:32/E0/FB;15;rgb:DE/E3/E4\\x07")
+      </script>
+  </Dimidium>
+  <Ottosson label=" Ottosson ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:BE/BE/BE\\x07")
+          terminal.Print("\\x1b]11;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/00/00;1;rgb:BE/2C/21;2;rgb:3F/AE/3A;3;rgb:BE/9A/4A;4;rgb:20/4D/BE;5;rgb:BB/54/BE;6;rgb:00/A7/B2;7;rgb:BE/BE/BE;8;rgb:80/80/80;9;rgb:FF/3E/30;10;rgb:58/EA/51;11;rgb:FF/C9/44;12;rgb:2F/6A/FF;13;rgb:FC/74/FF;14;rgb:00/E1/F0;15;rgb:FF/FF/FF\\x07")
+      </script>
+  </Ottosson>
+  <Campbell label=" Campbell ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:CC/CC/CC\\x07")
+          terminal.Print("\\x1b]11;rgb:0C/0C/0C\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:0C/0C/0C;1;rgb:C5/0F/1F;2;rgb:13/A1/0E;3;rgb:C1/9C/00;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:E7/48/56;10;rgb:16/C6/0C;11;rgb:F9/F1/A5;12;rgb:3B/78/FF;13;rgb:B4/00/9E;14;rgb:61/D6/D6;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </Campbell>
+  <CampbellPowershell label=" Campbell Powershell ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:CC/CC/CC\\x07")
+          terminal.Print("\\x1b]11;rgb:01/24/56\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:0C/0C/0C;1;rgb:C5/0F/1F;2;rgb:13/A1/0E;3;rgb:C1/9C/00;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:E7/48/56;10;rgb:16/C6/0C;11;rgb:F9/F1/A5;12;rgb:3B/78/FF;13;rgb:B4/00/9E;14;rgb:61/D6/D6;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </CampbellPowershell>
+  <Vintage label=" Vintage ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:C0/C0/C0\\x07")
+          terminal.Print("\\x1b]11;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/00/00;1;rgb:80/00/00;2;rgb:00/80/00;3;rgb:80/80/00;4;rgb:00/00/80;5;rgb:80/00/80;6;rgb:00/80/80;7;rgb:C0/C0/C0;8;rgb:80/80/80;9;rgb:FF/00/00;10;rgb:00/FF/00;11;rgb:FF/FF/00;12;rgb:00/00/FF;13;rgb:FF/00/FF;14;rgb:00/FF/FF;15;rgb:FF/FF/FF\\x07")
+      </script>
+  </Vintage>
+  <OneHalfDark label=" One Half Dark ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:DC/DF/E4\\x07")
+          terminal.Print("\\x1b]11;rgb:28/2C/34\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:28/2C/34;1;rgb:E0/6C/75;2;rgb:98/C3/79;3;rgb:E5/C0/7B;4;rgb:61/AF/EF;5;rgb:C6/78/DD;6;rgb:56/B6/C2;7;rgb:DC/DF/E4;8;rgb:5A/63/74;9;rgb:E0/6C/75;10;rgb:98/C3/79;11;rgb:E5/C0/7B;12;rgb:61/AF/EF;13;rgb:C6/78/DD;14;rgb:56/B6/C2;15;rgb:DC/DF/E4\\x07")
+      </script>
+  </OneHalfDark>
+  <OneHalfLight label=" One Half Light ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:38/3A/42\\x07")
+          terminal.Print("\\x1b]11;rgb:FA/FA/FA\\x07")
+          terminal.Print("\\x1b]12;rgb:4F/52/5D\\x07")
+          terminal.Print("\\x1b]4;0;rgb:38/3A/42;1;rgb:E4/56/49;2;rgb:50/A1/4F;3;rgb:C1/83/01;4;rgb:01/84/BC;5;rgb:A6/26/A4;6;rgb:09/97/B3;7;rgb:FA/FA/FA;8;rgb:4F/52/5D;9;rgb:DF/6C/75;10;rgb:98/C3/79;11;rgb:E4/C0/7A;12;rgb:61/AF/EF;13;rgb:C5/77/DD;14;rgb:56/B5/C1;15;rgb:FF/FF/FF\\x07")
+      </script>
+  </OneHalfLight>
+  <SolarizedDark label=" Solarized Dark ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:83/94/96\\x07")
+          terminal.Print("\\x1b]11;rgb:00/2B/36\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/2B/36;1;rgb:DC/32/2F;2;rgb:85/99/00;3;rgb:B5/89/00;4;rgb:26/8B/D2;5;rgb:D3/36/82;6;rgb:2A/A1/98;7;rgb:EE/E8/D5;8;rgb:07/36/42;9;rgb:CB/4B/16;10;rgb:58/6E/75;11;rgb:65/7B/83;12;rgb:83/94/96;13;rgb:6C/71/C4;14;rgb:93/A1/A1;15;rgb:FD/F6/E3\\x07")
+      </script>
+  </SolarizedDark>
+  <SolarizedLight label=" Solarized Light ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:65/7B/83\\x07")
+          terminal.Print("\\x1b]11;rgb:FD/F6/E3\\x07")
+          terminal.Print("\\x1b]12;rgb:00/2B/36\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/2B/36;1;rgb:DC/32/2F;2;rgb:85/99/00;3;rgb:B5/89/00;4;rgb:26/8B/D2;5;rgb:D3/36/82;6;rgb:2A/A1/98;7;rgb:EE/E8/D5;8;rgb:07/36/42;9;rgb:CB/4B/16;10;rgb:58/6E/75;11;rgb:65/7B/83;12;rgb:83/94/96;13;rgb:6C/71/C4;14;rgb:93/A1/A1;15;rgb:FD/F6/E3\\x07")
+      </script>
+  </SolarizedLight>
+  <TangoDark label=" Tango Dark ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:D3/D7/CF\\x07")
+          terminal.Print("\\x1b]11;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/00/00;1;rgb:CC/00/00;2;rgb:4E/9A/06;3;rgb:C4/A0/00;4;rgb:34/65/A4;5;rgb:75/50/7B;6;rgb:06/98/9A;7;rgb:D3/D7/CF;8;rgb:55/57/53;9;rgb:EF/29/29;10;rgb:8A/E2/34;11;rgb:FC/E9/4F;12;rgb:72/9F/CF;13;rgb:AD/7F/A8;14;rgb:34/E2/E2;15;rgb:EE/EE/EC\\x07")
+      </script>
+  </TangoDark>
+  <TangoLight label=" Tango Light ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:55/57/53\\x07")
+          terminal.Print("\\x1b]11;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]12;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/00/00;1;rgb:CC/00/00;2;rgb:4E/9A/06;3;rgb:C4/A0/00;4;rgb:34/65/A4;5;rgb:75/50/7B;6;rgb:06/98/9A;7;rgb:D3/D7/CF;8;rgb:55/57/53;9;rgb:EF/29/29;10;rgb:8A/E2/34;11;rgb:FC/E9/4F;12;rgb:72/9F/CF;13;rgb:AD/7F/A8;14;rgb:34/E2/E2;15;rgb:EE/EE/EC\\x07")
+      </script>
+  </TangoLight>
+  <DarkPlus label=" Dark+ ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:CC/CC/CC\\x07")
+          terminal.Print("\\x1b]11;rgb:1E/1E/1E\\x07")
+          terminal.Print("\\x1b]12;rgb:80/80/80\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/00/00;1;rgb:CD/31/31;2;rgb:0D/BC/79;3;rgb:E5/E5/10;4;rgb:24/72/C8;5;rgb:BC/3F/BC;6;rgb:11/A8/CD;7;rgb:E5/E5/E5;8;rgb:66/66/66;9;rgb:F1/4C/4C;10;rgb:23/D1/8B;11;rgb:F5/F5/43;12;rgb:3B/8E/EA;13;rgb:D6/70/D6;14;rgb:29/B8/DB;15;rgb:E5/E5/E5\\x07")
+      </script>
+  </DarkPlus>
+  <VSCodeDarkModern label=" VSCode Dark Modern ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:CC/CC/CC\\x07")
+          terminal.Print("\\x1b]11;rgb:1F/1F/1F\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/00/00;1;rgb:CD/31/31;2;rgb:0D/BC/79;3;rgb:E5/E5/10;4;rgb:24/72/C8;5;rgb:BC/3F/BC;6;rgb:11/A8/CD;7;rgb:E5/E5/E5;8;rgb:66/66/66;9;rgb:F1/4C/4C;10;rgb:23/D1/8B;11;rgb:F5/F5/43;12;rgb:3B/8E/EA;13;rgb:D6/70/D6;14;rgb:29/B8/DB;15;rgb:E5/E5/E5\\x07")
+      </script>
+  </VSCodeDarkModern>
+  <VSCodeLightModern label=" VSCode Light Modern ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:3B/3B/3B\\x07")
+          terminal.Print("\\x1b]11;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]12;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/00/00;1;rgb:CD/31/31;2;rgb:00/BC/00;3;rgb:94/98/00;4;rgb:04/51/A5;5;rgb:BC/05/BC;6;rgb:05/98/BC;7;rgb:55/55/55;8;rgb:66/66/66;9;rgb:CD/31/31;10;rgb:14/CE/14;11;rgb:B5/BA/00;12;rgb:04/51/A5;13;rgb:BC/05/BC;14;rgb:05/98/BC;15;rgb:A5/A5/A5\\x07")
+      </script>
+  </VSCodeLightModern>
+  <CGA label=" CGA ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:AA/AA/AA\\x07")
+          terminal.Print("\\x1b]11;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]12;rgb:00/AA/00\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/00/00;1;rgb:AA/00/00;2;rgb:00/AA/00;3;rgb:AA/55/00;4;rgb:00/00/AA;5;rgb:AA/00/AA;6;rgb:00/AA/AA;7;rgb:AA/AA/AA;8;rgb:55/55/55;9;rgb:FF/55/55;10;rgb:55/FF/55;11;rgb:FF/FF/55;12;rgb:55/55/FF;13;rgb:FF/55/FF;14;rgb:55/FF/FF;15;rgb:FF/FF/FF\\x07")
+      </script>
+  </CGA>
+  <IBM5153 label=" IBM 5153 ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:AA/AA/AA\\x07")
+          terminal.Print("\\x1b]11;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]12;rgb:00/AA/00\\x07")
+          terminal.Print("\\x1b]4;0;rgb:00/00/00;1;rgb:AA/00/00;2;rgb:00/AA/00;3;rgb:C4/7E/00;4;rgb:00/00/AA;5;rgb:AA/00/AA;6;rgb:00/AA/AA;7;rgb:AA/AA/AA;8;rgb:55/55/55;9;rgb:FF/55/55;10;rgb:55/FF/55;11;rgb:FF/FF/55;12;rgb:55/55/FF;13;rgb:FF/55/FF;14;rgb:55/FF/FF;15;rgb:FF/FF/FF\\x07")
+      </script>
+  </IBM5153>
+  <Ubuntu24 label=" Ubuntu 24.04 ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]11;rgb:30/0A/24\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </Ubuntu24>
+  <Red label=" Red ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]11;rgb:80/00/00\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </Red>
+  <Green label=" Green ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]11;rgb:00/80/00\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </Green>
+  <Blue label=" Blue ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]11;rgb:00/00/80\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </Blue>
+  <RedLt label=" RedLt ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]11;rgb:FF/00/00\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </RedLt>
+  <GreenLt label=" GreenLt ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]11;rgb:00/FF/00\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </GreenLt>
+  <BlueLt label=" BlueLt ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:00/FF/FF\\x07")
+          terminal.Print("\\x1b]11;rgb:00/00/FF\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </BlueLt>
+  <WhiteLt label=" WhiteLt ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]11;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]12;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </WhiteLt>
+  <YellowLt label=" YellowLt ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]11;rgb:FF/FF/00\\x07")
+          terminal.Print("\\x1b]12;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </YellowLt>
+  <MagentaLt label=" MagentaLt ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]11;rgb:FF/00/FF\\x07")
+          terminal.Print("\\x1b]12;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </MagentaLt>
+  <CyanLt label=" CyanLt ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]11;rgb:00/FF/FF\\x07")
+          terminal.Print("\\x1b]12;rgb:00/00/00\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </CyanLt>
+  <Yellow label=" Yellow ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]11;rgb:80/80/00\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </Yellow>
+  <Magenta label=" Magenta ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]11;rgb:80/00/80\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </Magenta>
+  <Cyan label=" Cyan ">
+      <script=OnLeftClick>
+          terminal.Print("\\x1b]10;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]11;rgb:00/80/80\\x07")
+          terminal.Print("\\x1b]12;rgb:FF/FF/FF\\x07")
+          terminal.Print("\\x1b]4;0;rgb:17/14/21;1;rgb:C2/1A/23;2;rgb:26/A2/69;3;rgb:A2/73/4C;4;rgb:00/37/DA;5;rgb:88/17/98;6;rgb:3A/96/DD;7;rgb:CC/CC/CC;8;rgb:76/76/76;9;rgb:C0/1C/28;10;rgb:26/A2/69;11;rgb:A2/73/4C;12;rgb:08/45/8F;13;rgb:A3/47/BA;14;rgb:2C/9F/B3;15;rgb:F2/F2/F2\\x07")
+      </script>
+  </Cyan>
+  ```
+
+</details>
 
 ### Independent text-only and color-only output
 
 #### Text-only output
 
-Outputting plain text over other colored text while preserving all SGR attributes allows changing the text inside cells without having to re-specify the color and other SGR attributes for the output string (there may be a large number of attributes, and the one who prints may not even support it). This significantly simplifies and speeds up the output of intensively updated colored text blocks. This is achieved by using the so-called "transparent" color. The "transparent" color could be enabled by setting the following values for the background color: red=255, green=255, blue=255, alpha=0.
+Outputting plain text over other colored text while preserving all SGR attributes allows changing the text inside cells without having to re-specify the color and other SGR attributes for the output string (there may be a large number of attributes, and the one who prints may not even support it). This significantly simplifies and speeds up the output of intensively updated colored text blocks. This is achieved by using the so-called "transparent" color. The "transparent" color could be enabled by setting the following values for the background color: **red=255, green=255, blue=255, alpha=0**.
 
 For example, replacing the string `Hello` with `World` inside a colored text line:
 ```bash
@@ -97,17 +467,20 @@ printf " Hello Test\r\e[44;31m\0\0\0\0\0\0\0\e[m\n"
 The built-in terminal is capable of executing Lua scripts received via APC (Application Program Command) vt-sequences. The format of the vt-sequence is as follows:
 
 ```
-ESC _ lua: <script body> ESC \
+ESC _ lua: <script body> ST
 ```
 or
 ```
-ESC _ lua: <script body> BEL
+ESC _ lua:FFFFFFFFFFFFFFFF: <script body> ST
 ```
 where:
 - `ESC_`: APC vt-sequence prefix.
 - `lua:`: case-insensitive APC payload marker.
 - `<script body>`: Lua script body.
-- `ESC\` or `BEL`: APC vt-sequence terminator.
+- `ST`: `ESC``\` or `BEL` - APC sequence terminator.
+- `FFFFFFFFFFFFFFFF:`: 16-hexadecimal-digit interactive session token ending with a colon. This token can be obtained using the following APC request: `\e_lua:terminal.RequestInteractiveSessionToken()\a` - The terminal will respond with an APC sequence containing the 16 digits of the required interactive token: `\e_event=session;token=FFFFFFFFFFFFFFFF\e\\`.
+
+Note: Without specifying an interactive session token, calls to functions related to interactive interaction (moving/sizing windows, mouse, keyboard, focus, etc.) will be silently ignored.
 
 Usage examples:
 
@@ -122,7 +495,10 @@ Note: The global variable `terminal` (in the Lua namespace) is an alias for `vtm
   printf "\e_lua: terminal.ScrollbackSize(10000)\a"
 
   # Maximize the terminal window
-  printf "\e_lua: vtm.applet.Maximize()\e\\"
+  ## 1. Get a session token:
+  printf "\e_lua:terminal.RequestInteractiveSessionToken()\a"
+  ## 2. Use the received token when requesting to maximize the window:
+  printf "\e_lua:0000000000000000: vtm.applet.Maximize()\e\\"
   ```
 
 A complete list of available script functions can be found in [settings.md](settings.md#event-sources).

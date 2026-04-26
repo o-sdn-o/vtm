@@ -35,7 +35,7 @@ namespace netxs
             X(veer      ) \
             X(vtm       ) \
             X(window    ) \
-    
+
         #define X(name) static constexpr auto name = #name##sv;
         ctx_list
         #undef X
@@ -225,6 +225,14 @@ namespace netxs::events::userland
                 EVENT_XS( disable, si32       ),
                 EVENT_XS( flush  , si32       ),
                 EVENT_XS( utf8   , const text ), // Signaling with a text string, release only.
+                GROUP_XS( image  , si32       ), // general: Image metadata changed.
+
+                SUBSET_XS( image )
+                {
+                    EVENT_XS( sync  , si32 ), // general: Signal to sync unknown image indexes. Arg: not used.
+                    EVENT_XS( update, ui16 ), // general: Image metadata updated. Arg: image index.
+                    EVENT_XS( remove, std::vector<ui16> ), // general: Images removed. Arg: image index.
+                };
             };
             SUBSET_XS( command )
             {
@@ -1272,6 +1280,25 @@ namespace netxs::ui
             auto property_name = qiew{ (char*)(&addr), sizeof(addr) };
             fields.emplace(property_name, value_ptr);
             return value;
+        }
+        // base: Run action on dtor.
+        auto& atexit(auto action)
+        {
+            struct cleanup
+            {
+                netxs::sptr<std::function<void()>> action;
+                cleanup(std::function<void()> f) 
+                    : action(ptr::shared(f))
+                { }
+                ~cleanup() 
+                { 
+                    if (action && action.use_count() == 1)
+                    {
+                        (*action)();
+                    }
+                }
+            };
+            return base::field(cleanup{ std::move(action) });
         }
         // base: Remove an anonymous property.
         template<class T>

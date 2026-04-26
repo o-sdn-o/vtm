@@ -412,26 +412,42 @@ namespace netxs::generics
         template<class Ring>
         struct iter
         {
-            Ring& buff;
-            si32  addr;
+            using iterator_category = std::random_access_iterator_tag;
+            using value_type        = typename Ring::type;
+            using difference_type   = si32;
+            using pointer           = std::conditional_t<std::is_const_v<Ring>, value_type const*, value_type*>;
+            using reference         = std::conditional_t<std::is_const_v<Ring>, value_type const&, value_type&>;
 
+            Ring* buff{};
+            si32  addr{};
+
+            constexpr iter() = default;
             constexpr iter(iter const&) = default;
             constexpr iter(Ring& buff, si32 addr)
-              : buff{ buff },
-                addr{ addr }
+              : buff{ &buff },
+                addr{ addr  }
             { }
 
-            auto& operator =  (iter const& i)       { assert(&i.buff == &buff); addr = i.addr; return *this;              }
-            auto  operator -  (si32 n)        const {      return iter<Ring>{ buff, buff.mod(addr - n) };                 }
-            auto  operator +  (si32 n)        const {      return iter<Ring>{ buff, buff.mod(addr + n) };                 }
-            auto  operator ++ (int)                 { auto temp = iter<Ring>{ buff, addr }; buff.inc(addr); return temp;  }
-            auto  operator -- (int)                 { auto temp = iter<Ring>{ buff, addr }; buff.dec(addr); return temp;  }
-            auto& operator ++ ()                    {                                       buff.inc(addr); return *this; }
-            auto& operator -- ()                    {                                       buff.dec(addr); return *this; }
-            auto& operator *  ()                    { return buff.buff[addr];                                             }
-            auto  operator -> ()                    { return buff.buff.begin() + addr;                                    }
-            auto  operator != (iter const& m) const { return addr != m.addr;                                              }
-            auto  operator == (iter const& m) const { return addr == m.addr;                                              }
+            auto& operator =  (iter const& i)       { buff = i.buff; addr = i.addr; return *this;                           }
+            auto  operator ++ (int)                 { auto temp = iter<Ring>{ *buff, addr }; buff->inc(addr); return temp;  }
+            auto  operator -- (int)                 { auto temp = iter<Ring>{ *buff, addr }; buff->dec(addr); return temp;  }
+            auto& operator ++ ()                    {                                        buff->inc(addr); return *this; }
+            auto& operator -- ()                    {                                        buff->dec(addr); return *this; }
+            auto& operator *  ()                    { return buff->buff[addr];                                              }
+            auto  operator -> ()                    { return buff->buff.begin() + addr;                                     }
+            auto  operator != (iter const& m) const { return addr != m.addr;                                                }
+            auto  operator == (iter const& m) const { return addr == m.addr;                                                }
+            auto  operator -  (iter const& m) const { return (difference_type)buff->dst(m.addr, addr);                      }
+            auto  operator <  (iter const& m) const { return (*this - m) < 0;                                               }
+            auto  operator >  (iter const& m) const { return (*this - m) > 0;                                               }
+            auto  operator <= (iter const& m) const { return (*this - m) <= 0;                                              }
+            auto  operator >= (iter const& m) const { return (*this - m) >= 0;                                              }
+            auto& operator += (si32 n)              { addr = buff->mod(addr + n); return *this;                             }
+            auto& operator -= (si32 n)              { addr = buff->mod(addr - n); return *this;                             }
+            friend auto operator + (iter i, si32 n) { i += n; return i;                                                     }
+            friend auto operator + (si32 n, iter i) { i += n; return i;                                                     }
+            friend auto operator - (iter i, si32 n) { i -= n; return i;                                                     }
+            reference operator[](difference_type n) const { return *(*this + (si32)n);                                      }
         };
 
         ring(si32 ring_size, si32 grow_by = 0, si32 grow_mx = 0)
@@ -1113,7 +1129,7 @@ namespace netxs::generics
         std::vector<T>    thing_vec; // Object set (dense).
         std::vector<ui32> index_map; // Object order (sparse).
         std::vector<ui32> erase_map; // Reverse index.
-        ui32              empty_key{ -1 };
+        ui32              empty_key{ ui32max };
 
         template<bool IsConst>
         struct Iterator
@@ -1122,7 +1138,7 @@ namespace netxs::generics
             using value_type        = std::pair<ui32 const, std::conditional_t<IsConst, T const&, T&>>;
             using reference         = value_type;
             using difference_type   = std::ptrdiff_t;
-            using pointer           = void; 
+            using pointer           = void;
 
             std::conditional_t<IsConst, T const*, T*> val_ptr;
             ui32 const*                               key_ptr;
@@ -1147,7 +1163,7 @@ namespace netxs::generics
         ui32 insert(T val)
         {
             auto key = ui32{};
-            if (empty_key == (ui32)-1) // Grow.
+            if (empty_key == ui32max) // Grow.
             {
                 key = (ui32)index_map.size();
                 index_map.push_back((ui32)thing_vec.size());
@@ -1186,7 +1202,111 @@ namespace netxs::generics
             thing_vec.clear();
             index_map.clear();
             erase_map.clear();
-            empty_key = (ui32)-1;
+            empty_key = ui32max;
+        }
+    };
+
+    // generics: Object cache.
+    template<class T, class Key = ui64>
+    struct cache
+    {
+    protected:
+        using lock = std::mutex;
+        using sync = std::lock_guard<lock>;
+        using depo = std::unordered_map<Key, T>;
+        using uset = std::unordered_set<Key>;
+
+        lock mutex{}; // Object map mutex.
+        depo store{}; // Object map.
+        uset undef{}; // List of unknown tokens.
+
+        struct guard : sync
+        {
+            depo& map;
+            uset& unk;
+
+            guard(cache& inst)
+                : sync{ inst.mutex },
+                   map{ inst.store },
+                   unk{ inst.undef }
+            { }
+
+            // cache: Get object.
+            auto& get(Key token)
+            {
+                if (auto iter = map.find(token); iter != map.end())
+                {
+                    return iter->second;
+                }
+                else
+                {
+                    static auto empty_object = T{};
+                    unk.insert(token);
+                    return empty_object;
+                }
+            }
+            // cache: Set object.
+            void set(Key token, auto&& object)
+            {
+                map[token] = std::forward<decltype(object)>(object);
+            }
+            // cache: Add object.
+            void add(Key token, auto&& object)
+            {
+                map.insert(std::pair{ token, std::forward<decltype(object)>(object) }); // Silently ignore if it exists.
+            }
+            // cache: Remove object.
+            void remove(Key token)
+            {
+                map.erase(token);
+            }
+            // cache: Check the object existence by token.
+            auto exists(Key token)
+            {
+                auto iter = map.find(token);
+                auto okay = iter != map.end();
+                if (!okay) unk.insert(token);
+                return okay;
+            }
+        };
+
+    public:
+        auto storage()
+        {
+            return guard{ *this };
+        }
+    };
+
+    // generics: Index manager.
+    template<class T>
+    struct indexer
+    {
+        T              next_index{};
+        std::vector<T> free_indices;
+
+        indexer(size_t expected_max_free = 2048)
+        {
+            free_indices.reserve(expected_max_free);
+        }
+        // indexer: Return the new index. Returns 0 if there are no indices available.
+        auto get_new()
+        {
+            if (!free_indices.empty())
+            {
+                auto id = free_indices.back();
+                free_indices.pop_back();
+                return id;
+            }
+            if (next_index == std::numeric_limits<T>::max() - 1) [[unlikely]]
+            {
+                return T{};
+            }
+            return ++next_index;
+        }
+        // indexer: Make index available.
+        void release(T id)
+        {
+            free_indices.push_back(id);
         }
     };
 }

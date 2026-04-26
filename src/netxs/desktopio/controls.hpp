@@ -392,6 +392,11 @@ namespace netxs::events
     {
         indexer.active_gear_ref = gear;
     }
+    // luna: Reset active gear.
+    void luna::reset_gear()
+    {
+        indexer.active_gear_ref = *indexer._null_gear_sptr;
+    }
     // luna: Set active gear.
     input::hids& luna::get_gear()
     {
@@ -415,7 +420,7 @@ namespace netxs::events
     text luna::run(context_t& context, view script_body, auto&& param)
     {
         using T = std::decay_t<decltype(param)>;
-        if constexpr (debugmode) log("%%script:\n%pads%%script%", prompt::lua, prompt::pads, ansi::hi(script_body));
+        //if constexpr (debugmode) log("%%script:\n%pads%%script%", prompt::lua, prompt::pads, ansi::hi(script_body));
         //if constexpr (std::is_same_v<T, noop>) log("%%script:\n%pads%%script%", prompt::lua, prompt::pads, ansi::hi(script_body));
         //else                                   log("%%script:\n%pads%%script%\n  with arg: %%", prompt::lua, prompt::pads, ansi::hi(script_body), param);
 
@@ -655,8 +660,7 @@ namespace netxs::events
     }
 
     auth::auth(bool use_timer)
-        : next_id{ 0 },
-          context_refs{ context },
+        : context_refs{ context },
           luafx{ *this },
           quartz{ *this },
           e2_timer_tick_id{ ui::e2::timer::tick.id },

@@ -22,7 +22,7 @@ namespace netxs::app
 
 namespace netxs::app::shared
 {
-    static const auto version = "v2026.02.16";
+    static const auto version = "v2026.04.27";
     static const auto repository = "https://github.com/directvt/vtm";
     static const auto usr_config = "~/.config/vtm/settings.xml"s;
     static const auto sys_config = "/etc/vtm/settings.xml"s;
@@ -251,7 +251,7 @@ namespace netxs::app::shared
                                         }},
             { "Close",                  [&]
                                         {
-                                            if (auto& gear = luafx.get_gear(); gear.is_real())
+                                            luafx.run_with_gear([&](auto& gear)
                                             {
                                                 gear.alive = true; //todo unify
                                                 boss.base::signal(tier::anycast, e2::form::proceed::closeby, gear); // Check access to close.
@@ -267,8 +267,7 @@ namespace netxs::app::shared
                                                 {
                                                     log("%%Applet closing is supressed", prompt::lua);
                                                 }
-                                            }
-                                            luafx.set_return();
+                                            });
                                         }},
         });
     };
@@ -314,20 +313,18 @@ namespace netxs::app::shared
                                     }},
             { "Warp",               [&]
                                     {
-                                        auto gui_cmd = e2::command::gui.param();
-                                        auto& gear = luafx.get_gear();
-                                        if (gear.is_real())
+                                        luafx.run_with_gear([&](auto& gear)
                                         {
+                                            auto gui_cmd = e2::command::gui.param();
                                             gui_cmd.gear_id = gear.id;
+                                            gui_cmd.cmd_id = syscmd::warpwindow;
+                                            gui_cmd.args.emplace_back(luafx.get_args_or(1, si32{ 0 }));
+                                            gui_cmd.args.emplace_back(luafx.get_args_or(2, si32{ 0 }));
+                                            gui_cmd.args.emplace_back(luafx.get_args_or(3, si32{ 0 }));
+                                            gui_cmd.args.emplace_back(luafx.get_args_or(4, si32{ 0 }));
                                             gear.set_handled();
-                                        }
-                                        gui_cmd.cmd_id = syscmd::warpwindow;
-                                        gui_cmd.args.emplace_back(luafx.get_args_or(1, si32{ 0 }));
-                                        gui_cmd.args.emplace_back(luafx.get_args_or(2, si32{ 0 }));
-                                        gui_cmd.args.emplace_back(luafx.get_args_or(3, si32{ 0 }));
-                                        gui_cmd.args.emplace_back(luafx.get_args_or(4, si32{ 0 }));
-                                        boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
-                                        luafx.set_return();
+                                            boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
+                                        });
                                     }},
             { "ZOrder",             [&]
                                     {
@@ -341,11 +338,11 @@ namespace netxs::app::shared
                                             if (gear.is_real())
                                             {
                                                 gui_cmd.gear_id = gear.id;
+                                                gui_cmd.cmd_id = syscmd::zorder;
+                                                gui_cmd.args.emplace_back(zorder);
+                                                boss.base::riseup(tier::release, e2::form::prop::zorder, si32{ zorder });
+                                                boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
                                             }
-                                            gui_cmd.cmd_id = syscmd::zorder;
-                                            gui_cmd.args.emplace_back(zorder);
-                                            boss.base::riseup(tier::release, e2::form::prop::zorder, si32{ zorder });
-                                            boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
                                         }
                                         gear.set_handled();
                                         luafx.set_return(zorder);
@@ -355,7 +352,7 @@ namespace netxs::app::shared
                                         auto args_count = luafx.args_count();
                                         if (args_count)
                                         {
-                                            if (auto& gear = luafx.get_gear(); gear.is_real())
+                                            luafx.run_with_gear([&](auto& gear)
                                             {
                                                 auto& oneshot = boss.base::field(subs{}); // Oneshot subscription token.
                                                 gear.LISTEN(tier::release, input::events::die, gear, oneshot) // Reset on disconnect.
@@ -404,8 +401,7 @@ namespace netxs::app::shared
                                                 gui_cmd.args.emplace_back(new_accesslock_state);
                                                 boss.base::riseup(tier::preview, e2::command::gui, gui_cmd); // Send request to set accesslock.
                                                 gear.set_handled();
-                                            }
-                                            luafx.set_return();
+                                            });
                                         }
                                         else
                                         {
@@ -414,7 +410,7 @@ namespace netxs::app::shared
                                     }},
             { "Close",              [&]
                                     {
-                                        if (auto& gear = luafx.get_gear(); gear.is_real())
+                                        luafx.run_with_gear([&](auto& gear)
                                         {
                                             gear.alive = true;
                                             boss.base::signal(tier::anycast, e2::form::proceed::closeby, gear); // Check access to close.
@@ -431,60 +427,51 @@ namespace netxs::app::shared
                                                 log("%%Applet closing was interrupted due to a locked state", prompt::lua);
                                                 gear.set_handled();
                                             }
-                                        }
-                                        luafx.set_return();
+                                        });
                                     }},
             { "Minimize",           [&]
                                     {
-                                        auto gui_cmd = e2::command::gui.param();
-                                        auto& gear = luafx.get_gear();
-                                        if (gear.is_real())
+                                        luafx.run_with_gear([&](auto& gear)
                                         {
+                                            auto gui_cmd = e2::command::gui.param();
                                             gui_cmd.gear_id = gear.id;
                                             gear.set_handled();
-                                        }
-                                        gui_cmd.cmd_id = syscmd::minimize;
-                                        boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
-                                        luafx.set_return();
+                                            gui_cmd.cmd_id = syscmd::minimize;
+                                            boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
+                                        });
                                     }},
             { "Maximize",           [&]
                                     {
-                                        auto gui_cmd = e2::command::gui.param();
-                                        auto& gear = luafx.get_gear();
-                                        if (gear.is_real())
+                                        luafx.run_with_gear([&](auto& gear)
                                         {
+                                            auto gui_cmd = e2::command::gui.param();
                                             gui_cmd.gear_id = gear.id;
                                             gear.set_handled();
-                                        }
-                                        gui_cmd.cmd_id = syscmd::maximize;
-                                        boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
-                                        luafx.set_return();
+                                            gui_cmd.cmd_id = syscmd::maximize;
+                                            boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
+                                        });
                                     }},
             { "Fullscreen",         [&]
                                     {
-                                        auto gui_cmd = e2::command::gui.param();
-                                        auto& gear = luafx.get_gear();
-                                        if (gear.is_real())
+                                        luafx.run_with_gear([&](auto& gear)
                                         {
+                                            auto gui_cmd = e2::command::gui.param();
                                             gui_cmd.gear_id = gear.id;
                                             gear.set_handled();
-                                        }
-                                        gui_cmd.cmd_id = syscmd::fullscreen;
-                                        boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
-                                        luafx.set_return();
+                                            gui_cmd.cmd_id = syscmd::fullscreen;
+                                            boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
+                                        });
                                     }},
             { "Restore",            [&]
                                     {
-                                        auto gui_cmd = e2::command::gui.param();
-                                        auto& gear = luafx.get_gear();
-                                        if (gear.is_real())
+                                        luafx.run_with_gear([&](auto& gear)
                                         {
+                                            auto gui_cmd = e2::command::gui.param();
                                             gui_cmd.gear_id = gear.id;
                                             gear.set_handled();
-                                        }
-                                        gui_cmd.cmd_id = syscmd::restore;
-                                        boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
-                                        luafx.set_return();
+                                            gui_cmd.cmd_id = syscmd::restore;
+                                            boss.base::riseup(tier::preview, e2::command::gui, gui_cmd);
+                                        });
                                     }},
         });
     };
@@ -776,7 +763,6 @@ namespace netxs::app::shared
                                         }},
                         { "Tooltip",    [&]
                                         {
-                                            
                                             auto args_count = luafx.args_count();
                                             if (args_count) // Set tooltip.
                                             {
@@ -1005,29 +991,29 @@ namespace netxs::app::shared
         if (gui_config.gridsize.x == 0 || gui_config.gridsize.y == 0) gui_config.gridsize = dot_mx;
         auto fonts_context = config.settings::push_context("/config/gui/fonts/");
         auto font_list = config.settings::take_ptr_list_for_name("font");
-        if (font_list.size())
+        auto fonts_ptr = fonts_context.ctx_root();
+        for (auto [style_name, style_id, def_vals] : { std::tuple{ "regular"    , gui::font_style::regular    , std::to_array({ std::pair{ gui::cfg_t::ft_tag("wdth"), 100.0f }, std::pair{ gui::cfg_t::ft_tag("wght"), 400.0f }, std::pair{ gui::cfg_t::ft_tag("ital"), 0.0f } }) },
+                                                                 { "italic"     , gui::font_style::italic     , std::to_array({ std::pair{ gui::cfg_t::ft_tag("wdth"), 100.0f }, std::pair{ gui::cfg_t::ft_tag("wght"), 400.0f }, std::pair{ gui::cfg_t::ft_tag("ital"), 1.0f } }) },
+                                                                 { "bold"       , gui::font_style::bold       , std::to_array({ std::pair{ gui::cfg_t::ft_tag("wdth"), 100.0f }, std::pair{ gui::cfg_t::ft_tag("wght"), 700.0f }, std::pair{ gui::cfg_t::ft_tag("ital"), 0.0f } }) },
+                                                                 { "bold_italic", gui::font_style::bold_italic, std::to_array({ std::pair{ gui::cfg_t::ft_tag("wdth"), 100.0f }, std::pair{ gui::cfg_t::ft_tag("wght"), 700.0f }, std::pair{ gui::cfg_t::ft_tag("ital"), 1.0f } }) } })
         {
-            auto& primary_font_ptr = font_list.front();
-            auto axis_ptr_list = config.take_ptr_list_of(primary_font_ptr);
-            for (auto& axis_rec_ptr : axis_ptr_list)
+            auto& style_axis = gui_config.font_axes[style_id];
+            for (auto& [tag, value] : def_vals)
             {
-                if (axis_rec_ptr->name)
+                style_axis[tag] = value;
+            }
+            if (auto style_axes_ptr = config.settings::take_ptr(fonts_ptr, style_name))
+            {
+                auto  style_axes = config.settings::take_ptr_list_of(style_axes_ptr);
+                for (auto& item_ptr : style_axes)
                 {
-                    auto& axes_name = axis_rec_ptr->name.value()->utf8;
-                    auto base_value_str = config.settings::take_value(axis_rec_ptr);
-                    auto base_value     = xml::take_or(base_value_str                                 , netxs::fp32nan);
-                    auto regular        = config.settings::take_value_from(axis_rec_ptr, "regular"    , netxs::fp32nan);
-                    auto bold           = config.settings::take_value_from(axis_rec_ptr, "bold"       , netxs::fp32nan);
-                    auto italic         = config.settings::take_value_from(axis_rec_ptr, "italic"     , netxs::fp32nan);
-                    auto bold_italic    = config.settings::take_value_from(axis_rec_ptr, "bold_italic", netxs::fp32nan);
-                    if (std::isfinite(base_value) || std::isfinite(regular) || std::isfinite(bold) || std::isfinite(italic) || std::isfinite(bold_italic))
+                    auto value_str = config.settings::take_value(item_ptr);
+                    auto value = xml::take_or(value_str, netxs::fp32nan);
+                    if (std::isfinite(value))
                     {
-                        auto& font_axis = gui_config.font_axes[axes_name];
-                        font_axis.base_value  = base_value;
-                        font_axis.regular     = regular;
-                        font_axis.bold        = bold;
-                        font_axis.italic      = italic;
-                        font_axis.bold_italic = bold_italic;
+                        auto& utf8 = (*item_ptr->name)->utf8;
+                        utf8.resize(4);
+                        style_axis[gui::cfg_t::ft_tag(utf8)] = value;
                     }
                 }
             }
@@ -1176,7 +1162,10 @@ namespace netxs::app::shared
                 //todo sync settings with tui_domain (auth::config)
                 auto gui_event_domain = netxs::events::auth{};
                 auto window = gui_event_domain.create<gui::window>(gui_event_domain, gc, dot_21);
-                window->connect();
+                if (window->fcache)
+                {
+                    window->connect();
+                }
             };
             if (os::stdout_fd != os::invalid_fd)
             {
