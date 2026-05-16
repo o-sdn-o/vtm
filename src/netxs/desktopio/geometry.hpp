@@ -97,6 +97,10 @@ namespace netxs
         constexpr auto& operator %= (T i)          { x %= i;   y %= i;   return *this; }
         constexpr auto  operator <  (T i)    const { return x < i && y < i;            }
         constexpr auto  operator >  (T i)    const { return x > i && y > i;            }
+        constexpr auto  operator <= (T i)    const { return x <= i && y <= i;          }
+        constexpr auto  operator >= (T i)    const { return x >= i && y >= i;          }
+        constexpr auto  operator <= (xy2d p) const { return x <= p.x && y <= p.y;      }
+        constexpr auto  operator >= (xy2d p) const { return x >= p.x && y >= p.y;      }
         constexpr auto  operator +  (xy2d p) const { return xy2d{ x + p.x, y + p.y };  }
         constexpr auto  operator -  (xy2d p) const { return xy2d{ x - p.x, y - p.y };  }
         constexpr auto  operator *  (xy2d p) const { return xy2d{ x * p.x, y * p.y };  }
@@ -216,7 +220,7 @@ namespace netxs
     static constexpr auto dot_22 = twod{ 2,2 };
     static constexpr auto dot_21 = twod{ 2,1 };
     static constexpr auto dot_33 = twod{ 3,3 };
-    static constexpr auto dot_mx = twod{ (si32)(fp32)(si32max / 2), (si32)(fp32)(si32max / 2) }; // Be sure that fp2d{ dot_mx } == twod{ dot_mx }.
+    static constexpr auto dot_mx = twod{ (si32)(fp32)(netxs::si32max / 2), (si32)(fp32)(netxs::si32max / 2) }; // Be sure that fp2d{ dot_mx } == twod{ dot_mx }.
 
     twod divround(twod p, si32 n) { return { divround(p.x, n  ), divround(p.y, n  ) }; }
     twod divround(si32 n, twod p) { return { divround(n  , p.x), divround(n  , p.y) }; }
@@ -831,43 +835,13 @@ namespace netxs
         template<class irgb>
         auto get_minimal_non_transparent_area_for_pma()
         {
-            auto crop = rect{};
-            auto w = area.size.x;
-            auto h = area.size.y;
             auto image_raster = raster<irgb>();
             auto data = image_raster._data;
             assert((size_t)area.length() <= data.size()); // Invalid sprite element type.
+            auto w = area.size.x;
             auto get_row = [&](si32 y){ return data.subspan(y * w, w); };
-            auto y0 = 0;
             auto is_visible = [](irgb p){ return p.a != 0; };
-            while (y0 < h && std::none_of(get_row(y0).begin(), get_row(y0).end(), is_visible)) // Top bound.
-            {
-                y0++;
-            }
-            if (y0 != h)
-            {
-                auto y1 = h - 1;
-                while (y1 > y0 && std::none_of(get_row(y1).begin(), get_row(y1).end(), is_visible)) // Bottom bound.
-                {
-                    y1--;
-                }
-                auto x0 = w;
-                auto x1 = -1;
-                for (auto y = y0; y <= y1; ++y) // Look inside [y0, y1].
-                {
-                    auto row = get_row(y);
-                    auto first = std::find_if(row.begin(), row.end(), is_visible);
-                    if (first != row.end())
-                    {
-                        x0 = std::min(x0, (si32)std::distance(row.begin(), first)); // Left.
-                        auto last = std::find_if(row.rbegin(), row.rend(), is_visible);
-                        x1 = std::max(x1, (si32)(w - 1 - std::distance(row.rbegin(), last))); // Right.
-                    }
-                    if (x0 == 0 && x1 == w - 1) break; // Maximum possible found.
-                }
-                crop = {{ x0, y0 }, { x1 - x0 + 1, y1 - y0 + 1 }};
-            }
-            return crop;
+            return netxs::get_minimal_area_if<rect>(area.size, get_row, is_visible);
         }
         // sprite: Perform Dihedral group (D4) transformations on the image raster ("push-based" iterate over source) (8 combinations of rotations and reflections).
         template<class irgb>

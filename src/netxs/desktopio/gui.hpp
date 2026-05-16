@@ -3421,7 +3421,7 @@ namespace netxs::gui
                 m.gear_id = gear.id;
                 w.gear_id = gear.id;
                 m.enabled = input::hids::stat::ok;
-                m.coordxy = { si16min, si16min };
+                m.coordxy = { netxs::si16min, netxs::si16min };
                 c.fast = true;
             }
         };
@@ -3969,12 +3969,12 @@ namespace netxs::gui
                 auto dent_x = dent{ s.x < 0, s.x > 0, s.y > 0, s.y < 0 };
                 auto dent_y = dent{ s.x > 0, s.x < 0, 1, 1 };
                 auto shade2 = shade + 0x00'09'09'09 * std::popcount((ui32)stream.m.buttons);
-                fill_grips(side_x, [&, &side_x = side_x](auto& canvas, auto r) //todo &side_x: Apple clang still disallows capturing structured bindings
+                fill_grips(side_x, [&](auto& canvas, auto r)
                 {
                     netxs::onrect(canvas, r, cell::shaders::full(shade2));
                     netxs::misc::cage(canvas, side_x, dent_x, cell::shaders::full(black)); // 1-px dark contour around.
                 });
-                fill_grips(side_y, [&, &side_y = side_y](auto& canvas, auto r) //todo &side_y: Apple clang still disallows capturing structured bindings
+                fill_grips(side_y, [&](auto& canvas, auto r)
                 {
                     netxs::onrect(canvas, r, cell::shaders::full(shade2));
                     netxs::misc::cage(canvas, side_y, dent_y, cell::shaders::full(black)); // 1-px dark contour around.
@@ -4121,7 +4121,7 @@ namespace netxs::gui
         bool remove_image_bits(std::vector<ui16>& removed_image_indexes)
         {
             auto bitmap_lock = stream.bitmap_dtvt.freeze();
-            auto hit = bitmap_lock.thing.image.remove_image_bits(removed_image_indexes);
+            auto hit = cell::remove_image_bits(bitmap_lock.thing.image, removed_image_indexes);
             return hit;
         }
         bool update_image_bits(ui16 updated_image_index)
@@ -5009,7 +5009,7 @@ namespace netxs::gui
                 {
                     if (utf8.length()) // Update os window title.
                     {
-                        auto filtered = ui::para{ utf8 }.lyric->utf8();
+                        auto filtered = cell::to_utf8(ui::para{ utf8 }.content());
                         window_set_title(filtered);
                     }
                     auto window_id = id_t{};

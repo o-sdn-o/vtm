@@ -11,7 +11,7 @@
 #if defined(__i386__) && defined(__linux__) && !defined(__ANDROID__)
     extern long double fmodl(long double a, long double b);
     double fmod(double a, double b) { return fmodl(a, b); }
-    float  fmod(float  a, float  b) { return fmodl(a, b); }
+    //float  fmod(float  a, float  b) { return fmodl(a, b); }
 #endif
 
 namespace netxs
@@ -291,7 +291,7 @@ namespace netxs::events
             static constexpr auto not_handled = __COUNTER__ - _counter;
         };
 
-        generics::indexer<id_t>                   id_pool;
+        generics::indexer_fifo<id_t>              id_pool;
         std::recursive_mutex                      mutex;
         std::unordered_map<id_t, std::reference_wrapper<ui::base>>  objects; // auth: Map of objects by object id.
         clasess_umap                              classes; // auth: Map of classes by classname.

@@ -681,6 +681,8 @@ namespace netxs::ui
         twod min_value = dot_00;
         twod max_value = twod{ 3000, 2000 }; //todo unify
 
+        si32 jpeg_quality = 80;
+
         static auto& globals()
         {
             static skin _globals;
@@ -1287,11 +1289,11 @@ namespace netxs::ui
             struct cleanup
             {
                 netxs::sptr<std::function<void()>> action;
-                cleanup(std::function<void()> f) 
+                cleanup(std::function<void()> f)
                     : action(ptr::shared(f))
                 { }
-                ~cleanup() 
-                { 
+                ~cleanup()
+                {
                     if (action && action.use_count() == 1)
                     {
                         (*action)();
@@ -1328,7 +1330,7 @@ namespace netxs::ui
         template<si32 Tier = tier::release, class Event>
         auto& bind_property(qiew property_name, base& boss, Event event)
         {
-            auto& prop = base::property<typename Event::type>(property_name);
+            auto& prop = base::property<typename Event::type>(property_name); //todo clang-16 requires typename
             boss.LISTEN(Tier, event, new_value)
             {
                 if (prop != new_value)

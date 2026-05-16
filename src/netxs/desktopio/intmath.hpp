@@ -55,6 +55,11 @@
 #include <hb-ft.h>
 #include <lunasvg.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image.h>
+#include <stb_image_write.h>
+
 #ifndef faux
     #define faux (false)
 #endif
@@ -126,10 +131,13 @@ namespace netxs
     template<bool PredicateReturn>
     struct base_noop
     {
+        constexpr auto operator () (auto&&...) const
+        {
+            return PredicateReturn;
+        }
         constexpr auto operator () (auto&&...)
         {
             return PredicateReturn;
-            //return *this;
         }
         constexpr operator bool () const { return faux; }
         constexpr base_noop(auto&&...) { }
@@ -177,8 +185,8 @@ namespace netxs
     constexpr auto operator & (axes l, axes r) { return static_cast<si32>(l) & static_cast<si32>(r); }
 
     template<class T>
-    using to_signed_t = std::conditional_t<(si64)std::numeric_limits<std::remove_reference_t<T>>::max() <= si16max, si16,
-                        std::conditional_t<(si64)std::numeric_limits<std::remove_reference_t<T>>::max() <= si32max, si32, si64>>;
+    using to_signed_t = std::conditional_t<(si64)std::numeric_limits<std::remove_reference_t<T>>::max() <= netxs::si16max, si16,
+                        std::conditional_t<(si64)std::numeric_limits<std::remove_reference_t<T>>::max() <= netxs::si32max, si32, si64>>;
 
     template<class T>
     auto& any_get_or(std::any const& value, T& fallback)
@@ -195,27 +203,23 @@ namespace netxs
     template<ui64 FieldMask>
     static constexpr si32 field_offset()
     {
-        auto mask = FieldMask;
-        if (mask == 0) return 0;
-        auto n = 0;
-        while ((mask & 1) == 0)
-        {
-            mask >>= 1;
-            ++n;
-        }
-        return n;
+        if constexpr (FieldMask == 0) return 0;
+        return (si32)std::countr_zero(FieldMask);
     }
     template<ui64 FieldMask>
     void set_field(si32 v, auto& token)
     {
         using TType = std::decay_t<decltype(token)>;
+        constexpr auto value_mask = FieldMask >> netxs::field_offset<FieldMask>();
         token &= static_cast<TType>(~FieldMask);
-        token |= ((TType)(std::make_unsigned_t<decltype(v)>)v << netxs::field_offset<FieldMask>());
+        token |= (((TType)(std::make_unsigned_t<decltype(v)>)v & value_mask) << netxs::field_offset<FieldMask>());
     }
     template<ui64 FieldMask>
     auto get_field(auto token)
     {
-        return (si32)((token & FieldMask) >> netxs::field_offset<FieldMask>());
+        using TType = std::decay_t<decltype(token)>;
+        auto val = ((std::make_unsigned_t<TType>)token & FieldMask) >> netxs::field_offset<FieldMask>();
+        return (si32)val;
     }
     // intmath: Set a single p-bit to v.
     template<sz_t P, class T>
@@ -535,11 +539,11 @@ namespace netxs
     struct _disintegrate { using type = T; };
 
     template<class T>
-    struct _disintegrate<faux, T> { using type = typename T::type; };
+    struct _disintegrate<faux, T> { using type = T::type; };
 
     // intmath: Deduce a scalar type from the vector type.
     template<class T>
-    using disintegrate = typename _disintegrate<std::is_arithmetic_v<T>, T>::type;
+    using disintegrate = _disintegrate<std::is_arithmetic_v<T>, T>::type;
 
     // intmath: Quadratic fader delta sequence generator.
     //          The QUADRATIC-LAW fader from the initial velocity to stop for a given period of time.
@@ -762,7 +766,7 @@ namespace netxs
         }
     };
 
-    // intmath: Forward/Reverse (bool template arg) copy the specified
+    // intmath: Forward/Reverse (RtoL) copy the specified
     //          sequence of cells onto the canvas at the specified offset
     //          and return count of copied cells.
     template<bool RtoL>
@@ -979,22 +983,49 @@ namespace netxs
         }
     }
 
-    // intmath: Copy the bitmap to the bitmap by invoking
-    //          handle(sprite1_element, sprite2_element) for each elem.
-    void oncopy(auto&& bitmap1, auto&& bitmap2, auto handle)
+    // intmath: Inovke a handle(container1_element, container2_element) for each element in equal conainers.
+    template<bool RtoL = faux>
+    void oncopy(auto&& items1, auto&& items2, auto handle)
     {
-        auto& size1 = bitmap1.size();
-        auto& size2 = bitmap2.size();
-        if (size1 == size2)
+        if (items1.size() == items2.size())
         {
-            auto data1 = bitmap1.begin();
-            auto data2 = bitmap2.begin();
-            auto limit = data1 + size1.y * size2.x;
-            while (limit != data1)
+            if constexpr (RtoL)
             {
-                handle(*data1++, *data2++);
+                auto iter1 = items1.begin();
+                auto iter2 = items2.rbegin();
+                auto limit = items2.rend();
+                while (limit != iter2)
+                {
+                    handle(*iter1++, *iter2++);
+                }
+            }
+            else
+            {
+                auto iter1 = items1.begin();
+                auto iter2 = items2.begin();
+                auto limit = items2.end();
+                while (limit != iter2)
+                {
+                    handle(*iter1++, *iter2++);
+                }
             }
         }
+    }
+    // intmath: Exec a handle for each item in container.
+    template<bool RtoL = faux, class T, class P, bool Plain = std::is_same_v<void, std::invoke_result_t<P, decltype(*(std::declval<T&>().begin()))>>>
+    auto for_each(T& container, P handle)
+    {
+        auto run = [&](auto&& items)
+        {
+            for (auto& c : items)
+            {
+                if constexpr (Plain) handle(c);
+                else             if (handle(c)) return faux;
+            }
+            if constexpr (!Plain) return true;
+        };
+        return RtoL ? run(container | std::views::reverse)
+                    : run(container);
     }
 
     // intmath: Intersect two sprites and
@@ -1149,6 +1180,43 @@ namespace netxs
             online();
             iter += stride;
         }
+    }
+    // intmath: Get minimal rectangular area if 'is_visible(...)'.
+    template<class Rect>
+    auto get_minimal_area_if(auto size, auto get_row, auto is_visible)
+    {
+        auto crop = Rect{};
+        auto w = size.x;
+        auto h = size.y;
+        auto y0 = 0;
+        while (y0 < h && std::none_of(get_row(y0).begin(), get_row(y0).end(), is_visible)) // Top bound.
+        {
+            y0++;
+        }
+        if (y0 != h)
+        {
+            auto y1 = h - 1;
+            while (y1 > y0 && std::none_of(get_row(y1).begin(), get_row(y1).end(), is_visible)) // Bottom bound.
+            {
+                y1--;
+            }
+            auto x0 = w;
+            auto x1 = -1;
+            for (auto y = y0; y <= y1; ++y) // Look inside [y0, y1].
+            {
+                auto row = get_row(y);
+                auto first = std::find_if(row.begin(), row.end(), is_visible);
+                if (first != row.end())
+                {
+                    x0 = std::min(x0, (si32)std::distance(row.begin(), first)); // Left.
+                    auto last = std::find_if(row.rbegin(), row.rend(), is_visible);
+                    x1 = std::max(x1, (si32)(w - 1 - std::distance(row.rbegin(), last))); // Right.
+                }
+                if (x0 == 0 && x1 == w - 1) break; // Maximum possible found.
+            }
+            crop = {{ x0, y0 }, { x1 - x0 + 1, y1 - y0 + 1 }};
+        }
+        return crop;
     }
 
     static inline

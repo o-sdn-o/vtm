@@ -35,6 +35,10 @@
 #include <sys/stat.h>    // ::fstat()
 #include <linux/input.h> // EV_*
 #include <fnmatch.h>     // ::fnmatch()
+#include <libgen.h>      // ::basename()
+#ifdef basename
+    #undef basename
+#endif
 #include <dirent.h>      // ::dirent
 #include <fcntl.h>       // O_RDWR | O_NONBLOCK | O_CLOEXEC
 #include <sys/inotify.h> // ::inotify
@@ -11172,7 +11176,7 @@ namespace netxs::lixx // li++, libinput++.
                                         }
                                             void tp_tap_notify(time stamp, si32 nfingers, si32 state)
                                             {
-                                                assert((si32)tp.tap.use_lmr_map < std::size(lixx::tap_button_map));
+                                                assert((si32)tp.tap.use_lmr_map < (si32)std::size(lixx::tap_button_map));
                                                 if (nfingers < 1 || nfingers > 3) return;
                                                 tp_gesture_cancel(stamp);
                                                 auto button = lixx::tap_button_map[tp.tap.use_lmr_map][nfingers - 1];
@@ -12779,7 +12783,7 @@ namespace netxs::lixx // li++, libinput++.
                                     auto edges = tp.evdev_device_mm_to_units(mm);
                                     tp.buttons.bottom_area.top_edge = edges.y;
                                     tp.buttons.bottom_area.rightbutton_left_edge = edges.x;
-                                    tp.buttons.bottom_area.middlebutton_left_edge = si32max;
+                                    tp.buttons.bottom_area.middlebutton_left_edge = netxs::si32max;
                                     // If middlebutton emulation is enabled, don't init a software area.
                                     if (tp.middlebutton.want_enabled) return;
                                     // The middle button is 25% of the touchpad and centered. Many touchpads don't have markings for the middle button at all so we need to make it big enough to reliably hit it but not too big so it takes away all the space.
@@ -13172,7 +13176,7 @@ namespace netxs::lixx // li++, libinput++.
                                         }
                                         else
                                         {
-                                            tp.buttons.top_area.bottom_edge = si32min;
+                                            tp.buttons.top_area.bottom_edge = netxs::si32min;
                                         }
                                     }
                                         void tp_sync_touch(tp_touch& t, si32 slot)
@@ -13824,7 +13828,7 @@ namespace netxs::lixx // li++, libinput++.
                             {
                                 case LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS: tp_init_softbuttons(); break;
                                 case LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER:
-                                case LIBINPUT_CONFIG_CLICK_METHOD_NONE: tp.buttons.bottom_area.top_edge = si32max; break;
+                                case LIBINPUT_CONFIG_CLICK_METHOD_NONE: tp.buttons.bottom_area.top_edge = netxs::si32max; break;
                             }
                         }
                     libinput_config_click_method tp_click_get_default_method()
@@ -14106,9 +14110,9 @@ namespace netxs::lixx // li++, libinput++.
                     }
                 void tp_init_palmdetect()
                 {
-                    tp.palm.right_edge = si32max;
-                    tp.palm.left_edge = si32min;
-                    tp.palm.upper_edge = si32min;
+                    tp.palm.right_edge = netxs::si32max;
+                    tp.palm.left_edge = netxs::si32min;
+                    tp.palm.upper_edge = netxs::si32min;
                     tp_init_palmdetect_arbitration();
                     if (tp.device_tags & EVDEV_TAG_EXTERNAL_TOUCHPAD
                      && !tp_is_tpkb_combo_below()
@@ -14167,7 +14171,7 @@ namespace netxs::lixx // li++, libinput++.
                         auto edges = tp.evdev_device_mm_to_units(mm);
                         tp.tp_scroll.right_edge = edges.x;
                         if (want_horiz_scroll) tp.tp_scroll.bottom_edge = edges.y;
-                        else                   tp.tp_scroll.bottom_edge = si32max;
+                        else                   tp.tp_scroll.bottom_edge = netxs::si32max;
                         auto i = 0;
                         for (auto& t : tp.touches)
                         {
@@ -14488,8 +14492,8 @@ namespace netxs::lixx // li++, libinput++.
                 if (h < 50) return;
                 tp.thumb.detect_thumbs      = true;
                 tp.thumb.use_pressure       = faux;
-                tp.thumb.pressure_threshold = si32max;
-                tp.thumb.size_threshold     = si32max;
+                tp.thumb.pressure_threshold = netxs::si32max;
+                tp.thumb.size_threshold     = netxs::si32max;
                 auto mm = fp64_coor{};
                 mm.y = h * 0.85; // Detect thumbs by pressure in the bottom 15mm, detect thumbs by lingering in the bottom 8mm.
                 auto edges = tp.evdev_device_mm_to_units(mm);
@@ -14646,15 +14650,15 @@ namespace netxs::lixx // li++, libinput++.
         };
 
         tp_impl_t tp_impl{ *this };
-        void                  process(evdev_event& ev, time stamp)                           { tp_impl.        tp_interface_process(ev, stamp); }
-        void                  suspend()                                                      { tp_impl.              tp_clear_state(); }
-        void                   remove()                                                      { tp_impl.         tp_interface_remove(); }
-        void             device_added(libinput_device_sptr added_li_device)                  { tp_impl.   tp_interface_device_added(added_li_device); }
-        void           device_removed(libinput_device_sptr removed_li_device)                { tp_impl. tp_interface_device_removed(removed_li_device); }
-        void       left_handed_toggle(bool left_handed_enabled)                              { tp_impl.touchpad_left_handed_toggled(left_handed_enabled); }
-        void touch_arbitration_toggle(libinput_arbitration_state which, fp64_rect, time now) { tp_impl.   tp_interface_toggle_touch(which, now); }
-        void         device_suspended(libinput_device_sptr suspended_li_device)              { device_removed(suspended_li_device); }
-        void           device_resumed(libinput_device_sptr resumed_li_device)                { device_added(resumed_li_device); }
+        void                  process(evdev_event& ev, time stamp)                           override { tp_impl.        tp_interface_process(ev, stamp); }
+        void                  suspend()                                                      override { tp_impl.              tp_clear_state(); }
+        void                   remove()                                                      override { tp_impl.         tp_interface_remove(); }
+        void             device_added(libinput_device_sptr added_li_device)                  override { tp_impl.   tp_interface_device_added(added_li_device); }
+        void           device_removed(libinput_device_sptr removed_li_device)                override { tp_impl. tp_interface_device_removed(removed_li_device); }
+        void       left_handed_toggle(bool left_handed_enabled)                              override { tp_impl.touchpad_left_handed_toggled(left_handed_enabled); }
+        void touch_arbitration_toggle(libinput_arbitration_state which, fp64_rect, time now) override { tp_impl.   tp_interface_toggle_touch(which, now); }
+        void         device_suspended(libinput_device_sptr suspended_li_device)              override { device_removed(suspended_li_device); }
+        void           device_resumed(libinput_device_sptr resumed_li_device)                override { device_added(resumed_li_device); }
         virtual ui32 sendevents_get_modes() override
         {
             auto modes = (ui32)LIBINPUT_CONFIG_SEND_EVENTS_DISABLED;
@@ -15378,8 +15382,8 @@ namespace netxs::lixx // li++, libinput++.
         };
 
         pad_impl_t pad_impl{ *this };
-        void process(evdev_event& ev, time stamp) { pad_impl.pad_process(ev, stamp); }
-        void suspend()                            { pad_impl.pad_suspend(); }
+        void process(evdev_event& ev, time stamp) override { pad_impl.pad_process(ev, stamp); }
+        void suspend()                            override { pad_impl.pad_suspend(); }
         virtual ui32 sendevents_get_modes() override
         {
             return LIBINPUT_CONFIG_SEND_EVENTS_DISABLED;
