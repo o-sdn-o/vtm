@@ -895,7 +895,15 @@ namespace netxs::utf
 
             do
             {
-                if (next.is_cmd())
+                if (!next.correct)
+                {
+                    last_cluster = {};
+                    auto crop = frag{ replacement, next };
+                    yield(crop);
+                    code.step();
+                    next = code.take();
+                }
+                else if (next.is_cmd())
                 {
                     auto custom_cluster_initiator = Clusterize && next.cdpoint == matrix::stx;
                     if (custom_cluster_initiator)
@@ -1106,8 +1114,8 @@ namespace netxs::utf
         constexpr qiew(char const* ptr, auto&&... len) noexcept : view(ptr, std::forward<decltype(len)>(len)...) { }
         constexpr qiew& operator = (qiew const&) noexcept = default;
 
-                 operator text () const { return text{ data(), size() }; }
-        explicit operator bool () const { return view::length(); }
+                           operator text () const { return text{ data(), size() }; }
+        constexpr explicit operator bool () const { return view::length(); }
 
         // qiew: Clear.
         constexpr auto clear()
@@ -1122,16 +1130,23 @@ namespace netxs::utf
         // qiew: Convert to text.
         auto str() const { return operator text(); }
         // qiew: Peek front char.
-        si32 front() const { return (byte)view::front(); }
+        constexpr si32 front() const { return (byte)view::front(); }
         // qiew: Pop front.
-        auto pop_front()
+        constexpr auto pop_front()
         {
             auto c = view::front();
             view::remove_prefix(1);
             return c;
         }
+        // qiew: Pop front.
+        constexpr auto pop_front(si32 n)
+        {
+            auto crop = substr(0, n);
+            view::remove_prefix(n);
+            return crop;
+        }
         // qiew: Pop back.
-        auto pop_back()
+        constexpr auto pop_back()
         {
             auto c = view::back();
             view::remove_suffix(1);
@@ -1151,7 +1166,7 @@ namespace netxs::utf
             return n;
         }
         // qiew: Pop the front sequence of the same chars and return their count + 1.
-        auto pop_all(char c)
+        constexpr auto pop_all(char c)
         {
             auto n = 1;
             while (length() && view::front() == c)
@@ -1173,7 +1188,7 @@ namespace netxs::utf
             return faux;
         }
         // qiew: Return true and pop the front char when it is equal to c.
-        auto pop_if(char c)
+        constexpr auto pop_if(char c)
         {
             if (length() && view::front() == c)
             {
@@ -1187,10 +1202,22 @@ namespace netxs::utf
     template<class Key = text, class Val = text>
     using unordered_map = std::unordered_map<Key, Val, qiew::hash, qiew::equal>;
 
-    template<class A = si32, si32 Base = 10, class View, class = std::enable_if_t<std::is_base_of_v<view, View>>>
-    std::optional<A> to_int(View& ascii)
+    template<class A = ui32>
+    constexpr auto to_int_from_hex_str(auto const& text_or_wide)
     {
         auto num = A{};
+        for(auto c : text_or_wide)
+        {
+            auto val = (c & 0x0F) + 9 * (c >> 6 & 0x01);
+            num = (num << 4) | val;
+        }
+        return num;
+    }
+    template<class A = si32, si32 Base = 10, class View, class = std::enable_if_t<std::is_base_of_v<view, View>>>
+    std::optional<A> to_int(View& utf8)
+    {
+        auto num = A{};
+        auto ascii = utf8;
         if constexpr (Base == 16)
         {
             if (ascii.starts_with("0x") || ascii.starts_with("0X")) ascii.remove_prefix(2);
@@ -1217,14 +1244,16 @@ namespace netxs::utf
             }
             if (!ascii.empty() && ascii.front() == '.') // Fractional part.
             {
-                ascii.remove_prefix(1);
-                top = ascii.data();
-                end = top + ascii.length();
+                auto fraction_view = ascii;
+                fraction_view.remove_prefix(1);
+                top = fraction_view.data();
+                end = top + fraction_view.length();
                 if (auto [mpos, merr] = std::from_chars(top, end, integer, Base); merr == std::errc())
                 {
                     auto len = mpos - top;
                     num += (A)(integer * std::pow(Base, -(fp64)len));
-                    ascii.remove_prefix(len);
+                    fraction_view.remove_prefix(len);
+                    ascii = fraction_view;
                     parsed_something = true;
                 }
                 else if (!parsed_something) // "-."
@@ -1232,7 +1261,11 @@ namespace netxs::utf
                     return std::nullopt;
                 }
             }
-            if (parsed_something) return num * sign;
+            if (parsed_something)
+            {
+                utf8 = ascii;
+                return num * sign;
+            }
         }
         else
         {
@@ -1241,6 +1274,7 @@ namespace netxs::utf
             if (auto [pos, err] = std::from_chars(top, end, num, Base); err == std::errc())
             {
                 ascii.remove_prefix(pos - top);
+                utf8 = ascii;
                 return num;
             }
         }
@@ -1364,6 +1398,10 @@ namespace netxs::utf
         }
         return !first_part;
     }
+    utfx to_code(qiew utf8)
+    {
+        return utf::cpit{ utf8 }.take().cdpoint;
+    }
     namespace
     {
         void _to_utf(utfx code, auto push)
@@ -1383,12 +1421,18 @@ namespace netxs::utf
                 push((char)(0x80 | ((code >> 0x06) & 0x3f)));
                 push((char)(0x80 | ( code          & 0x3f)));
             }
-            else
+            else if (code <= 0x1fffff) // Max UTF-8 value for 4 bytes.
             {
                 push((char)(0xf0 | ((code >> 0x12) & 0x07)));
                 push((char)(0x80 | ((code >> 0x0c) & 0x3f)));
                 push((char)(0x80 | ((code >> 0x06) & 0x3f)));
                 push((char)(0x80 | ( code          & 0x3f)));
+            }
+            else
+            {
+                push(utf::replacement[0]);
+                push(utf::replacement[1]);
+                push(utf::replacement[2]);
             }
         }
         void _to_utf(text& utf8, utfx code)
@@ -1506,12 +1550,9 @@ namespace netxs::utf
         return length;
     }
     // utf: Check if the first byte is utf-8.
-    bool firstbyte(char c)
+    bool firstbyte(byte c)
     {
-        return !(c & 0b1'0000000)
-             || (c & 0b111'00000) == 0b110'00000
-             || (c & 0b1111'0000) == 0b1110'0000
-             || (c & 0b11111'000) == 0b11110'000;
+        return c <= 0x7F || (c >= 0xC2 && c <= 0xF4); // 0x0..0x7f (1-byte), 0xC2..0xDF (2-bytes), 0xE0..0xEF (3-bytes), 0xF0..0xF4 (4-bytes).
     }
     // utf: Check utf-8 integrity (last codepoint) and cut off the invalid bytes at the end.
     void purify(view& utf8)

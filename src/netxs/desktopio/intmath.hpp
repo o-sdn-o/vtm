@@ -44,21 +44,28 @@
 #include <variant>
 #include <vector>
 
-#include <ft2build.h>
-#include FT_FREETYPE_H
-#include FT_TRUETYPE_TABLES_H
-#include FT_MULTIPLE_MASTERS_H
-#include FT_SFNT_NAMES_H
-#include FT_COLOR_H
-#include FT_OTSVG_H
+#if not defined(VTM_NO_DEPENDENCIES)
+    #include <ft2build.h>
+    #include FT_FREETYPE_H
+    #include FT_TRUETYPE_TABLES_H
+    #include FT_MULTIPLE_MASTERS_H
+    #include FT_SFNT_NAMES_H
+    #include FT_COLOR_H
+    #include FT_OTSVG_H
 
-#include <hb-ft.h>
-#include <lunasvg.h>
+    #include <hb-ft.h>
+    #include <lunasvg.h>
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <stb_image.h>
-#include <stb_image_write.h>
+    #define STB_IMAGE_IMPLEMENTATION
+    #define STB_IMAGE_WRITE_IMPLEMENTATION
+    #include <stb_image.h>
+    #include <stb_image_write.h>
+#else
+    namespace lunasvg
+    {
+        struct Document {};
+    }
+#endif
 
 #ifndef faux
     #define faux (false)
@@ -120,7 +127,7 @@ namespace netxs
         #if defined(DEBUG)
         = true;
         #else
-        = faux;
+        = faux; // SSH could crash if true.
         #endif
 
     [[maybe_unused]] static auto _k0 = 0; // LCtrl+Wheel.
@@ -181,6 +188,34 @@ namespace netxs
         static constexpr auto off = 0; // Allow group focus.
         static constexpr auto on  = 1; // Set a unique focus.
     };
+
+    namespace mods
+    {
+        static constexpr auto LCtrl      = 1 <<  0; // Left  ⌃ Ctrl
+        static constexpr auto RCtrl      = 1 <<  1; // Right ⌃ Ctrl
+        static constexpr auto LAlt       = 1 <<  2; // Left  ⎇ Alt, Left  ⌥ Option
+        static constexpr auto RAlt       = 1 <<  3; // Right ⎇ Alt, Right ⌥ Option
+        static constexpr auto LShift     = 1 <<  4; // Left  ⇧ Shift
+        static constexpr auto RShift     = 1 <<  5; // Right ⇧ Shift
+        static constexpr auto LSuper     = 1 <<  6; // Left  ⊞ Win, ◆ Meta, ⌘ Cmd (Apple key), ❖ Super
+        static constexpr auto RSuper     = 1 <<  7; // Right ⊞ Win, ◆ Meta, ⌘ Cmd (Apple key), ❖ Super
+        static constexpr auto LHyper     = 1 <<  8; // Left  Hyper
+        static constexpr auto RHyper     = 1 <<  9; // Right Hyper
+        //                               = 1 << 10;
+        //                               = 1 << 11;
+        static constexpr auto NumLock    = 1 << 12; // ⇭ Num Lock
+        static constexpr auto CapsLock   = 1 << 13; // ⇪ Caps Lock
+        static constexpr auto ScrollLock = 1 << 14; // ⇳ Scroll Lock (⤓)
+        //                               = 1 << 15;
+        static constexpr auto LCtrlAlt   = LAlt   | LCtrl;
+        static constexpr auto anyCtrl    = LCtrl  | RCtrl;
+        static constexpr auto anyAlt     = LAlt   | RAlt;
+        static constexpr auto anyShift   = LShift | RShift;
+        static constexpr auto anyCtrlAlt = anyAlt | anyCtrl;
+        static constexpr auto anySuper   = LSuper | RSuper;
+        static constexpr auto anyHyper   = LHyper | RHyper;
+        static constexpr auto anyMod     = anyAlt | anyCtrl | anyShift | anySuper | anyHyper;
+    }
 
     constexpr auto operator & (axes l, axes r) { return static_cast<si32>(l) & static_cast<si32>(r); }
 
@@ -1189,15 +1224,25 @@ namespace netxs
         auto w = size.x;
         auto h = size.y;
         auto y0 = 0;
-        while (y0 < h && std::none_of(get_row(y0).begin(), get_row(y0).end(), is_visible)) // Top bound.
+        while (y0 < h) // Top bound.
         {
+            auto row = get_row(y0);
+            if (!std::none_of(row.begin(), row.end(), is_visible))
+            {
+                break;
+            }
             y0++;
         }
         if (y0 != h)
         {
             auto y1 = h - 1;
-            while (y1 > y0 && std::none_of(get_row(y1).begin(), get_row(y1).end(), is_visible)) // Bottom bound.
+            while (y1 > y0) // Bottom bound.
             {
+                auto row = get_row(y1);
+                if (!std::none_of(row.begin(), row.end(), is_visible))
+                {
+                    break;
+                }
                 y1--;
             }
             auto x0 = w;

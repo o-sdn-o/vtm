@@ -1488,6 +1488,17 @@ namespace netxs
             std::vector<layer_t> layers;
             si32          attr_digest{}; // Stamp to sync with layers.
 
+            bool hit_layers(auto pred)
+            {
+                for (auto& l : layers)
+                {
+                    if (pred(l))
+                    {
+                        return true;
+                    }
+                }
+                return faux;
+            }
             void rasters_reset()
             {
                 for (auto& l : layers)
@@ -1503,7 +1514,8 @@ namespace netxs
             bool set_changes(si32 new_changed_bits, many& changes, twod cellsz = {})
             {
                 auto layers_updated = faux;
-                if constexpr (debugmode) log("Received image update:");
+                auto need_bitmap_reset = faux;
+                if constexpr (debugmode) log("Image index=%% update:", index);
                 attr_digest++;
                 changed_gb_attrs = new_changed_bits;
                 auto mask = (ui32)changed_gb_attrs;
@@ -1521,13 +1533,14 @@ namespace netxs
                 }
                 if (changed_gb_attrs & ((1 << imagens::gb::uw)
                                       | (1 << imagens::gb::vh)
+                                      | (1 << imagens::gb::u)
+                                      | (1 << imagens::gb::v)
                                       | (1 << imagens::gb::w)
                                       | (1 << imagens::gb::h)
                                       | (1 << imagens::gb::fit)))
                 {
-                    bitmap.reset();
+                    need_bitmap_reset = true;
                 }
-                auto need_bitmap_reset = faux;
                 if (j < changes.size() && (document_changed = std::any_cast<si32>(changes[j++])))
                 {
                     if (j < changes.size() && netxs::get_bit<image::sub_id_bit>(document_changed))
@@ -1541,7 +1554,7 @@ namespace netxs
                         document = std::any_cast<text>(changes[j++]);
                         dom = {}; // Request to regenerate DOM.
                         need_bitmap_reset = true;
-                        if constexpr (debugmode) log("  document='%value%...'", document.substr(0, std::min(20, (si32)document.size())));
+                        if constexpr (debugmode) log("  size=%% document='%value%...'", document.size(), document.substr(0, std::min(120, (si32)document.size())));
                     }
                     if (j < changes.size() && netxs::get_bit<image::layers_bit>(document_changed)) // Receive foreign layer indexes.
                     {
@@ -1652,11 +1665,13 @@ namespace netxs
                         gb_attrs[i] = std::any_cast<fp32>(global_attributes[i]);
                         if constexpr (debugmode) log("  %attr%=%value%", imagens::gb::names[i], gb_attrs[i]);
                     }
+                    bitmap.reset();
+                    dom = {};
                     sub_id   = std::any_cast<text>(global_attributes[i++]);
                     document = std::any_cast<text>(global_attributes[i++]);
                     layers_updated = load_layers(i, global_attributes);
                     reset_changes();
-                    if constexpr (debugmode) log("  sub_id='%%' document='%value%...'", sub_id, document.substr(0, std::min(20, (si32)document.size())));
+                    if constexpr (debugmode) log("  sub_id='%%' document='%value%...'", sub_id, document.substr(0, std::min(120, (si32)document.size())));
                 }
                 return layers_updated;
             }
@@ -1671,6 +1686,7 @@ namespace netxs
                 {
                     dom = {}; // Request to regenerate DOM.
                     document = doc_str;
+                    bitmap.reset();
                     netxs::set_bit<image::document_bit>(document_changed, true);
                 }
                 if (sub_id != sub_id_str)
@@ -1680,11 +1696,20 @@ namespace netxs
                     netxs::set_bit<image::sub_id_bit>(document_changed, true);
                 }
             }
-            void check_and_set_attr(gb_attrs_t& new_gb_attrs, bool updated_layers)
+            void check_and_set_attr(si32 attr_index, fp32 new_attr_value)
+            {
+                if (attr_index >= 0 && attr_index < (si32)gb_attrs.size() && new_attr_value != gb_attrs[attr_index])
+                {
+                    attr_digest++;
+                    changed_gb_attrs |= 1 << attr_index;
+                    gb_attrs[attr_index] = new_attr_value;
+                }
+            }
+            void check_and_set_attrs(gb_attrs_t& new_gb_attrs, bool updated_layers)
             {
                 attr_digest++;
                 assert(new_gb_attrs.size() < sizeof(changed_gb_attrs) * 8);
-                for (auto i = 0u; i < new_gb_attrs.size(); i++)
+                for (auto i = 0u; i < gb_attrs.size(); i++)
                 {
                     if (new_gb_attrs[i] != gb_attrs[i])
                     {
@@ -1716,25 +1741,24 @@ namespace netxs
             using lock = std::recursive_mutex;
             using sync = std::lock_guard<lock>;
             using depo = std::array<netxs::sptr<T>, 65536>; // ~1MB
-            using uset = std::vector<ui16>;//std::unordered_set<ui16>;
-            using pool = generics::indexer_fifo<ui16>;
+            using pool = generics::indexer_growing<ui16, 65536>; // Use growing indexer to avoid reusing indexes during synchronization.
 
             lock mutex; // Object map mutex.
             depo store; // Object map.
-            uset undef; // List of unknown tokens.
             pool index; // Index pool.
+            std::bitset<65536> _touched; // Affected image indexes.
 
             struct guard : sync
             {
                 depo& map;
-                uset& unk;
                 pool& ind;
+                std::bitset<65536>& touched;
 
                 guard(cache& inst)
                     : sync{ inst.mutex },
                        map{ inst.store },
-                       unk{ inst.undef },
-                       ind{ inst.index }
+                       ind{ inst.index },
+                   touched{ inst._touched }
                 { }
 
                 // cache: Set object.
@@ -1749,11 +1773,13 @@ namespace netxs
                     {
                         log("The limit on the number of embedded objects has been reached");
                     }
+                    if constexpr (debugmode) log("Got a new image index: %% free count=%%", image_index, ind.free_count);
                     return image_index;
                 }
                 // cache: Remove object.
                 void remove(ui16 image_index)
                 {
+                    if constexpr (debugmode) log("Removed image index: %% exists=%%", image_index, map[image_index] ? "true":"faux");
                     map[image_index].reset();
                     ind.release(image_index);
                 }
@@ -1761,14 +1787,6 @@ namespace netxs
                 auto exists(ui16 image_index)
                 {
                     return map[image_index];
-                }
-                // cache: Request the object metadata if index is not registered.
-                auto request_if_absent(ui16 image_index)
-                {
-                    auto iter = map.find(image_index);
-                    auto okay = iter != map.end();
-                    if (!okay) unk.push_back(image_index);
-                    return okay;
                 }
                 auto begin() const { return map.begin(); }
                 auto begin()       { return map.begin(); }
@@ -1790,6 +1808,7 @@ namespace netxs
     {
         static auto jumbos()
         {
+            //todo move unk to s11n (a request for an unknown cluster may be sent to an unrelated dtvt-object)
             static auto cache = netxs::generics::cache<text>{};
             return cache.storage();
         }
@@ -1798,7 +1817,7 @@ namespace netxs
             static auto cache = imagens::cache<imagens::image>{};
             return cache.storage();
         }
-        static auto register_image(ui16 last_ext_index, std::array<ui16, 65536>& ext_to_int_nat)
+        static auto register_image(ui16 last_ext_index, std::array<ui16, 65536>& ext_to_int_nat, std::vector<ui16>& unknown_indexes)
         {
             auto images = cell::images(); // Lock. //todo ?Should we place it outside of this hot loop?
             auto image_ptr = ptr::shared(imagens::image{});
@@ -1806,8 +1825,8 @@ namespace netxs
             if (last_int_index)
             {
                 image_ptr->index = last_int_index;
-                images.unk.push_back(last_ext_index);
-                if constexpr (debugmode) log("request image index: last_int_index=%% last_ext_index=%%", last_int_index, last_ext_index);
+                unknown_indexes.push_back(last_ext_index);
+                if constexpr (debugmode) log("register a new int image index: last_int_index=%% for last_ext_index=%%", last_int_index, last_ext_index);
                 ext_to_int_nat[last_ext_index] = last_int_index; // Update forward map.
                 //int_to_ext_nat[last_int_index] = last_ext_index; // Update reverse map.
             }
@@ -1858,6 +1877,10 @@ namespace netxs
             {
                 return (token & netxs::letoh((ui64)0b1100'0000'0000'0000)) == netxs::letoh((ui64)0b1000'0000'0000'0000); // (bytes[1] & 0b1100'0000) == 0b1000'0000;
             }
+            void reset_jumbo_flag()
+            {
+                token |= (token & netxs::letoh((ui64)0b1000'0000'0000'0000)) >> 1; // (Do OR 8th with 7th bit: 00.., 01.. or 11.. is allowed, not 10..) Reset jumbo flag to avoid fake jumbo clusters.
+            }
             void set_jumbo_flag()
             {
                 token = (token & netxs::letoh(~(ui64)0b1100'0000'0000'0000)) | netxs::letoh((ui64)0b1000'0000'0000'0000); // bytes[1] = (bytes[1] & ~0b1100'0000) | 0b1000'0000;// First byte in UTF-8 cannot start with 0b10xx'xxxx.
@@ -1907,6 +1930,7 @@ namespace netxs
                     token = isrtl; // token = 0;
                     mtx(w, h);
                     std::memcpy(bytes() + 1, utf8.data(), count);
+                    reset_jumbo_flag();
                 }
                 else
                 {
@@ -2419,10 +2443,11 @@ namespace netxs
             if (uv.bg.chan.a == 0xFF) uv.bg.mix_one(c.uv.bg);
             else                      uv.bg.mix(c.uv.bg);
 
+            auto bgc = c.st.inv() ? c.uv.fg.token : c.uv.bg.token;
             if (c.st.xy())
             {
                 gc = c.gc;
-                if (c.uv.bg.token == 0) // OR'ing the shadow if bg is completely transparent.
+                if (bgc == 0) // OR'ing the shadow if bg is completely transparent.
                 {
                     st.meta_shadow_matrix(c.st);
                 }
@@ -2433,7 +2458,7 @@ namespace netxs
             }
             else
             {
-                if (c.uv.bg.token == 0) // OR'ing the shadow if bg is completely transparent.
+                if (bgc == 0) // OR'ing the shadow if bg is completely transparent.
                 {
                     st.meta_shadow(c.st);
                 }
@@ -2493,7 +2518,7 @@ namespace netxs
         void mixfull(cell const& c, si32 alpha)
         {
             if (c.id) id = c.id;
-            if (c.st.xy())
+            if (c.st.xy() || c.raw())
             {
                 st = c.st;
                 gc = c.gc;
@@ -2521,7 +2546,12 @@ namespace netxs
         {
             fuse_keep_image(c);
             if (c.id) id = c.id;
-            if (px && !c.px)
+            if (c.raw())
+            {
+                px = c.px;
+                p2 = c.p2;
+            }
+            else if (px)
             {
                 set_image_ontop(0); // Place image under the text.
             }
@@ -2529,22 +2559,19 @@ namespace netxs
         // cell: Blend two cells and set id if any (fg = bg * c.fg).
         void overlay(cell const& c)
         {
-            auto bg_opaque = uv.bg.chan.a == 0xFF;
-            if (c.st.xy() || c.st.und())
+            uv.fg = uv.bg;
+            if (uv.bg.chan.a == 0xFF)
             {
-                uv.fg = uv.bg;
-                if (bg_opaque) uv.fg.mix_one(c.uv.fg);
-                else           uv.fg.mix(c.uv.fg);
+                uv.fg.mix_one(c.uv.fg);
+                uv.bg.mix_one(c.uv.bg);
             }
             else
             {
-                if (uv.fg.chan.a == 0xFF) uv.fg.mix_one(c.uv.bg);
-                else                      uv.fg.mix(c.uv.bg);
+                uv.fg.mix(c.uv.fg);
+                uv.bg.mix(c.uv.bg);
             }
             gc = c.gc;
             st = c.st;
-            if (bg_opaque) uv.bg.mix_one(c.uv.bg);
-            else           uv.bg.mix(c.uv.bg);
             px = c.px;
             p2 = c.p2;
             if (c.id) id = c.id;
@@ -2748,7 +2775,19 @@ namespace netxs
         // cell: Highlight both foreground and background.
         auto& xlight(si32 factor = 1)
         {
-            uv.bg.xlight(factor, uv.fg);
+            if (raw()) // Make images semitransparent.
+            {
+                if (!st.inv())
+                {
+                    st.inv(true);
+                    std::swap(uv.bg, uv.fg);
+                }
+                uv.fg.xlight(factor);
+            }
+            else
+            {
+                uv.bg.xlight(factor, uv.fg);
+            }
             return *this;
         }
         // cell: Highlight by underlining.
@@ -3066,15 +3105,14 @@ namespace netxs
             return faux;
         }
         // cell: Clear canvas cells from the specified image bits.
-        static bool remove_image_bits(auto& canvas, std::vector<ui16>& removed_image_indexes)
+        static bool remove_image_bits(auto& canvas, std::bitset<65536> const& removed_images)
         {
             auto hit = faux;
             for (auto& c : canvas)
             {
                 if (auto image_index = c.get_image_index())
                 {
-                    //if (image_index == removed_image_index) //todo ?optimize for single index
-                    if (std::find(removed_image_indexes.begin(), removed_image_indexes.end(), image_index) != removed_image_indexes.end())
+                    if (removed_images[image_index])
                     {
                         c.reset_px(); // Drop all image metadata.
                         hit = true;
@@ -3316,15 +3354,40 @@ namespace netxs
                                                      : 0xFFffffff;
                 }
                 template<class D, class S>
-                inline void operator () (D& dst, S& src) const
+                inline void operator () (D& dst, S src) const
                 {
                     if (src.isnul()) return;
-                    auto& fgc = src.fgc();
-                    if (fgc.chan.a == 0x00)
+                    if (!src.inv())
                     {
-                        auto& bgc = dst.bgc();
-                        if (bgc.chan.a < 2) dst.fgc(0xFFffffff);
-                        else                dst.fgc(invert(bgc));
+                        if (src.fgc().chan.a == 0x00)
+                        {
+                            if (dst.inv())
+                            {
+                                src.inv(true);
+                                auto dst_bgc = dst.fgc();
+                                if (dst_bgc.chan.a < 2) dst.bgc(0xFFffffff);
+                                else                    dst.bgc(invert(dst_bgc));
+                            }
+                            else
+                            {
+                                auto dst_bgc = dst.bgc();
+                                if (dst_bgc.chan.a < 2) dst.fgc(0xFFffffff);
+                                else                    dst.fgc(invert(dst_bgc));
+                            }
+                        }
+                        else if (src.bgc().chan.a == 0x00)
+                        {
+                            if (dst.inv())
+                            {
+                                src.inv(true);
+                                std::swap(src.fgc(), src.bgc());
+                                src.fgc(argb::transparent);
+                            }
+                            else
+                            {
+                                src.bgc(argb::transparent);
+                            }
+                        }
                     }
                     dst.fusefull_keep_image(src);
                 }
@@ -3442,7 +3505,7 @@ namespace netxs
             };
             struct invbit_t
             {
-                template<class D> inline void operator () (D& dst) const { dst.invbit(); }
+                template<class D> inline void operator () (D& dst) const { if (dst.raw()) std::swap(dst.fgc(), dst.bgc()); else dst.invbit(); }
             };
             struct disabled_t
             {
@@ -3460,7 +3523,20 @@ namespace netxs
                     : alpha{ alpha }
                 { }
                 template<class C> constexpr inline auto operator () (C brush) const { return func<C>(brush); }
-                template<class D, class S>  inline void operator () (D& dst, S& src) const { dst.mixfull(src, alpha); }
+                template<class D, class S>  inline void operator () (D& dst, S src) const
+                {
+                    if (dst.raw() && !src.raw())
+                    {
+                        src.px = dst.px;
+                        src.p2 = dst.p2;
+                    }
+                    if (src.raw() && !src.inv())
+                    {
+                        src.inv(true); // Make images semi-transparent.
+                        std::swap(src.fgc(), src.bgc());
+                    }
+                    dst.mixfull(src, alpha);
+                }
             };
             struct xlucent_t
             {

@@ -39,6 +39,7 @@ namespace netxs::ansi
     static const auto esc_ind     = 'D'; // ESC D  Cursor down.
     static const auto esc_ir      = 'M'; // ESC M  Cursor up.
     static const auto esc_ris     = 'c'; // ESC c  Reset terminal to initial state.
+    static const auto esc_eq_da2  = 'c'; // CSI = c  DA2.
     static const auto esc_memlk   = 'l'; // ESC l  Memory lock.
     static const auto esc_munlk   = 'm'; // ESC m  Memory unlock.
     static const auto esc_ls2     = 'n'; // ESC n  LS2.
@@ -61,6 +62,7 @@ namespace netxs::ansi
     static const auto csi_hsh_psh = '{'; // CSI # {  — Push SGR attributes onto stack (XTPUSHSGR).
     static const auto csi_hsh_pop = '}'; // CSI # }  — Pop  SGR attributes from stack (XTPOPSGR).
     static const auto csi_dqt_scp = 'q'; // CSI n "    q  — Select character protection attribute.
+    static const auto csi__gt_rxv = 'q'; // CSI >      q  — RequestXtVersion.
     static const auto csi_exl_rst = 'p'; // CSI   !    p  — Reset terminal to initial state.
     static const auto csi_qst_rtb = 'W'; // CSI   ?    W  — Reset tabstops to the defaults.
     static const auto csi_dlr_fra = 'x'; // CSI Char ; Top ; Left ; Bottom ; Right $ x  — Fill rectangular area (DECFRA).
@@ -84,6 +86,7 @@ namespace netxs::ansi
     static const auto csi_dsr     = 'n'; // CSI n      n  — Device Status Report (DSR). n==5 -> "OK"; n==6 -> CSI r ; c R
     static const auto csi_scp     = 's'; // CSI        s  — Save cursor Position.
     static const auto csi_rcp     = 'u'; // CSI        u  — Restore cursor Position.
+    static const auto csi_qst_kkp = 'u'; // CSI ?      u  — KKP.
     static const auto csi__el     = 'K'; // CSI n      K  — Erase 0: from cursor to end, 1: from begin to cursor, 2: all line.
     static const auto csi__il     = 'L'; // CSI n      L  — Insert n blank lines.
     static const auto csi__ed     = 'J'; // CSI n      J  — Erase 0: from cursor to end of screen, 1: from begin to cursor, 2: all screen.
@@ -92,6 +95,7 @@ namespace netxs::ansi
     static const auto csi_led     = 'q'; // CSI n      q  — Load keyboard LEDs.
     static const auto csi__sd     = 'T'; // CSI n      T  — Scroll down by n lines, scrolled out lines are lost.
     static const auto csi__su     = 'S'; // CSI n      S  — Scroll   up by n lines, scrolled out lines are lost.
+    static const auto csi_qst_smg = 'S'; // CSI ? Pi; Pa; Pv S  — XTSMGRAPHICS request.
     static const auto csi_win     = 't'; // CSI n;m;k  t  — XTWINOPS, Terminal window props.
     static const auto csi_ech     = 'X'; // CSI n      X  — Erase n character(s) ? difference with delete ?
     static const auto csi_ich     = '@'; // CSI n      @  — Insert/wedge n character(s).
@@ -272,6 +276,8 @@ namespace netxs::ansi
     static constexpr auto apc_prefix_mouse_fscroll = "fscroll="sv; // fp32,fp32
     static constexpr auto apc_prefix_session       = "event=session;"sv;
     static constexpr auto apc_prefix_session_token = "token="sv;
+
+    static constexpr auto cellsz = twod{ 10, 20 };
 
     template<class Base>
     class basevt
@@ -602,15 +608,20 @@ namespace netxs::ansi
         auto& appkey(bool b)        { return add(b ? "\033[?1h"    : "\033[?1l"      ); } // escx: Application(=on)/ANSI(=off) Cursor Keys (DECCKM).
         auto& bpmode(bool b)        { return add(b ? "\033[?2004h" : "\033[?2004l"   ); } // escx: Set bracketed paste mode.
         auto& autowr(bool b)        { return add(b ? "\033[?7h"    : "\033[?7l"      ); } // escx: Set autowrap mode.
+        auto& kkp_on(bool b)        { return add(b ? "\033[>31u"   : ""              ); } // escx: Set KKP mode.
+        auto& kkp_off(bool b)       { return add(b ? "\033[<1u"    : ""              ); } // escx: Reset KKP mode.
         auto& report(twod p)        { return add("\033[", p.y+1, ";", p.x+1, "R"     ); } // escx: Report 1-Based cursor position (CPR).
         auto& win_sz(twod p)        { return add("\033[8;", p.y, ";", p.x, "t"       ); } // escx: Report viewport size (Reply on CSI 18 t).
+        auto& area_sz_px(twod p)    { return add("\033[4;", p.y, ";", p.x, "t"       ); } // escx: Report text area size in pixels (Reply on CSI 14 t).
+        auto& scrn_sz_px(twod p)    { return add("\033[5;", p.y, ";", p.x, "t"       ); } // escx: Report screen size in pixels (Reply on CSI 15 t).
+        auto& cell_sz_px(twod p)    { return add("\033[6;", p.y, ";", p.x, "t"       ); } // escx: Report cell size in pixels (Reply on CSI 16 t).
         auto& locate_wipe()         { return add("\033[r"                            ); } // escx: Enable scrolling for entire display (clear screen).
         auto& locate_call()         { return add("\033[6n"                           ); } // escx: Report cursor position.
         auto& scrn_reset()          { return add("\033[H\033[m\033[2J"               ); } // escx: Reset palette, erase scrollback and reset cursor location.
         auto& save_title()          { return add("\033[22;0t"                        ); } // escx: Save terminal window title.
         auto& load_title()          { return add("\033[23;0t"                        ); } // escx: Restore terminal window title.
         auto& osc(view p)           { return add("\033]", p, c0_bel                  ); } // escx: OSC report.
-        auto& osc(view p, view arg) { return add("\033]", p, ';', arg, c0_bel        ); } // escx: OSC report with args.
+        auto& osc(view p, view arg, view st) { return add("\033]", p, ';', arg, st   ); } // escx: OSC report with args.
         auto& header(view t)        { return add("\033]2;", t, c0_bel                ); } // escx: Window title.
         auto& save_palette()        { return add("\033[#P"                           ); } // escx: Push palette onto stack XTPUSHCOLORS.
         auto& load_palette()        { return add("\033[#Q"                           ); } // escx: Pop  palette from stack XTPOPCOLORS.
@@ -717,9 +728,9 @@ namespace netxs::ansi
             static constexpr auto wheel_rt = si32{ 67 };
 
             auto ctrl = si32{};
-            if (gear.m_sys.ctlstat & hids::anyShift) ctrl |= 0x04;
-            if (gear.m_sys.ctlstat & hids::anyAlt  ) ctrl |= 0x08;
-            if (gear.m_sys.ctlstat & hids::anyCtrl ) ctrl |= 0x10;
+            if (gear.m_sys.ctlstat & mods::anyShift) ctrl |= 0x04;
+            if (gear.m_sys.ctlstat & mods::anyAlt  ) ctrl |= 0x08;
+            if (gear.m_sys.ctlstat & mods::anyCtrl ) ctrl |= 0x10;
 
             auto m_bttn = std::bitset<8>{ (ui32)gear.m_sys.buttons };
             auto s_bttn = std::bitset<8>{ (ui32)gear.m_sav.buttons };
@@ -792,9 +803,9 @@ namespace netxs::ansi
             static constexpr auto wheel_rt = si32{ 67 };
 
             auto ctrl = si32{};
-            if (gear.m_sys.ctlstat & hids::anyShift) ctrl |= 0x04;
-            if (gear.m_sys.ctlstat & hids::anyAlt  ) ctrl |= 0x08;
-            if (gear.m_sys.ctlstat & hids::anyCtrl ) ctrl |= 0x10;
+            if (gear.m_sys.ctlstat & mods::anyShift) ctrl |= 0x04;
+            if (gear.m_sys.ctlstat & mods::anyAlt  ) ctrl |= 0x08;
+            if (gear.m_sys.ctlstat & mods::anyCtrl ) ctrl |= 0x10;
 
             auto m_bttn = std::bitset<8>{ (ui32)gear.m_sys.buttons };
             auto s_bttn = std::bitset<8>{ (ui32)gear.m_sav.buttons };
@@ -1036,6 +1047,8 @@ namespace netxs::ansi
     auto cursor(bool b)        { return escx{}.cursor(b);     } // ansi: Cursor visibility.
     auto appkey(bool b)        { return escx{}.appkey(b);     } // ansi: Application cursor Keys (DECCKM).
     auto bpmode(bool b)        { return escx{}.bpmode(b);     } // ansi: Set bracketed paste mode.
+    auto kkp_on(bool b)        { return escx{}.kkp_on(b);     } // ansi: Set KKP mode.
+    auto kkp_off(bool b)       { return escx{}.kkp_off(b);    } // ansi: Reset KKP mode.
     auto styled(si32 b)        { return escx{}.styled(b);     } // ansi: Enable line style reporting.
     auto style(si32 i)         { return escx{}.style(i);      } // ansi: Line style report.
     auto link(si32 i)          { return escx{}.link(i);       } // ansi: Set object id link.
@@ -1527,6 +1540,50 @@ namespace netxs::ansi
     template<class T> using osc_h = std::function<void(view&, T*&)>;
     template<class T> using osc_t = std::map<text, osc_h<T>>;
 
+    static constexpr auto maxarg = 32_sz; // ansi: Maximal number of the parameters in CSI sequence.
+    using fifo32 = netxs::generics::bank<si32, maxarg>;
+
+    static const auto ints = [](auto cmd){ return cmd >= 0x20 && cmd <= 0x2f; }; // "intermediate bytes" in the range 0x20–0x2F
+    static const auto pars = [](auto cmd){ return cmd >= 0x3C && cmd <= 0x3f; }; // Front "parameter bytes" in the range 0x3C–0x3F (0x30–0x3F)
+    static const auto cmds = [](auto cmd){ return cmd >= 0x40 && cmd <= 0x7E; };
+    static const auto isC0 = [](auto cmd){ return cmd <= 0x1F; };
+    static const auto read_CSI = [](auto& ascii, auto& queue, auto trap)
+    {
+        auto a = (si32)';';
+        auto b = 0;
+        auto push = [&](auto num) // Parse subparameters divided by colon ':' (max arg value<int32_t> is 1,073,741,823)
+        {
+            if (a == ':') queue.template push<true>(num);
+            else          queue.template push<faux>(num);
+        };
+        while (ascii.length())
+        {
+            if (auto param = utf::to_int(ascii))
+            {
+                push(param.value());
+                if (ascii.empty()) break;
+                a = ascii.front(); // Delimiter or cmd after number.
+                trap(a);
+                if (ascii.empty()) break;
+            }
+            else
+            {
+                auto c = ascii.front();
+                if (trap(c)) continue;
+                push(fifo32::skip); // Default parameter expressed by standalone delimiter/semicolon.
+                a = c; // Delimiter or cmd after number.
+            }
+            ascii.pop_front();
+            if (ansi::cmds(a))
+            {
+                queue.settop(a);
+                break;
+            }
+            else if (ansi::ints(a)) b = a; // Intermediate byte and parameter byte never appear at the same time, so consider they as a single group.
+        }
+        return b;
+    };
+
     template<class T, bool InitOutputMode = true>
     struct vt_parser
     {
@@ -1595,19 +1652,11 @@ namespace netxs::ansi
             // ESC [ n1 ; n2:p1:p2:...pi ; ... nx CSICMD
             //      [-----------------------]
 
-            static constexpr auto maxarg = 32_sz; // ansi: Maximal number of the parameters in one escaped sequence.
-            using fifo32 = generics::bank<si32, maxarg>;
-
             if (ascii.length())
             {
-                auto b = 0;
-                auto ints = [](auto cmd){ return cmd >= 0x20 && cmd <= 0x2f; }; // "intermediate bytes" in the range 0x20–0x2F
-                auto pars = [](auto cmd){ return cmd >= 0x3C && cmd <= 0x3f; }; // "parameter bytes" in the range 0x30–0x3F
-                auto cmds = [](auto cmd){ return cmd >= 0x40 && cmd <= 0x7E; };
-                auto isC0 = [](auto cmd){ return cmd <= 0x1F; };
                 auto trap = [&](auto& c) // Catch and execute C0.
                 {
-                    if (isC0(c))
+                    if (ansi::isC0(c))
                     {
                         auto& intro = ansi::get_parser<T>().intro;
                         auto  empty = qiew{};
@@ -1618,61 +1667,25 @@ namespace netxs::ansi
                             if (ascii.empty()) break;
                             c = ascii.front();
                         }
-                        while (isC0(c));
+                        while (ansi::isC0(c));
                         return true;
                     }
                     return faux;
                 };
-                auto fill = [&](auto& queue)
-                {
-                    auto a = (si32)';';
-                    auto push = [&](auto num) // Parse subparameters divided by colon ':' (max arg value<int32_t> is 1,073,741,823)
-                    {
-                        if (a == ':') queue.template push<true>(num);
-                        else          queue.template push<faux>(num);
-                    };
-
-                    while (ascii.length())
-                    {
-                        if (auto param = utf::to_int(ascii))
-                        {
-                            push(param.value());
-                            if (ascii.empty()) break;
-                            a = ascii.front(); // Delimiter or cmd after number.
-                            trap(a);
-                            if (ascii.empty()) break;
-                        }
-                        else
-                        {
-                            auto c = ascii.front();
-                            if (trap(c)) continue;
-                            push(fifo32::skip); // Default parameter expressed by standalone delimiter/semicolon.
-                            a = c; // Delimiter or cmd after number.
-                        }
-                        ascii.pop_front();
-                        if (cmds(a))
-                        {
-                            queue.settop(a);
-                            break;
-                        }
-                        else if (ints(a)) b = a; // Intermediate byte and parameter byte never appear at the same time, so consider they as a single group.
-                    }
-                };
-
                 auto& csier = ansi::get_parser<T>().csier;
                 auto c = ascii.front();
-                if (cmds(c))
+                if (ansi::cmds(c))
                 {
                     ascii.pop_front();
                     csier.proceed(c, client);
                 }
                 else
                 {
-                    auto queue = fifo32{ ccc_nop }; // Reserve for the command type.
-                    if (pars(c))
+                    auto queue = ansi::fifo32{ ansi::ccc_nop }; // Reserve for the command type.
+                    if (ansi::pars(c))
                     {
                         ascii.pop_front();
-                        fill(queue);
+                        auto b = ansi::read_CSI(ascii, queue, trap);
                         if (c == '?' )
                         {
                             if (b == '$') csier.proceed_quest_dollarsn(queue, client);
@@ -1684,7 +1697,7 @@ namespace netxs::ansi
                     }
                     else
                     {
-                        fill(queue);
+                        auto b = ansi::read_CSI(ascii, queue, trap);
                              if (b == '\0') csier.proceed         (queue, client);
                         else if (b == '!' ) csier.proceed_excl    (queue, client);
                         else if (b == '#' ) csier.proceed_hash    (queue, client);
@@ -1760,7 +1773,7 @@ namespace netxs::ansi
                     auto size = head - delm;
                     if (auto it = oscer.find(cmd); it != oscer.end())
                     {
-                        auto data = view(delm, size);
+                        auto data = view(delm, size + pad);
                         auto proc = (*it).second;
                         proc(data, client);
                     }
@@ -2054,150 +2067,156 @@ namespace netxs::ansi
     };
 
     // ansi: Checking ANSI/UTF-8 integrity and return a valid view.
-    auto purify(qiew utf8)
+    qiew purify(qiew utf8)
     {
-        if (utf8.size())
-        {
-            auto head = utf8.begin();
-            auto tail = utf8.end();
-            auto prev = tail;
-            auto find = faux;
-            do   find = *--prev == 0x1b; // find ESC
-            while (head != prev && !find);
+        if (utf8.empty()) return utf8;
+        auto head = utf8.begin();
+        auto tail = utf8.end();
+        auto prev = tail;
+        auto found = faux;
+        do found = *--prev == 0x1b; // Looking for ESC
+        while (head != prev && !found);
 
-            if (find)
+        if (found)
+        {
+            auto next = prev;
+            if (++next != tail) // Check chars after ESC.
             {
-                auto next = prev;
-                if (++next != tail) // test bytes after ESC
+                auto c = *next;
+                if (c == '\\') // ST
                 {
-                    auto c = *next;
-                    if (c == '[') // test CSI: ESC [ pn;...;pn cmd
+                    utf::purify(utf8); // All ok;
+                    return utf8;
+                }
+                else if (c == '[') // CSI
+                {
+                    while (++next != tail)
                     {
-                        while (++next != tail) // find CSI command: cmd >= 0x40 && cmd <= 0x7E
-                        {
-                            auto cmd = *next;
-                            if (cmd >= 0x40 && cmd <= 0x7E) break;
-                        }
-                        if (next == tail)
-                        {
-                            utf8 = { head, prev }; // exclude final ESC
-                            return utf8;
-                        }
+                        auto cmd = *next;
+                        if (cmd >= 0x40 && cmd <= 0x7E) break;
                     }
-                    else if (c == ']') // test OSC: ESC ] ... BEL
+                    if (next == tail) // Incomplete CSI.
                     {
-                        // test OSC: ESC ] P Nrrggbb
-                        auto step = next;
-                        if (++step != tail)
+                        utf8 = { head, prev }; // Exclude incomplete sequence.
+                        return utf8;
+                    }
+                }
+                else if (c == 'P'  // DCS ESC P ... ST
+                      || c == 'X'  // SOS ESC X ... ST
+                      || c == '^'  // PM  ESC ^ ... ST
+                      || c == '_') // APC ESC _ ... ST
+                {
+                    while (++next != tail) // Looking for BEL.
+                    {
+                        auto cmd = *next;
+                        if (cmd == 0x07) break;
+                    }
+                    if (next != tail) // BEL found.
+                    {
+                        utf::purify(utf8); // All ok.
+                    }
+                    else
+                    {
+                        utf8 = { head, prev }; // Exclude incomplete sequence.
+                    }
+                    return utf8;
+                }
+                else if (c == ']') // OSC
+                {
+                    // Check OSC: ESC ] P Nrrggbb
+                    auto step = next;
+                    if (++step != tail)
+                    {
+                        c = *step;
+                        if (c == 'P') // Set linux console palette.
                         {
-                            c = *step;
-                            if (c == 'P') // Set linux console palette.
+                            if (tail - step < 8)
                             {
-                                if (tail - step < 8)
-                                {
-                                    utf8 = { head, prev }; // exclude final ESC
-                                }
-                                else
-                                {
-                                    utf::purify(utf8);
-                                }
-                                return utf8;
+                                utf8 = { head, prev }; // Exclude incomplete sequence.
                             }
-                            else if (c == 'R') // Reset linux console palette.
+                            else
                             {
                                 utf::purify(utf8);
-                                return utf8;
                             }
+                            return utf8;
                         }
-                        while (++next != tail) // find BEL
+                        else if (c == 'R') // Reset linux console palette.
                         {
-                            auto cmd = *next;
-                            if (cmd == 0x07) break;
-                        }
-                        if (next == tail)
-                        {
-                            utf8 = { head, prev }; // exclude final ESC
+                            utf::purify(utf8);
                             return utf8;
                         }
                     }
-                    else if (c == '\\') // test ST: ESC \ ...
+                    while (++next != tail) // Looking for BEL.
                     {
-                        if (++next == tail)
-                        {
-                            return utf8;
-                        }
+                        auto cmd = *next;
+                        if (cmd == 0x07) break;
                     }
-                    // test Message/Command:
-                    else if (c == 'P'  // DCS ESC P ... BEL
-                          || c == 'X'  // SOS ESC X ... BEL
-                          || c == '^'  // PM  ESC ^ ... BEL
-                          || c == '_') // APC ESC _ ... BEL
+                    if (next == tail)
                     {
-                        while (++next != tail) // find BEL
-                        {
-                            auto cmd = *next;
-                            if (cmd == 0x07) break;
-                        }
-                        if (next == tail)
-                        {
-                            utf8 = { head, prev }; // exclude final ESC
-                            return utf8;
-                        }
+                        utf8 = { head, prev }; // Exclude incomplete sequence.
+                        return utf8;
                     }
-                    // test Esc + byte + rest:
-                    else if (c == '('  // G0SET VT100  ESC ( c  94 characters
-                          || c == ')'  // G1SET VT100  ESC ) c  94 characters
-                          || c == '*'  // G2SET VT220  ESC * c  94 characters
-                          || c == '+'  // G3SET VT220  ESC + c  94 characters
-                          || c == '-'  // G1SET VT300  ESC - c  96 characters
-                          || c == '.'  // G2SET VT300  ESC . c  96 characters
-                          || c == '/'  // G3SET VT300  ESC / c  96 characters
-                          || c == ' '  // ESC sp F, ESC sp G, ESC sp L, ESC sp M, ESC sp N
-                          || c == '#'  // ESC # 3, ESC # 4, ESC # 5, ESC # 6, ESC # 8
-                          || c == '%') // ESC % @, ESC % G  G: Select UTF-8, @: Select default
+                }
+                // Check ESC + byte + rest:
+                else if (c == '('  // G0SET VT100  ESC ( c  94 characters
+                      || c == ')'  // G1SET VT100  ESC ) c  94 characters
+                      || c == '*'  // G2SET VT220  ESC * c  94 characters
+                      || c == '+'  // G3SET VT220  ESC + c  94 characters
+                      || c == '-'  // G1SET VT300  ESC - c  96 characters
+                      || c == '.'  // G2SET VT300  ESC . c  96 characters
+                      || c == '/'  // G3SET VT300  ESC / c  96 characters
+                      || c == ' '  // ESC sp F, ESC sp G, ESC sp L, ESC sp M, ESC sp N
+                      || c == '#'  // ESC # 3, ESC # 4, ESC # 5, ESC # 6, ESC # 8
+                      || c == '%') // ESC % @, ESC % G  G: Select UTF-8, @: Select default
+                {
+                    if (++next == tail)
                     {
-                        if (++next == tail)
-                        {
-                            utf8 = { head, prev }; // exclude final ESC
-                        }
+                        utf8 = { head, prev }; // Exclude incomplete sequence.
+                        return utf8;
                     }
-                    // test Esc + byte: ESC 7 8 D E H M ...
-                    else if (c == '6'  // Back index, DECBI
-                          || c == '7'  // Save    cursor coor and rendition state
-                          || c == '8'  // Restore cursor coor and rendition state
-                          || c == '9'  // Forward index, DECFI
-                          || c == 'c'  // Full reset, RIS
-                          || c == 'D'  // Cursor down
-                          || c == 'M'  // Cursor up
-                          || c == 'E'  // Next line
-                          || c == 'F'  // Set cursor to lower leftmost coor
-                          || c == 'H'  // Tabstop set
-                          || c == '='  // Application keypad
-                          || c == '>'  // Normal      keypad
-                          || c == 'l'  // Memory lock
-                          || c == 'm'  // Memory unlock
-                          || c == 'n'  // LS2
-                          || c == 'o'  // LS3
-                          || c == '~'  // LS1R
-                          || c == '}'  // LS2R
-                          || c == '|'  // LS3R
-                          || c == 'O'  // SS3
-                          || c == 'N'  // SS2
-                          || c == 'V'  // SPA
-                          || c == 'W'  // EPA
-                          || c == 'Z') // Return ID
-                    {
-                        if (++next == tail)
-                        {
-                            return utf8;
-                        }
-                    }
+                }
+                // Check ESC + byte: ESC 7 8 D E H M ...
+                else if (c == '6'  // Back index, DECBI
+                      || c == '7'  // Save    cursor coor and rendition state
+                      || c == '8'  // Restore cursor coor and rendition state
+                      || c == '9'  // Forward index, DECFI
+                      || c == 'c'  // Full reset, RIS
+                      || c == 'D'  // Cursor down
+                      || c == 'M'  // Cursor up
+                      || c == 'E'  // Next line
+                      || c == 'F'  // Set cursor to lower leftmost coor
+                      || c == 'H'  // Tabstop set
+                      || c == '='  // Application keypad
+                      || c == '>'  // Normal      keypad
+                      || c == 'l'  // Memory lock
+                      || c == 'm'  // Memory unlock
+                      || c == 'n'  // LS2
+                      || c == 'o'  // LS3
+                      || c == '~'  // LS1R
+                      || c == '}'  // LS2R
+                      || c == '|'  // LS3R
+                      || c == 'O'  // SS3
+                      || c == 'N'  // SS2
+                      || c == 'V'  // SPA
+                      || c == 'W'  // EPA
+                      || c == 'Z') // Return ID
+                {
+                    if (++next == tail) return utf8;
                 }
                 else
                 {
-                    utf8 = { head, prev }; // exclude final ESC
+                    utf8 = { head, prev }; // Exclude incomplete sequence.
                     return utf8;
                 }
+            }
+            else if (prev == head) // Single ESC.
+            {
+                return qiew{}; // Single ESC doesn't mean anything - wait next chars.
+            }
+            else if (*(prev - 1) != 0x1b) // Skip the case with double ESC at the end. Return "\e\e".
+            {
+                auto test = qiew{ head, prev };
+                return ansi::purify(test);
             }
         }
 

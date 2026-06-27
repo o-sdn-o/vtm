@@ -271,9 +271,10 @@ int main(int argc, char* argv[])
     }
     else if (whoami == type::lsfont)
     {
-        auto config = xml::settings{};
-        app::shared::load::settings(config, cliopt, faux);
-        auto gui_config = app::shared::get_gui_config(config);
+        auto& indexer = ui::tui_domain();
+        auto xmldoc = app::shared::load::settings(cliopt);
+        indexer.config.document.swap(xmldoc);
+        auto gui_config = app::shared::get_gui_config(indexer.config);
         if (auto fcache = gui::fonts{ gui_config.font_names, gui_config.font_axes, gui_config.cell_height })
         {
             fcache.log_fonts(detail);
@@ -281,9 +282,8 @@ int main(int argc, char* argv[])
     }
     else if (whoami == type::config)
     {
-        auto config = xml::settings{};
-        app::shared::load::settings(config, cliopt, true);
-        log(prompt::resultant_settings, "\n", config);
+        auto xmldoc = app::shared::load::settings(cliopt, true);
+        log(prompt::resultant_settings, "\n", xmldoc.page.show());
     }
     else if (whoami == type::logmon)
     {
@@ -368,7 +368,10 @@ int main(int argc, char* argv[])
     else if (whoami == type::runapp)
     {
         auto& indexer = ui::tui_domain();
-        app::shared::load::settings(indexer.config, cliopt);
+        {
+            auto xmldoc = app::shared::load::settings(cliopt);
+            indexer.config.document.swap(xmldoc);
+        }
         auto shadow = params;
         auto apname = view{};
         auto aptype = text{};
@@ -407,8 +410,7 @@ int main(int argc, char* argv[])
     }
     else
     {
-        auto config = xml::settings{};
-        app::shared::load::settings(config, cliopt);
+        auto xmldoc = app::shared::load::settings(cliopt);
         auto client = os::ipc::socket::open<os::role::client, faux>(prefix, denied);
         auto signal = ptr::shared<os::fire>(os::process::started(prefix)); // Signaling that the server is ready for incoming connections.
 
@@ -417,7 +419,7 @@ int main(int argc, char* argv[])
         else if (whoami == type::client && !client)
         {
             log("%%New desktop session for [%userid%]", prompt::main, userid.first);
-            auto [success, successor] = os::process::fork(system, prefix, config.settings::utf8());
+            auto [success, successor] = os::process::fork(system, prefix, xmldoc.page.utf8()); // Mutexes and other platform objects cannot survive a fork.
             if (successor)
             {
                 whoami = type::server;
@@ -435,23 +437,27 @@ int main(int argc, char* argv[])
             signal.reset();
             if (client || (client = os::ipc::socket::open<os::role::client>(prefix, denied)))
             {
+                auto& indexer = ui::tui_domain();
+                indexer.config.document.swap(xmldoc);
                 auto userinit = directvt::binary::init{};
                 auto env = os::env::add();
                 auto cwd = os::env::cwd();
                 auto cmd = script;
                 auto win = os::dtvt::gridsz;
-                auto gui = app::shared::get_gui_config(config);
+                auto gui = app::shared::get_gui_config(indexer.config);
                 userinit.send(client, userid.first, os::dtvt::vtmode, env, cwd, cmd, win);
-                ui::tui_domain().config.swap(config);
                 app::shared::splice(client, gui);
                 return 0;
             }
-            else return failed(denied ? code::noaccess : code::noserver);
+            else
+            {
+                return failed(denied ? code::noaccess : code::noserver);
+            }
         }
 
         if (whoami == type::daemon)
         {
-            auto [success, successor] = os::process::fork(system, prefix, config.settings::utf8(), script);
+            auto [success, successor] = os::process::fork(system, prefix, xmldoc.page.utf8(), script); // Mutexes and other platform objects cannot survive a fork.
             if (successor)
             {
                 whoami = type::server;
@@ -466,6 +472,9 @@ int main(int argc, char* argv[])
                 else return failed(code::nodaemon);
             }
         }
+
+        auto& indexer = ui::tui_domain();
+        indexer.config.document.swap(xmldoc);
 
         os::ipc::prefix = prefix;
         auto server = os::ipc::socket::open<os::role::server>(prefix, denied);
@@ -485,8 +494,6 @@ int main(int argc, char* argv[])
         signal.reset();
 
         namespace e2 = ui::e2;
-        auto& indexer = ui::tui_domain();
-        indexer.config.swap(config);
         auto lock = indexer.unique_lock();
         auto desktop = app::vtm::hall::ctor(server);
         desktop->autorun();

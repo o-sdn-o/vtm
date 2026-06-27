@@ -442,12 +442,14 @@ namespace netxs::ui
             prot  encod; // m_tracking: Mouse encoding protocol.
             mode  state; // m_tracking: Mouse reporting mode.
             si32  smode; // m_tracking: Selection mode state backup.
+            bool  pixel; // m_tracking: Pixel mode reporting.
 
             m_tracking(term& owner)
                 : owner{ owner                   },
                   encod{ prot::x11               },
                   state{ mode::none              },
-                  smode{ owner.defcfg.def_selmod }
+                  smode{ owner.defcfg.def_selmod },
+                  pixel{ faux                    }
             { }
 
             operator bool () { return state != mode::none; }
@@ -472,7 +474,7 @@ namespace netxs::ui
                     if (gear_test.second == 0)
                     {
                         if (pro::focus::test(owner, gear)) pro::focus::off(owner.This(), gear.id);
-                        else                               pro::focus::set(owner.This(), gear.id, gear.meta(hids::anyCtrl) ? solo::off : solo::on);
+                        else                               pro::focus::set(owner.This(), gear.id, gear.meta(mods::anyCtrl) ? solo::off : solo::on);
                     }
                     owner.base::riseup(tier::preview, e2::form::layout::expose);
                 }
@@ -482,12 +484,13 @@ namespace netxs::ui
                 state = (mode)(state | m);
                 if (state && !token.size()) // Do not subscribe if it is already subscribed.
                 {
+                    pixel = faux; // Reset pixel-mode.
                     owner.on(tier::mouserelease, input::key::MouseLeave, token, [&](hids& gear)
                     {
                         if (owner.selmod == mime::disabled)
                         {
                             coord = { fp32nan, fp32nan }; // Forward a mouse halt event.
-                            owner.ipccon.mouse(gear, true, coord, encod, state);
+                            owner.ipccon.mouse(gear, true, coord, encod, state, pixel);
                         }
                     });
                     owner.bell::dup_handler(tier::general, input::events::halt.id, token.back());
@@ -505,10 +508,10 @@ namespace netxs::ui
                             auto c = gear.m_sys.coordxy;
                             c.y -= console.get_basis();
                             auto moved = coord((state & mode::over) ? c
-                                                                    : std::clamp(c, fp2d{ dot_00 }, fp2d{ console.panel - dot_11 }));
+                                                                    : std::clamp(c, fp2d{ dot_00 }, fp2d{ console.panel } - 0.001f));
                             if (gear.m_sav.changed != gear.m_sys.changed)
                             {
-                                owner.ipccon.mouse(gear, moved, coord, encod, state);
+                                owner.ipccon.mouse(gear, moved, coord, encod, state, pixel);
                             }
                             gear.dismiss();
                         }
@@ -534,6 +537,10 @@ namespace netxs::ui
                     }
                 }
             }
+            auto check_state(mode m)
+            {
+                return (state & m) == m;
+            }
             void setmode(prot p) { encod = p; }
         };
 
@@ -556,6 +563,7 @@ namespace netxs::ui
                     auto focused = !!count;
                     if (std::exchange(state, focused) != state)
                     {
+                        owner.set_deadkey_preview();
                         owner.ipccon.focus(focused, encod);
                         if (!focused && owner.ime_on) owner.ime_on = faux;
                     }
@@ -630,13 +638,13 @@ namespace netxs::ui
                 {
                     case 0:
                     default:
+                        // 61: VT Level 1 conformance (must be first)
                         //  4: Sixel graphics
-                        // 61: VT Level 1 conformance
                         // 22: Color text
                         // 28: Rectangular area operations
                         // 52: Clipboard operations
                         // 10060: VT2D
-                        queue.add("\x1b[?4;61;22;28;52;10060c");
+                        queue.add("\x1b[?61;4;22;28;52;10060c");
                         break;
                 }
                 owner.answer(queue);
@@ -651,7 +659,10 @@ namespace netxs::ui
                 static constexpr auto set_winsz = si32{ 8  }; // Set window size in characters.
                 static constexpr auto maximize  = si32{ 9  }; // Toggle maximize/restore.
                 static constexpr auto full_scrn = si32{ 10 }; // Toggle fullscreen mode.
-                static constexpr auto view_size = si32{ 18 }; // Report viewport size.
+                static constexpr auto area_size = si32{ 14 }; // Report text area size in pixels.
+                static constexpr auto scrn_size = si32{ 15 }; // Report screen size in pixels.
+                static constexpr auto cell_size = si32{ 16 }; // Report char cell size in pixels.
+                static constexpr auto view_size = si32{ 18 }; // Report viewport size in cells.
                 static constexpr auto get_label = si32{ 20 }; // Report icon   label. (Report as OSC L label ST).
                 static constexpr auto get_title = si32{ 21 }; // Report window title. (Report as OSC l title ST).
                 static constexpr auto put_stack = si32{ 22 }; // Push icon label and window title to   stack.
@@ -671,8 +682,11 @@ namespace netxs::ui
                         break;
                     }
                     case view_size: owner.answer(queue.win_sz(owner.target->panel)); break;
-                    case get_label: owner.answer(queue.osc(ansi::osc_label_report, "")); break; // Return an empty string for security reasons
-                    case get_title: owner.answer(queue.osc(ansi::osc_title_report, "")); break;
+                    case area_size: owner.answer(queue.area_sz_px(ansi::cellsz * owner.target->panel)); break;
+                    case scrn_size: owner.answer(queue.scrn_sz_px(ansi::cellsz * owner.target->panel)); break;
+                    case cell_size: owner.answer(queue.cell_sz_px(ansi::cellsz)); break;
+                    case get_label: owner.answer(queue.osc(ansi::osc_label_report, "", "\x1b\\")); break; // Return an empty string for security reasons
+                    case get_title: owner.answer(queue.osc(ansi::osc_title_report, "", "\x1b\\")); break;
                     case put_stack:
                     {
                         auto push = [&](auto const& property)
@@ -720,7 +734,7 @@ namespace netxs::ui
         // term: Terminal 16/256 color palette tracking functionality.
         struct c_tracking
         {
-            using func = utf::unordered_map<text, std::function<void(view)>>;
+            using func = utf::unordered_map<text, std::function<void(view, view)>>;
 
             enum class type { invalid, rgbcolor, request };
 
@@ -837,7 +851,7 @@ namespace netxs::ui
                 : owner{ owner }
             {
                 reset();
-                procs[ansi::osc_linux_color] = [&](view data) // ESC ] P Nrrggbb
+                procs[ansi::osc_linux_color] = [&](view data, view /*st*/) // ESC ] P Nrrggbb
                 {
                     if (data.length() >= 7)
                     {
@@ -854,7 +868,7 @@ namespace netxs::ui
                                  + 0xFF000000;
                     }
                 };
-                procs[ansi::osc_reset_color] = [&](view data) // ESC ] 104 ; 0; 1;...
+                procs[ansi::osc_reset_color] = [&](view data, view /*st*/) // ESC ] 104 ; 0; 1;...
                 {
                     auto empty = true;
                     while (data.length())
@@ -876,7 +890,7 @@ namespace netxs::ui
                     }
                     if (empty) reset();
                 };
-                procs[ansi::osc_set_palette] = [&](view data) // ESC ] 4 ; 0;rgb:00/00/00;1;rgb:00/00/00;...
+                procs[ansi::osc_set_palette] = [&](view data, view st) // ESC ] 4 ; 0;rgb:0000/0000/0000;1;rgb:0000/0000/0000;...
                 {
                     auto fails = faux;
                     auto full_data = data;
@@ -895,9 +909,12 @@ namespace netxs::ui
                             else if (t == type::request)
                             {
                                 auto c = argb{ color[n] };
-                                reply.osc(ansi::osc_set_palette, utf::fprint("%n%;rgb:%r%/%g%/%b%", n, utf::to_hex(c.chan.r),
-                                                                                                       utf::to_hex(c.chan.g),
-                                                                                                       utf::to_hex(c.chan.b)));
+                                auto r_hex = utf::to_hex(c.chan.r);
+                                auto g_hex = utf::to_hex(c.chan.g);
+                                auto b_hex = utf::to_hex(c.chan.b);
+                                reply.osc(ansi::osc_set_palette, utf::fprint("%n%;rgb:%r%%r%/%g%%g%/%b%%b%", n, r_hex, r_hex,
+                                                                                                                g_hex, g_hex,
+                                                                                                                b_hex, b_hex), st);
                             }
                             else if (t == type::rgbcolor)
                             {
@@ -917,20 +934,23 @@ namespace netxs::ui
                     }
                     if (fails) notsupported(ansi::osc_set_palette, full_data, data);
                 };
-                procs[ansi::osc_linux_reset] = [&](view /*data*/) // ESC ] R
+                procs[ansi::osc_linux_reset] = [&](view /*data*/, view /*st*/) // ESC ] R
                 {
                     reset();
                 };
-                procs[ansi::osc_set_fgcolor] = [&](view data) // ESC ] 10 ;rgb:00/00/00
+                procs[ansi::osc_set_fgcolor] = [&](view data, view st) // ESC ] 10 ;rgb:0000/0000/0000
                 {
                     auto full_data = data;
                     auto [t, r] = record(data);
                     if (t == type::request)
                     {
                         auto c = owner.defclr.fgc();
-                        reply.osc(ansi::osc_set_fgcolor, utf::fprint("rgb:%r%/%g%/%b%", utf::to_hex(c.chan.r),
-                                                                                        utf::to_hex(c.chan.g),
-                                                                                        utf::to_hex(c.chan.b)));
+                        auto r_hex = utf::to_hex(c.chan.r);
+                        auto g_hex = utf::to_hex(c.chan.g);
+                        auto b_hex = utf::to_hex(c.chan.b);
+                        reply.osc(ansi::osc_set_fgcolor, utf::fprint("rgb:%r%%r%/%g%%g%/%b%%b%", r_hex, r_hex,
+                                                                                                 g_hex, g_hex,
+                                                                                                 b_hex, b_hex), st);
                     }
                     else if (t == type::rgbcolor)
                     {
@@ -940,16 +960,19 @@ namespace netxs::ui
                     }
                     else notsupported(ansi::osc_set_fgcolor, full_data, data);
                 };
-                procs[ansi::osc_set_bgcolor] = [&](view data) // ESC ] 11 ;rgb:00/00/00
+                procs[ansi::osc_set_bgcolor] = [&](view data, view st) // ESC ] 11 ;rgb:0000/0000/0000  // yazi expects four chars per channel.
                 {
                     auto full_data = data;
                     auto [t, r] = record(data);
                     if (t == type::request)
                     {
                         auto c = owner.defclr.bgc();
-                        reply.osc(ansi::osc_set_bgcolor, utf::fprint("rgb:%r%/%g%/%b%", utf::to_hex(c.chan.r),
-                                                                                        utf::to_hex(c.chan.g),
-                                                                                        utf::to_hex(c.chan.b)));
+                        auto r_hex = utf::to_hex(c.chan.r);
+                        auto g_hex = utf::to_hex(c.chan.g);
+                        auto b_hex = utf::to_hex(c.chan.b);
+                        reply.osc(ansi::osc_set_bgcolor, utf::fprint("rgb:%r%%r%/%g%%g%/%b%%b%", r_hex, r_hex,
+                                                                                                 g_hex, g_hex,
+                                                                                                 b_hex, b_hex), st);
                     }
                     else if (t == type::rgbcolor)
                     {
@@ -959,16 +982,19 @@ namespace netxs::ui
                     }
                     else notsupported(ansi::osc_set_bgcolor, full_data, data);
                 };
-                procs[ansi::osc_caret_color] = [&](view data) // ESC ] 12 ;rgb:00/00/00
+                procs[ansi::osc_caret_color] = [&](view data, view st) // ESC ] 12 ;rgb:0000/0000/0000
                 {
                     auto full_data = data;
                     auto [t, r] = record(data);
                     if (t == type::request)
                     {
                         auto c = owner.caret.bgc();
-                        reply.osc(ansi::osc_caret_color, utf::fprint("rgb:%r%/%g%/%b%", utf::to_hex(c.chan.r),
-                                                                                        utf::to_hex(c.chan.g),
-                                                                                        utf::to_hex(c.chan.b)));
+                        auto r_hex = utf::to_hex(c.chan.r);
+                        auto g_hex = utf::to_hex(c.chan.g);
+                        auto b_hex = utf::to_hex(c.chan.b);
+                        reply.osc(ansi::osc_caret_color, utf::fprint("rgb:%r%%r%/%g%%g%/%b%%b%", r_hex, r_hex,
+                                                                                                 g_hex, g_hex,
+                                                                                                 b_hex, b_hex), st);
                     }
                     else if (t == type::rgbcolor)
                     {
@@ -976,17 +1002,17 @@ namespace netxs::ui
                     }
                     else notsupported(ansi::osc_caret_color, full_data, data);
                 };
-                procs[ansi::osc_reset_crclr] = [&](view /*data*/)
+                procs[ansi::osc_reset_crclr] = [&](view /*data*/, view /*st*/)
                 {
                     owner.caret.color(owner.defcfg.def_curclr);
                 };
-                procs[ansi::osc_reset_fgclr] = [&](view /*data*/)
+                procs[ansi::osc_reset_fgclr] = [&](view /*data*/, view /*st*/)
                 {
                     auto new_fgc = owner.defclr;
                     new_fgc.fgc(owner.defcfg.def_fcolor);
                     owner.set_color(new_fgc);
                 };
-                procs[ansi::osc_reset_bgclr] = [&](view /*data*/ )
+                procs[ansi::osc_reset_bgclr] = [&](view /*data*/, view /*st*/)
                 {
                     auto new_bgc = owner.defclr;
                     new_bgc.bgc(owner.defcfg.def_bcolor);
@@ -994,16 +1020,22 @@ namespace netxs::ui
                 };
             }
 
-            void set(text const& property, view data)
+            void set(text const& property, qiew data)
             {
                 auto proc = procs.find(property);
                 if (proc != procs.end())
                 {
-                    proc->second(data);
-                    if (reply.size())
+                    auto copy = data;
+                    if (auto crop = owner.read_until_st_or_giveup(data))
                     {
-                        owner.answer(reply);
-                        reply.clear();
+                        auto st_esc = copy[crop.size()] == '\x1b';
+                        auto st = copy.substr(crop.size(), st_esc + 1);
+                        proc->second(crop, st);
+                        if (reply.size())
+                        {
+                            owner.answer(reply);
+                            reply.clear();
+                        }
                     }
                 }
                 else log("%%Not supported: OSC=%property% DATA=%data% HEX=%hexdata%", prompt::term, property, data, utf::buffer_to_hex(data));
@@ -1048,7 +1080,7 @@ namespace netxs::ui
         struct bufferbase
             : public ansi::parser
         {
-            static void set_autocr(bool autocr)
+            static void _set_autocr(bool autocr)
             {
                 #define V []([[maybe_unused]] auto& q, [[maybe_unused]] auto& p)
                 auto& parser = ansi::get_parser<bufferbase>();
@@ -1108,8 +1140,8 @@ namespace netxs::ui
                 vt.csier.table[csi_sgr][sgr_fg_rgb   ] = V{ p->owner.ctrack.fgc(q);               };
                 vt.csier.table[csi_sgr][sgr_bg_rgb   ] = V{ p->owner.ctrack.bgc(q);               };
 
-                vt.csier.table[csi_cuu] = V{ p-> up(q(1)); }; // CSI n A  (CUU)
-                vt.csier.table[csi_cud] = V{ p-> dn(q(1)); }; // CSI n B  (CUD)
+                vt.csier.table[csi_cuu] = V{ p->_up(q(1)); }; // CSI n A  (CUU)
+                vt.csier.table[csi_cud] = V{ p->_dn(q(1)); }; // CSI n B  (CUD)
                 vt.csier.table[csi_cuf] = V{ p->cuf(q(1)); }; // CSI n C  (CUF)  Negative values can wrap to the prev line.
                 vt.csier.table[csi_cub] = V{ p->cub(q(1)); }; // CSI n D  (CUB)  Negative values can wrap to the next line.
 
@@ -1180,12 +1212,23 @@ namespace netxs::ui
                 vt.intro[ctrl::ff ] = V{ p-> lf(q.pop_all(ctrl::ff )); }; // FF same as LF
                 vt.intro[ctrl::cr ] = V{ p-> cr();                     }; // CR
 
-                vt.csier.table_quest[dec_set] = V{ p->owner.decset(q); };
-                vt.csier.table_quest[dec_rst] = V{ p->owner.decrst(q); };
-                vt.csier.table_quest_dollarsn[csi_ccc] = V{ p->owner.decrqm(q); }; // DECRQM: CSI ? mode $ p
+                vt.csier.table_quest[dec_set] = V{ p->owner.decset(q); }; // CSI ? mode h
+                vt.csier.table_quest[dec_rst] = V{ p->owner.decrst(q); }; // CSI ? mode l
+                vt.csier.table_dollarsn[      csi_ccc] = V{ p->owner.decrqm(q, faux); }; // DECRQM: CSI   mode $ p  ANSI Standard
+                vt.csier.table_quest_dollarsn[csi_ccc] = V{ p->owner.decrqm(q, true); }; // DECRQM: CSI ? mode $ p  DEC Private
                 vt.csier.table[dec_set] = V{ p->owner.modset(q); }; // ESC [ n h
                 vt.csier.table[dec_rst] = V{ p->owner.modrst(q); }; // ESC [ n l
 
+                vt.csier.table_quest[csi_qst_kkp] = V{ p->owner.kkp(q); }; // CSI ? ... u  KKP.
+                //vt.csier.table_gt[   csi__gt_rxv] = V{ p->owner.request_xt_version(q); }; // CSI > q  RequestXtVersion. ?Is it safe?
+
+                vt.csier.table_equals[esc_eq_da2] = V{ p->owner.da2(q); }; // CSI = c  DA2 request.
+
+                vt.csier.table_quest[csi_qst_smg] = V{ p->owner.xtsmgraphics(q); }; // CSI ? Pi; Pa; Pv S  XTSMGRAPHICS:
+                                                                                    //   Pi=1  Request number of color registers.        Pv=n  A number of color registers.
+                                                                                    //   Pi=2  Request Sixel graphics geometry (pixels). Pv=width;height  Two integers for graphics geometry.
+                                                                                    //   Pi=3  Request ReGIS graphics geometry (pixels). Not supported.
+                                                                                    //   Pa=   1: Request current. 2: Reset to default. 3: Set to value in Pv. 4: Request the maximum allowed value.
                 vt.oscer[osc_label_title] = V{ p->owner.wtrack.set(osc_label_title, q); };
                 vt.oscer[osc_label      ] = V{ p->owner.wtrack.set(osc_label,       q); };
                 vt.oscer[osc_title      ] = V{ p->owner.wtrack.set(osc_title,       q); };
@@ -1280,6 +1323,8 @@ namespace netxs::ui
 
             hook image_update_token;
 
+            bool autocr;
+
             bufferbase(term& master)
                 : owner{ master },
                   panel{ dot_11 },
@@ -1297,16 +1342,20 @@ namespace netxs::ui
                   grant{ faux   },
                   uirev{ faux   },
                   uifwd{ faux   },
-                  alive{ 0      }
+                  alive{ 0      },
+                  autocr{faux   }
             {
                 parser::style = ansi::def_style;
                 owner.LISTEN(tier::release, e2::data::image::remove, image_indexes, image_update_token)
                 {
-                    wipe_image_index(image_indexes);
+                    auto images = cell::images(); // Lock.
+                    for (auto image_index : image_indexes) images.touched.set(image_index);
+                    wipe_image_index(images.touched);
+                    for (auto image_index : image_indexes) images.touched.reset(image_index);
                 };
             }
 
-            virtual void wipe_image_index(std::vector<ui16>& indexes) = 0;
+            virtual void wipe_image_index(std::bitset<65536> const& touched_indexes) = 0;
             // bufferbase: Make a viewport screen copy.
             virtual void do_viewport_copy(face& dest) = 0;
 
@@ -1400,7 +1449,7 @@ namespace netxs::ui
             }
 
             //virtual text get_current_line()                                             = 0;
-            virtual cell cell_under_cursor()                                            = 0;
+            virtual cell cell_under_cursor(twod offset)                                 = 0;
             virtual void scroll_region(si32 top, si32 end, si32 n, bool use_scrollback) = 0;
             virtual bool recalc_pads(dent& oversz)                                      = 0;
             virtual void output(face& canvas)                                           = 0;
@@ -1739,7 +1788,7 @@ namespace netxs::ui
                     }
                     else
                     {
-                        log("%%Unsupported APC payload: %payload%. Please use the '%lua%' prefix for the payload.", prompt::term, ansi::hi(utf::debase437(script_body)), ansi::apc_prefix_lua);
+                        log("%%Unsupported APC payload: %payload%.", prompt::term, ansi::hi(utf::debase437(script_body)));
                     }
                 }
             }
@@ -1785,14 +1834,30 @@ namespace netxs::ui
                                                                                    { utf::make_hex_view<"Ms"    >(), utf::make_hex_view<"\x1b]52;%p1%s;%p2%s\a">() }, // OSC52.
                                                                                    { utf::make_hex_view<"Smulx" >(), utf::make_hex_view<"\x1b[4:%p1%dm">() }, // Styled underlines cap request.
                                                                                    { utf::make_hex_view<"Setulc">(), utf::make_hex_view<"\x1b[58:2::%p1%d:%p2%d:%p3%dm">() } }); // Colored underlines cap request.
-                            reply << "\x1bP+r"; // DCS
                             auto count = 0;
                             utf::split(data, ';', [&](auto termcap)
                             {
-                                for (auto& cap : caps) if (termcap == cap.name) reply << (count++ ? ";" : "") << cap.name << "=" << cap.reply;
+                                auto found = faux;
+                                for (auto& cap : caps)
+                                {
+                                    if (termcap == cap.name)
+                                    {
+                                        reply << (count++ ? ";" : "\x1bP1+r") << cap.name << "=" << cap.reply;
+                                        found = true;
+                                    }
+                                }
+                                if (!found)
+                                {
+                                    auto err_reply = flux{};
+                                    err_reply << "\x1bP0+r" << termcap << "=" << ST_str;
+                                    owner.write(err_reply.str());
+                                }
                             });
-                            reply << ST_str;
-                            owner.write(reply.str());
+                            if (count > 0)
+                            {
+                                reply << ST_str;
+                                owner.write(reply.str());
+                            }
                         }
                     }
                     else if (data.starts_with(DECRQSS_str))
@@ -1860,7 +1925,7 @@ namespace netxs::ui
                         }
                         else
                         {
-                            reply << "0$r"; // Unsupported.
+                            reply << "0$r" << data; // Unsupported.
                         }
                         reply << ST_str;
                         owner.write(reply.str());
@@ -1903,6 +1968,7 @@ namespace netxs::ui
                 decom = faux;
                 rtb();
                 selection_cancel();
+                owner.sixels.clear_state();
             }
             // tabstops index, tablen = 3, vector<pair<fwd_idx, rev_idx>>:
             // coor.x      -2-1 0 1 2 3 4 5 6 7 8 9
@@ -2363,6 +2429,22 @@ namespace netxs::ui
                 auto x = q(1);
                 cup({ x, y });
             }
+            // bufferbase: Move cursor up without scrolling.
+    virtual void _up(si32 n)
+            {
+                parser::flush_data();
+                if (n == 0) n = 1;
+                auto new_coord_y = coord.y - n;
+                coord.y = std::clamp(new_coord_y, 0, panel.y - 1);
+            }
+            // bufferbase: Move cursor down without scrolling.
+    virtual void _dn(si32 n)
+            {
+                parser::flush_data();
+                if (n == 0) n = 1;
+                auto new_coord_y = coord.y + n;
+                coord.y = std::clamp(new_coord_y, 0, panel.y - 1);
+            }
             // bufferbase: Move cursor up.
     virtual void up(si32 n)
             {
@@ -2729,12 +2811,17 @@ namespace netxs::ui
                 if (argb::is_indexed_color(parser::brush.fgc())) color.fgc(parser::brush.fgc());
                 return color;
             }
+            // bufferbase: Set auto CRLF.
+            void set_autocr(auto new_autocr)
+            {
+                autocr = new_autocr;
+                bufferbase::_set_autocr(autocr);
+            }
         };
 
         template<class P = netxs::noop>
         void sixel_run_accounting(std::span<cell> cell_run, P fx = {})
         {
-            auto removed_image_indexes = e2::data::image::remove.param();
             if constexpr (debugmode) log("line with sixels");
             for (auto& c : cell_run)
             {
@@ -2749,20 +2836,16 @@ namespace netxs::ui
                         if (count == 0)
                         {
                             log("Sixel image ref accounting is broken");
-                            removed_image_indexes.push_back(index);
+                            remove_sixel_image(index);
                             continue;
                         }
                     }
                     if (--count == 0)
                     {
                         if constexpr (debugmode) log("\trelease sixel image index: ", index);
-                        removed_image_indexes.push_back(index);
+                        remove_sixel_image(index);
                     }
                 }
-            }
-            if (removed_image_indexes.size())
-            {
-                remove_sixel_images(removed_image_indexes);
             }
         }
         void _sixel_inc_accounting(cell const& src)
@@ -2771,7 +2854,7 @@ namespace netxs::ui
             if (auto index = src.get_image_index())
             {
                 auto& count = image_ref_count[index];
-                if constexpr (debugmode) log("\tinc image index: %% cell_count: %% -> %%", index, count, count + 1);
+                //if constexpr (debugmode) log("\tinc image index: %% cell_count: %% -> %%", index, count, count + 1);
                 count++;
             }
         }
@@ -2783,22 +2866,22 @@ namespace netxs::ui
                 auto& count = image_ref_count[index];
                 if constexpr (debugmode)
                 {
-                    log("\tdec image index: %% cell_count: %% -> %%", index, count, count - 1);
+                    //log("\tdec image index: %% cell_count: %% -> %%", index, count, count - 1);
                     if (count == 0)
                     {
                         log("%%Sixel image ref accounting is broken. Image index=%%", prompt::term, index);
-                        remove_sixel_image(index, true);
+                        remove_sixel_image(index);
                     }
                     else if (--count == 0)
                     {
                         log("\trelease sixel image index: ", index);
-                        remove_sixel_image(index, true);
+                        remove_sixel_image(index);
                     }
                 }
                 else if (--count == 0)
                 {
                     if constexpr (debugmode) log("\trelease sixel image index: ", index);
-                    remove_sixel_image(index, true);
+                    remove_sixel_image(index);
                 }
             }
         }
@@ -3208,9 +3291,9 @@ namespace netxs::ui
                 dest.plot(canvas, cell::shaders::full);
             }
             // alt_screen: Return cell state under cursor.
-            cell cell_under_cursor() override
+            cell cell_under_cursor(twod offset) override
             {
-                auto coor = std::clamp(coord, dot_00, panel - dot_11);
+                auto coor = std::clamp(coord + offset, dot_00, panel - dot_11);
                 auto c = canvas[coor];
                 return c;
             }
@@ -3435,9 +3518,9 @@ namespace netxs::ui
                 return bufferbase::selection_cancel();
             }
             // alt_screen: Remove all references to the image from the scrollback.
-            void wipe_image_index(std::vector<ui16>& removed_image_indexes) override
+            void wipe_image_index(std::bitset<65536> const& touched_images) override
             {
-                cell::remove_image_bits(canvas, removed_image_indexes);
+                cell::remove_image_bits(canvas, touched_images);
             }
         };
 
@@ -4635,6 +4718,8 @@ namespace netxs::ui
             void   dl(si32  n) override { bufferbase::  dl(n); sync_coord(); }
             void   up(si32  n) override { bufferbase::  up(n); sync_coord(); }
             void   dn(si32  n) override { bufferbase::  dn(n); sync_coord(); }
+            void  _up(si32  n) override { bufferbase:: _up(n); sync_coord(); }
+            void  _dn(si32  n) override { bufferbase:: _dn(n); sync_coord(); }
             void   lf(si32  n) override { bufferbase::  lf(n); sync_coord(); }
             void  _lf(si32  n) override { bufferbase:: _lf(n); sync_coord(); }
             void  _ri(si32  n) override { bufferbase:: _ri(n); sync_coord(); }
@@ -6129,11 +6214,18 @@ namespace netxs::ui
                 assert(test_coord());
             }
             // scroll_buf: Return cell state under cursor.
-            cell cell_under_cursor() override
+            cell cell_under_cursor(twod offset) override
             {
-                auto& curln = batch.current();
-                auto c = curln.length() && batch.caret <= curln.length() ? curln.at(std::clamp(batch.caret, 0, curln.length() - 1)) : parser::brush;
-                return c;
+                if (offset.y != 0) // Don't look around because of performance issues.
+                {
+                    return parser::brush;
+                }
+                else
+                {
+                    auto& curln = batch.current();
+                    auto c = curln.length() && batch.caret <= curln.length() ? curln.at(std::clamp(batch.caret + offset.x, 0, curln.length() - 1)) : parser::brush;
+                    return c;
+                }
             }
             // scroll_buf: Clear scrollback keeping current line.
             void clear_scrollback() override
@@ -7597,16 +7689,16 @@ namespace netxs::ui
                 return forward_is_available | reverse_is_available;
             }
             // scroll_buf: Remove all references to the image from the scrollback.
-            void wipe_image_index(std::vector<ui16>& removed_image_indexes) override
+            void wipe_image_index(std::bitset<65536> const& touched_images) override
             {
-                cell::remove_image_bits(upbox, removed_image_indexes);
-                cell::remove_image_bits(dnbox, removed_image_indexes);
+                cell::remove_image_bits(upbox, touched_images);
+                cell::remove_image_bits(dnbox, touched_images);
                 #if defined(_WIN32)
                     auto wipe_batch = [&](auto policy) // Try to parallelize.
                     {
                         std::for_each(policy, batch.begin(), batch.end(), [&](auto& l)
                         {
-                            cell::remove_image_bits(l, removed_image_indexes);
+                            cell::remove_image_bits(l, touched_images);
                         });
                     };
                     batch.length() > 500000 ? wipe_batch(std::execution::par)
@@ -7614,30 +7706,45 @@ namespace netxs::ui
                 #else
                     std::for_each(batch.begin(), batch.end(), [&](auto& l)
                     {
-                        cell::remove_image_bits(l, removed_image_indexes);
+                        cell::remove_image_bits(l, touched_images);
                     });
                 #endif
             }
         };
 
-        void remove_sixel_image(ui16 removed_image_index, bool notify)
+        void remove_sixel_image(ui16 removed_image_index)
         {
-            auto images = cell::images(); // Lock.
             image_sixel_count--;
-            images.remove(removed_image_index);
-            if (notify)
-            {
-                base::signal(tier::general, e2::data::image::remove, { removed_image_index }); // Signal to outside.
-            }
+            image_removed_indexes.push_back(removed_image_index);
         }
-        void remove_sixel_images(std::vector<ui16>& removed_image_indexes)
+        void remove_sixel_images(bool lazy)
         {
-            auto images = cell::images(); // Lock.
-            for (auto index : removed_image_indexes)
+            //base::enqueue_global([removed_image_indexes = image_removed_indexes](auto& global_gear)
+            if (lazy)
             {
-                images.remove(index);
+                auto& global_gear = bell::indexer.get_global_gear();
+                auto& oneshot = global_gear.base::field(hook{});
+                global_gear.LISTEN(tier::general, e2::timer::tick, timestamp, oneshot, (removed_image_indexes = image_removed_indexes))
+                {
+                    auto images = cell::images(); // Lock.
+                    for (auto index : removed_image_indexes)
+                    {
+                        images.remove(index);
+                    }
+                    global_gear.base::signal(tier::general, e2::data::image::remove, removed_image_indexes); // Signal to outside.
+                    global_gear.base::unfield(oneshot); // Unsubscribe.
+                };
             }
-            base::signal(tier::general, e2::data::image::remove, removed_image_indexes); // Signal to outside.
+            else
+            {
+                auto images = cell::images(); // Lock.
+                for (auto index : image_removed_indexes)
+                {
+                    images.remove(index);
+                }
+                base::signal(tier::general, e2::data::image::remove, image_removed_indexes); // Signal to outside.
+            }
+            image_removed_indexes.clear();
         }
         // term: Take data until ST. Don't touch q if sequence is broken.
         static qiew read_until_st_or_giveup(qiew& q)
@@ -7645,7 +7752,7 @@ namespace netxs::ui
             auto data = utf::take_binary_front<true>(q, std::tuple{ "\x1b\\"sv, "\a"sv });
             if (data)
             {
-                        if (q.starts_with("\a")    ) q.remove_prefix(1); // Pop '\a'.
+                     if (q.starts_with("\a")    ) q.remove_prefix(1); // Pop '\a'.
                 else if (q.starts_with("\x1b\\")) q.remove_prefix(2); // Pop '\e\\'.
             }
             return data;
@@ -7671,43 +7778,124 @@ namespace netxs::ui
             }
             return param_count;
         }
-        static text rgba_to_svg(std::vector<argb>& pixels, twod& size, bool implicit_size, argb transparent_pixel)
+        static text rgba_to_svg(std::vector<argb>& pixels, rect& area, bool implicit_size, argb transparent_pixel, bool transparent)
         {
-            if (implicit_size) // Trim transparent borders (get minimal non transparent area - dropping right+bottom).
+            if (implicit_size || transparent_pixel == argb{}) // Trim transparent borders (get minimal non transparent area).
             {
                 auto data = std::span{ pixels };
-                auto w = size.x;
+                auto w = area.size.x;
                 auto get_row = [&](si32 y){ return data.subspan(y * w, w); };
                 auto is_visible = [=](argb p){ return p != transparent_pixel; };
-                auto crop = netxs::get_minimal_area_if<rect>(size, get_row, is_visible);
-                auto raster = netxs::raster{ data, rect{ dot_00, size }};
-                crop.size += std::exchange(crop.coor, dot_00); // Keep Top+Left.
+                auto raster = netxs::raster{ data, rect{ dot_00, area.size }};
+                auto crop = netxs::get_minimal_area_if<rect>(area.size, get_row, is_visible);
                 auto iter = pixels.begin();
-                netxs::onrect(raster, crop, [&](auto p){ *iter++ = p; }); // Copy crop to the pixels itself (dropping Right+Bottom borders).
-                size = crop.size;
-                pixels.resize(size.x * size.y);
+                if (implicit_size && transparent_pixel != argb{}) // Keep Top+Left (drop Right+Bottom fields).
+                {
+                    crop.size += std::exchange(crop.coor, dot_00);
+                }
+                netxs::onrect(raster, crop, [&](auto p){ *iter++ = p; }); // Copy crop to the pixels itself.
+                area = crop;
+                pixels.resize(area.size.x * area.size.y);
             }
-            for (auto& c : pixels) c.swap_rb();
+            if constexpr (debugmode)
+            {
+                auto raster = netxs::raster{ std::span{ pixels }, rect{ dot_00, area.size }};
+                netxs::onrect(raster, rect{ dot_00, dot_33 }, [](auto& p){ p = argb{ tint::purered }; });
+                netxs::onrect(raster, rect{ area.size - dot_33, dot_33 }, [](auto& p){ p = argb{ tint::pureblue }; });
+            }
             auto file_data = std::vector<byte>{};
-            file_data.reserve(size.x * size.y);
+            file_data.reserve(pixels.size());
             auto append_fx = [](void* context, void* data, si32 len)
             {
                 auto vec = (std::vector<byte>*)context;
                 vec->insert(vec->end(), (byte*)data, (byte*)data + len);
             };
-            auto jpeg_quality = skin::globals().jpeg_quality;
-            ::stbi_write_jpg_to_func(append_fx, &file_data, size.x, size.y, 4, (byte*)pixels.data(), jpeg_quality);
-            //::stbi_write_png_to_func(append_fx, &png_data, size.x, size.y, 4, (byte*)pixels.data(), size.x * 4);
-            auto b64 = utf::base64(view{ (char*)file_data.data(), file_data.size() });
-            return utf::fprint("<svg width='%%' height='%%'><image width='%%' height='%%' href='data:image/jpg;base64,%%' /></svg>", size.x, size.y, size.x, size.y, b64);
+            if constexpr (faux) // Hybrid Image Encoding: PNG vs JPEG+Mask Test.
+            {
+                auto pngs_data = std::vector<byte>{};
+                auto jpeg_data = std::vector<byte>{};
+                pngs_data.reserve(pixels.size());
+                jpeg_data.reserve(pixels.size());
+                auto transparency_mask = std::vector<byte>{};
+                transparency_mask.resize(pixels.size());
+                auto transparency_mask_iter = transparency_mask.begin();
+                auto pixels2 = pixels;
+                for (auto& c : pixels2)
+                {
+                    *transparency_mask_iter++ = c.chan.a ? 0xFF : 0x00;
+                    c.swap_rb();
+                }
+                auto mask_data = std::vector<byte>{};
+                auto jpeg_quality = skin::globals().jpeg_quality;
+                ::stbi_write_jpg_to_func(append_fx, &jpeg_data, area.size.x, area.size.y, 4, (byte*)pixels2.data(), jpeg_quality);
+                ::stbi_write_png_to_func(append_fx, &pngs_data, area.size.x, area.size.y, 4, (byte*)pixels2.data(), area.size.x * 4);
+                ::stbi_write_png_to_func(append_fx, &mask_data, area.size.x, area.size.y, 1, transparency_mask.data(), area.size.x);
+                log("Image %%: PNG_size=%% bytes  JPG+MASK_size=%% bytes (%% + %%)", area.size, pngs_data.size(), jpeg_data.size() + mask_data.size(), jpeg_data.size(), mask_data.size());
+            }
+            if (pixels.size() <= 4096) // Use lossless PNG for small images (<=64x64).
+            {
+                for (auto& c : pixels) c.swap_rb();
+                ::stbi_write_png_to_func(append_fx, &file_data, area.size.x, area.size.y, 4, (byte*)pixels.data(), area.size.x * 4);
+                auto b64_main = utf::base64(view{ (char*)file_data.data(), file_data.size() });
+                auto svg = utf::fprint("<svg width='%%' height='%%'><image width='%%' height='%%' href='data:image/png;base64,%%' /></svg>", area.size.x, area.size.y, area.size.x, area.size.y, b64_main);
+                return svg;
+            }
+            else if (transparent) // Large transparent image (JPEG + 1-bit alpha mask).
+            {
+                auto transparency_mask = std::vector<byte>{};
+                transparency_mask.resize(pixels.size());
+                auto transparency_mask_iter = transparency_mask.begin();
+                for (auto& c : pixels)
+                {
+                    *transparency_mask_iter++ = c.chan.a ? 0xFF : 0x00;
+                    c.swap_rb();
+                }
+                auto mask_data = std::vector<byte>{};
+                auto jpeg_quality = skin::globals().jpeg_quality;
+                ::stbi_write_jpg_to_func(append_fx, &file_data, area.size.x, area.size.y, 4, (byte*)pixels.data(), jpeg_quality);
+                ::stbi_write_png_to_func(append_fx, &mask_data, area.size.x, area.size.y, 1, transparency_mask.data(), area.size.x);
+
+                auto b64_jpeg = utf::base64(view{ (char*)file_data.data(), file_data.size() });
+                auto b64_mask = utf::base64(view{ (char*)mask_data.data(), mask_data.size() });
+                auto svg = utf::fprint("<svg width='%%' height='%%'>"
+                                            "<defs>"
+                                                "<mask id='m'>"
+                                                    "<image width='%%' height='%%' href='data:image/png;base64,%%' />"
+                                                "</mask>"
+                                            "</defs>"
+                                            "<image width='%%' height='%%' href='data:image/jpg;base64,%%' mask='url(#m)' />"
+                                        "</svg>",
+                                        area.size.x, area.size.y,
+                                        area.size.x, area.size.y, b64_mask,
+                                        area.size.x, area.size.y, b64_jpeg);
+                return svg;
+            }
+            else // Large non-transparent image.
+            {
+                for (auto& c : pixels) c.swap_rb();
+                auto jpeg_quality = skin::globals().jpeg_quality;
+                ::stbi_write_jpg_to_func(append_fx, &file_data, area.size.x, area.size.y, 4, (byte*)pixels.data(), jpeg_quality);
+                auto b64_main = utf::base64(view{ (char*)file_data.data(), file_data.size() });
+                auto svg = utf::fprint("<svg width='%%' height='%%'><image width='%%' height='%%' href='data:image/jpg;base64,%%' /></svg>", area.size.x, area.size.y, area.size.x, area.size.y, b64_main);
+                return svg;
+            }
         }
         struct sixel_t
         {
-            static constexpr auto cellsz = twod{ 10, 20 };
+            static constexpr auto def_image_limits = twod{ 4096, 4096 };
+            static constexpr auto def_palette_size = 2048;
+            static constexpr auto max_palette_size = 65536;
 
-            term& owner;
+            term&             owner;
             std::vector<argb> bitmap; // Sixel bitmap buffer.
+            std::vector<argb> palette = std::vector<argb>(sixel_t::def_palette_size); // Sixel palette.
+            twod              cur_image_limits = def_image_limits;
 
+            void clear_state()
+            {
+                palette.assign(sixel_t::def_palette_size, 0);
+                cur_image_limits = def_image_limits;
+            }
             void parse(qiew& q, auto& params)
             {
                 auto ok = faux;
@@ -7721,28 +7909,26 @@ namespace netxs::ui
                 //                                        -1  0  1  2  3  4  5  6  7  8  9
                 static constexpr auto ar = std::to_array({ 2, 5, 5, 3, 2, 2, 2, 2, 1, 1, 1 });
                 auto aspect_ratio = ar[std::clamp(params[0] + 1, 0, (si32)ar.size() - 1)];
-                // transparency:
+                // transparent:
                 // omitted     opaque  0's are filled with current background color
                 // 0 or 2      opaque
                 // 1           transparent   0's are kept intact
                 //                                        -1  0  1  2
                 static constexpr auto tr = std::to_array({ 0, 0, 1, 0 });
-                auto transparency = tr[std::clamp(params[1] + 1, 0, (si32)tr.size() - 1)];
+                auto transparent = tr[std::clamp(params[1] + 1, 0, (si32)tr.size() - 1)];
                 // hz_grid_size: We ignore it.
                 // n
                 //auto hz_grid_size = params[2];
-                auto size = owner.target->panel * cellsz;
+                auto size = owner.target->panel * ansi::cellsz;
                 auto implicit_size = true;
                 //size.y *= aspect_ratio; // Don't scale max image size.
                 auto stride = size.x * aspect_ratio * 6;
-                auto palette = owner.ctrack.color; // Copy terminal palette.
                 auto cur_map = 0;
                 auto cur_clr = owner.target->get_effective_brush();
                 auto cur_fgc = cur_clr.fgc();
                 auto cur_bgc = cur_clr.bgc();
                 if (cur_clr.inv()) std::swap(cur_fgc, cur_bgc);
-                transparency ? bitmap.assign(size.x * size.y, argb{})
-                             : bitmap.assign(size.x * size.y, cur_bgc);
+                bitmap.clear();
                 auto coor = 0;
                 auto maxx = size.x;
                 auto maxy = size.x * size.y;
@@ -7770,6 +7956,7 @@ namespace netxs::ui
                         }
                     }
                 };
+                auto background_clr = transparent ? argb{} : cur_bgc;
                 //auto hash = ui64{};
                 auto head = q.begin();
                 auto tail = q.end();
@@ -7778,18 +7965,20 @@ namespace netxs::ui
                     auto c = *head++;
                     if (c >= '?' && c <= '~') // Print sixels.
                     {
+                        if (bitmap.empty()) [[unlikely]] { bitmap.assign(size.x * size.y, background_clr); }
                         c -= '?';
                         print_sixel(c);
                     }
                     else if (c == '!') // Repeat sixels.
                     {
+                        if (bitmap.empty()) [[unlikely]] { bitmap.assign(size.x * size.y, background_clr); }
                         auto q2 = qiew{ head, tail };
                         if (auto v = utf::to_int(q2))
                         {
                             if (q2)
                             {
                                 auto c2 = q2.front();
-                                if (c2 >= '?' && c <= '~')
+                                if (c2 >= '?' && c2 <= '~')
                                 {
                                     q2.pop_front();
                                     c2 -= '?';
@@ -7805,7 +7994,7 @@ namespace netxs::ui
                     {
                         auto q2 = qiew{ head, tail };
                         auto v = utf::to_int(q2);
-                        cur_map = v ? std::clamp(v.value(), 0, 255) : 0;
+                        cur_map = v ? std::clamp(v.value(), 0, (si32)palette.size() - 1) : 0;
                         if (q2 && q2.front() == ';') // Update palette.
                         {
                             q2.pop_front();
@@ -7826,6 +8015,11 @@ namespace netxs::ui
                         head = q2.begin();
                         tail = q2.end();
                         cur_fgc = palette[cur_map];
+                        if (cur_fgc == argb{})
+                        {
+                            if (cur_map < (si32)owner.ctrack.color.size()) cur_fgc = owner.ctrack.color[cur_map];
+                            else                                           cur_fgc = owner.ctrack.color[0];
+                        }
                     }
                     else if (c == '"') // Raster Attributes (reset canvas).  "dy;dx;width;height  aspect_ratio=round(dy/dx).
                     {
@@ -7834,19 +8028,18 @@ namespace netxs::ui
                         term::read_params(q2, params2);
                         head = q2.begin();
                         tail = q2.end();
-                        auto dy = std::max(1, std::abs(params2[0]));
-                        auto dx = std::max(1, std::abs(params2[1]));
-                        aspect_ratio = (si32)std::round((fp32)dy / dx);
-                        size.x = std::clamp(std::abs(params2[2]), 1, std::max(4096, owner.target->panel.x * cellsz.x));
-                        size.y = std::clamp(std::abs(params2[3]) * aspect_ratio, 1, std::max(4096, owner.target->panel.y * cellsz.y));
+                        auto dxy = std::max(dot_11, twod{ params2[1], params2[0] });
+                        aspect_ratio = std::max(1, (si32)std::round((fp32)dxy.y / dxy.x));
+                        auto params_xy = twod{ params2[2], params2[3] * aspect_ratio };
+                        size = std::clamp(std::abs(params_xy), dot_11, std::max(cur_image_limits, owner.target->panel * ansi::cellsz));
                         implicit_size = faux;
                         coor = 0;
                         line = 0;
                         maxx = size.x;
                         maxy = size.x * size.y;
                         stride = size.x * aspect_ratio * 6;
-                        transparency ? bitmap.assign(size.x * size.y, argb{})
-                                     : bitmap.assign(size.x * size.y, cur_bgc);
+                        bitmap.assign(size.x * size.y, background_clr);
+                        if constexpr (debugmode) log("image size=%% tranparent=%% decsdm=%%", size, transparent ? "1" : "0", owner.decsdm);
                     }
                     else if (c == '-') // New Line.
                     {
@@ -7860,7 +8053,7 @@ namespace netxs::ui
                     }
                     else if ((c == '\x1b' && head != tail && *head == '\\' && (head++, true)) || c == '\a') // ST
                     {
-                        if constexpr (debugmode) log("sixel complete");
+                        //if constexpr (debugmode) log("sixel complete");
                         ok = true;
                         break;
                     }
@@ -7883,28 +8076,44 @@ namespace netxs::ui
                 q = qiew{ head, tail };
                 if (ok) // Show image.
                 {
-                    auto doc_str = term::rgba_to_svg(bitmap, size, implicit_size, transparency ? argb{} : cur_bgc);
-                    auto fp_wh = fp2d{ size } / fp2d{ cellsz };
-                    auto wh = twod{ std::ceil(fp_wh) };
-                    auto c = owner.target->cell_under_cursor();
+                    auto area = rect{ dot_00, size };
+                    auto doc_str = term::rgba_to_svg(bitmap, area, implicit_size, background_clr, transparent);
+                    auto fp_rc = fp2d{ area.coor } / fp2d{ ansi::cellsz }; // Position in cell grid.
+                    auto fp_wh = fp2d{ area.size } / fp2d{ ansi::cellsz }; // Size in cells.
+                    auto rc = twod{ std::floor(fp_rc) };
+                    auto fp_xy = fp_rc - rc; // Offset inside the cell grid.
+                    auto wh = twod{ std::ceil(fp_wh + fp_xy - 0.0001f/*compensate fp32 jitter*/) };
+                    auto gb_attr_x  = fp_xy.x;
+                    auto gb_attr_y  = fp_xy.y;
+                    auto gb_attr_w  = fp_wh.x;
+                    auto gb_attr_h  = fp_wh.y;
+                    auto gb_attr_u  = 0.f;
+                    auto gb_attr_v  = 0.f;
+                    auto gb_attr_uw = 1.f;
+                    auto gb_attr_vh = 1.f;
                     auto images = cell::images(); // Lock.
+                    auto c = owner.target->cell_under_cursor(rc);
                     if (auto index = c.get_image_index()) // Check the image id at the current cursor position.
                     {
-                        auto xy = c.get_image_cr();
-                        auto WH = c.get_image_WH();
-                        if (xy == dot_11 && wh == WH) // Update existing image.
+                        auto prev_cr = c.get_image_cr();
+                        auto prev_WH = c.get_image_WH();
+                        if (prev_cr == dot_11 && prev_WH == wh) // Update existing image.
                         {
                             if (auto image_ptr = images.map[index])
                             {
                                 auto& image = *image_ptr;
                                 image.reset_changes();
                                 image.check_and_set_document(doc_str);
-                                if (image.document_changed)
+                                image.check_and_set_attr(imagens::gb::x , gb_attr_x);
+                                image.check_and_set_attr(imagens::gb::y , gb_attr_y);
+                                image.check_and_set_attr(imagens::gb::w , gb_attr_w);
+                                image.check_and_set_attr(imagens::gb::h , gb_attr_h);
+                                if (image.document_changed || image.changed_gb_attrs)
                                 {
-                                    image.stamp += 2;
+                                    image.stamp += 1;
                                     owner.base::signal(tier::general, e2::data::image::update, index);
-                                    owner.print_sixel_image(image, wh);
                                 }
+                                owner.print_sixel_image(image, rc, wh, transparent);
                                 return;
                             }
                             else
@@ -7922,12 +8131,17 @@ namespace netxs::ui
                         image.id = "Sixel_"; // Set id="Sixel_FFFF".
                         utf::to_hex(image_index, image.id);
                         image.index = image_index;
-                        image.gb_attrs[imagens::gb::w  ] = (fp32)wh.x;
-                        image.gb_attrs[imagens::gb::h  ] = (fp32)wh.y;
-                        image.gb_attrs[imagens::gb::uw ] = (fp32)wh.x / fp_wh.x; // Keep paddings.
-                        image.gb_attrs[imagens::gb::vh ] = (fp32)wh.y / fp_wh.y; //
+                        image.gb_attrs[imagens::gb::x  ] = gb_attr_x;
+                        image.gb_attrs[imagens::gb::y  ] = gb_attr_y;
+                        image.gb_attrs[imagens::gb::u  ] = gb_attr_u;
+                        image.gb_attrs[imagens::gb::v  ] = gb_attr_v;
+                        image.gb_attrs[imagens::gb::w  ] = gb_attr_w;
+                        image.gb_attrs[imagens::gb::h  ] = gb_attr_h;
+                        image.gb_attrs[imagens::gb::uw ] = gb_attr_uw;
+                        image.gb_attrs[imagens::gb::vh ] = gb_attr_vh;
                         image.gb_attrs[imagens::gb::fit] = scale_mode::stretch;
-                        owner.print_sixel_image(image, wh);
+                        owner.image_sixel_count++;
+                        owner.print_sixel_image(image, rc, wh, transparent);
                         // All sixel images will be removed on undock.
                         //owner.sixel_cache[image.id] = image_ptr;
                     }
@@ -7936,7 +8150,6 @@ namespace netxs::ui
                     //todo store the payload in byts instead of text
                     //todo implement own bitmap (raw category) rasterization (with interpolation)
                     //todo hashing by sixel_string
-                    //todo implement scrollback lifetime management for sixel images (destroy it in line dtor if reference_count[id] == 0)
                 }
                 else
                 {
@@ -7971,7 +8184,7 @@ namespace netxs::ui
         bool       decsdm; // term: Sixel Display Mode. On sixel output: faux: Enable scroll (+move text cursor to the beginning of next line after image). True: Disable scroll (+don't move text cursor and trim sixel image by the scrolling region).
         bool       bpmode; // term: Bracketed paste mode.
         bool       unsync; // term: Viewport is out of sync.
-        bool       invert; // term: Inverted rendering (DECSCNM).
+        bool       invbit; // term: Inverted rendering (DECSCNM).
         bool       styled; // term: Line style reporting.
         bool       io_log; // term: Stdio logging.
         bool       selalt; // term: Selection form (rectangular/linear).
@@ -7998,6 +8211,8 @@ namespace netxs::ui
         face                                                  image_buffer; // term: Image temporary buffer.
         std::array<ui64, 65536>                               image_ref_count{}; // term: Each slot contains a count of the number of cells containing an id corresponding to the slot index.
         ui16                                                  image_sixel_count{}; // term: Registered sixel image count;
+        std::vector<ui16>                                     image_removed_indexes; // term: Image indexes to be deleted.
+        text       deadkey_preview; // term: Deadkey preview.
         sixel_t    sixels; // term: Sixel mode state.
         vtty       ipccon; // term: IPC connector. Should be destroyed first.
 
@@ -8008,6 +8223,8 @@ namespace netxs::ui
             auto size = block.size();
             auto head = block.begin();
             auto tail = block.end();
+            scrollback.chx0(scrollback.coord.x + block.coor().x);
+            scrollback._lf(block.coor().y);
             auto coor = scrollback.coord;
             auto step = size.x;
             if (trim_by_viewport)
@@ -8077,15 +8294,16 @@ namespace netxs::ui
             scrollback.cup2(save);
         }
         // term: Print sixel image to the scrollback.
-        void print_sixel_image(imagens::image& image, twod wh)
+        void print_sixel_image(imagens::image& image, twod rc, twod wh, bool transparent)
         {
-            auto brush = cell{ target->parser::brush }
-                .txt(" ", 1, 1, 1, 1)
-                .set_image_index(image.index)
-                .set_image_stamp(image.stamp)
-                .set_image_sixel(true)
-                .set_image_WH(wh.x, wh.y)
-                .set_image_ontop(faux);
+            auto brush = transparent ? cell{ target->parser::brush }.txt("").fgc(argb::transparent).bgc(argb::transparent)
+                                     : cell{ target->parser::brush }.txt(" ", 1, 1, 1, 1);
+            brush.set_image_index(image.index)
+                 .set_image_stamp(image.stamp)
+                 .set_image_sixel(true)
+                 .set_image_WH(wh.x, wh.y)
+                 .set_image_ontop(transparent);
+            image_buffer.move(rc);
             image_buffer.core::size<true>(wh, brush);
             auto head = image_buffer.begin();
             for (auto row = 1; row <= wh.y; row++)
@@ -8096,10 +8314,9 @@ namespace netxs::ui
                 }
             }
             auto cells_expected = image_buffer.volume();
-            image_sixel_count++;
             auto& count = image_ref_count[image.index];
             count += cells_expected; // Insure against premature image removal.
-            if constexpr (debugmode) log("print1: image index: %% cell_count: %%", image.index, count);
+            if constexpr (debugmode) log("print1: image index: %% cell_count: %% image_sixel_count=%%", image.index, count, image_sixel_count);
             auto cursor_coor = target->coord;
             auto saved_n_top = target->n_top;
             auto saved_n_end = target->n_end;
@@ -8107,12 +8324,12 @@ namespace netxs::ui
             {
                 target->set_scroll_region(0, 0);
             }
-            draw_block(image_buffer, cell::shaders::full, true, decsdm);
+            draw_block(image_buffer, cell::shaders::fuse, true, decsdm);
             count -= cells_expected;
-            if constexpr (debugmode) log("print2: image index: %% cell_count: %%", image.index, count);
-            if (image_ref_count[image.index] == 0) // A case where nothing is printed.
+            if constexpr (debugmode) log("print2: image index: %% cell_count: %% image_sixel_count=%%", image.index, count, image_sixel_count);
+            if (count == 0) // A case where nothing is printed.
             {
-                remove_sixel_image(image.index, faux);
+                remove_sixel_image(image.index);
             }
             if (decsdm) // Restore cursor position and scrolling region.
             {
@@ -8215,7 +8432,7 @@ namespace netxs::ui
             //todo implement
             log("%%Dynamic Glyph Redefinition is not implemented yet", prompt::term);
         }
-        // term: Embedded Object Protocol.
+        // term: AnyPlex Protocol.
         void osc_images(qiew attrs_str)
         {
             auto& console = *target;
@@ -8384,7 +8601,7 @@ namespace netxs::ui
             auto images = cell::images(); // Lock.
             if (unregister)
             {
-                if (id_str == "*") // Remove all registered images.
+                if (id_str == "*") // Remove all registered anyplex images.
                 {
                     auto removed_image_indexes = e2::data::image::remove.param();
                     removed_image_indexes.reserve(image_cache.size());
@@ -8519,11 +8736,6 @@ namespace netxs::ui
 
                 auto gc_str = gc_opt ? gc_opt.value() : " ";
                 auto brush = cell{ target->parser::brush }.txt(gc_str, 1, 1, 1, 1); //todo make the character geometry configurable
-                auto print_image_buffer = [&]
-                {
-                    gc_str ? draw_block(image_buffer, cell::shaders::full)
-                           : draw_block(image_buffer, cell::shaders::image);
-                };
                 //todo revise cache logic (it is just a test)
                 auto different_image_attrs = [&]
                 {
@@ -8563,7 +8775,7 @@ namespace netxs::ui
                         image.layers = std::move(layers);
                     }
                     image.reset_changes();
-                    image.check_and_set_attr(gb_attrs, updated_layers);
+                    image.check_and_set_attrs(gb_attrs, updated_layers);
                     if (image.changed_gb_attrs || image.document_changed)
                     {
                         image.stamp += 2;
@@ -8581,7 +8793,7 @@ namespace netxs::ui
                     image.rasters_reset(); // Request to re-rasterize.
                     image.reset_changes();
                     image.check_and_set_document(doc_str, sub_id_str);
-                    image.check_and_set_attr(gb_attrs, updated_layers);
+                    image.check_and_set_attrs(gb_attrs, updated_layers);
                     if (image.changed_gb_attrs || image.document_changed)
                     {
                         image.stamp += 2;
@@ -8627,7 +8839,6 @@ namespace netxs::ui
                             (*head++).set_image_cr(c, r);
                         }
                     }
-                    print_image_buffer();
                 }
                 else if (!r) // Print vertical slice.
                 {
@@ -8638,7 +8849,6 @@ namespace netxs::ui
                     {
                         (*head++).set_image_cr(c, r);
                     }
-                    print_image_buffer();
                 }
                 else if (!c) // Print horizontal slice.
                 {
@@ -8649,15 +8859,141 @@ namespace netxs::ui
                     {
                         (*head++).set_image_cr(c, r);
                     }
-                    print_image_buffer();
                 }
                 else // if (x && y) // Print a single cell.
                 {
                     auto size = twod{ 1, 1 };
                     image_buffer.core::size<true>(size, brush);
-                    print_image_buffer();
+                }
+                image_buffer.move(dot_00);
+                gc_str ? draw_block(image_buffer, cell::shaders::full)
+                       : draw_block(image_buffer, cell::shaders::image);
+            }
+        }
+        // term: DA2 request.
+        void da2(fifo& /*q*/)
+        {
+            target->parser::flush();
+            escbuf.add("\x1bP!|00000000\x1b\\"); // VT-compatible, no extensions.
+            answer(escbuf);
+        }
+        // term: KKP request.
+        void kkp(fifo& /*q*/)
+        {
+            target->parser::flush();
+            //escbuf.add("\x1b[?0u"); // Not supported yet.
+            //answer(escbuf);
+            if (io_log) log("%%KKP not supported", prompt::term);
+        }
+        // term: XTSMGRAPHICS request.
+        void xtsmgraphics(fifo& q)
+        {
+            target->parser::flush();
+            // CSI ? Pi; Pa; Pv S  XTSMGRAPHICS:
+            //   Pi=1  Request number of color registers.        Pv=n  A number of color registers.
+            //   Pi=2  Request Sixel graphics geometry (pixels). Pv=width;height  Two integers for graphics geometry.
+            //   Pi=3  Request ReGIS graphics geometry (pixels). Not supported.
+            //   Pa=   1: Request current. 2: Reset to default. 3: Set to value in Pv. 4: Request the maximum allowed value.
+            auto pi1 = q(0);
+            auto pa1 = q(0);
+            auto pv1 = q(-1);
+            auto pv2 = q(-1);
+            auto ps_reply = 0;
+            auto pv_reply = ansi::escx{};
+            if (pa1 == 1) // Request current.
+            {
+                if (pi1 == 1) // Number of registers.
+                {
+                    pv_reply.add(sixels.palette.size());
+                }
+                else if (pi1 == 2) // Sixel geometry. Image size limits in pixels.
+                {
+                    auto img_size_limits = std::max(sixels.cur_image_limits, target->panel * ansi::cellsz);
+                    pv_reply.add(img_size_limits.x, ';', img_size_limits.y);
+                }
+                else //if (pi1 == 3) // Regis geometry. Not supported.
+                {
+                    ps_reply = 1; // Bad pi.
                 }
             }
+            else if (pa1 == 2) // Reset to default.
+            {
+                if (pi1 == 1) // Number of registers.
+                {
+                    sixels.palette.resize(sixel_t::def_palette_size);
+                    pv_reply.add(sixel_t::def_palette_size);
+                }
+                else if (pi1 == 2) // Sixel geometry.
+                {
+                    sixels.cur_image_limits = sixels.def_image_limits;
+                    auto img_size_limits = sixels.cur_image_limits;
+                    pv_reply.add(img_size_limits.x, ';', img_size_limits.y);
+                }
+                else //if (pi1 == 3) // Regis geometry. Not supported.
+                {
+                    ps_reply = 1; // Bad pi.
+                }
+            }
+            else if (pa1 == 3) // Set to value in Pv.
+            {
+                if (pi1 == 1) // Number of registers.
+                {
+                    if (pv1 > 0 && pv1 <= sixel_t::max_palette_size)
+                    {
+                        sixels.palette.resize(pv1);
+                        pv_reply.add(pv1);
+                    }
+                    else
+                    {
+                        ps_reply = 3;
+                    }
+                }
+                else if (pi1 == 2) // Sixel geometry.
+                {
+                    auto sz = twod{ pv1, pv2 };
+                    auto img_size_limits = std::max(sixels.def_image_limits, target->panel * ansi::cellsz);
+                    if (sz > dot_00 && sz <= img_size_limits)
+                    {
+                        sixels.cur_image_limits = sz;
+                        pv_reply.add(sz.x, ';', sz.y);
+                    }
+                    else
+                    {
+                        ps_reply = 3; // Failed.
+                    }
+                }
+                else //if (pi1 == 3) // Regis geometry. Not supported.
+                {
+                    ps_reply = 1; // Bad pi.
+                }
+            }
+            else if (pa1 == 4) // Request the maximum allowed value.
+            {
+                if (pi1 == 1) // Number of registers.
+                {
+                    pv_reply.add(sixel_t::max_palette_size);
+                }
+                else if (pi1 == 2) // Sixel geometry.
+                {
+                    auto img_size_limits = std::max(sixels.def_image_limits, target->panel * ansi::cellsz);
+                    pv_reply.add(img_size_limits.x, ';', img_size_limits.y);
+                }
+                else //if (pi1 == 3) // Regis geometry. Not supported.
+                {
+                    ps_reply = 1; // Bad pi.
+                }
+            }
+            else
+            {
+                ps_reply = 2; // Bad pa.
+            }
+            if (ps_reply != 0 && pv1 >= 0)
+            {
+                pv_reply.add(pv1);
+                if (pv2 >= 0) pv_reply.add(';', pv2);
+            }
+            escbuf.add("\x1b[?", pi1, ';', ps_reply, ';', pv_reply, 'S');
+            answer(escbuf);
         }
         // term: Forward clipboard data (OSC 52).
         void forward_clipboard(view data)
@@ -8699,7 +9035,7 @@ namespace netxs::ui
             altbuf.clear_all();
             reset_pockets();
             target = &normal;
-            invert = faux;
+            invbit = faux;
             decckm = faux;
             bpmode = faux;
             altscr = defcfg.def_alt_on;
@@ -8722,7 +9058,7 @@ namespace netxs::ui
                     }
                     break;
                 case 5:    // Inverted rendering (DECSCNM).
-                    invert = true;
+                    invbit = true;
                     break;
                 case 6:    // Enable origin mode (DECOM).
                     target->decom = true;
@@ -8779,8 +9115,8 @@ namespace netxs::ui
                 case 1015: // Enable URXVT mouse reporting protocol.
                     log(prompt::term, "CSI ? 1015 h  URXVT mouse reporting protocol is not supported");
                     break;
-                case 1016: // Enable Pixels (subcell) mouse mode.
-                    log(prompt::term, "CSI ? 1016 h  Pixels (subcell) mouse mode is not supported");
+                case 1016: // Enable mouse reporting in pixels.
+                    mtrack.pixel = true;
                     break;
                 case 1048: // Save cursor pos.
                     target->scp();
@@ -8845,7 +9181,7 @@ namespace netxs::ui
                     }
                     break;
                 case 5:    // Inverted rendering (DECSCNM).
-                    invert = faux;
+                    invbit = faux;
                     break;
                 case 6:    // Disable origin mode (DECOM).
                     target->decom = faux;
@@ -8903,8 +9239,8 @@ namespace netxs::ui
                 case 1015: // Disable URXVT mouse reporting protocol.
                     log(prompt::term, "CSI ? 1015 l  URXVT mouse reporting protocol is not supported");
                     break;
-                case 1016: // Disable Pixels (subcell) mouse mode.
-                    log(prompt::term, "CSI ? 1016 l  Pixels (subcell) mouse mode is not supported");
+                case 1016: // Disable mouse reporting in pixels.
+                    mtrack.pixel = faux;
                     break;
                 case 1048: // Restore cursor pos.
                     target->rcp();
@@ -8975,47 +9311,108 @@ namespace netxs::ui
             target->parser::flush();
             while (auto next = q(0)) _modrst(next);
         }
-        // term: Reset terminal parameters.
-        void _decrqm(si32 n)
+        // term: Request terminal parameters.
+        void _decrqm(si32 n, bool is_dec_private)
         {
-            switch (n)
+            // Reply Format: CSI ? Pn ; Ps $ y  (CSI Pn ; Ps $ y)
+            // The Status Codes (Ps):
+            // - 0: Not recognized / Unsupported. The terminal doesn't implement this mode.
+            // - 1: Set / Enabled.                The mode is active right now.
+            // - 2: Reset / Disabled.             The mode is supported but currently turned off.
+            // - 3: Permanently Set.              The mode is always active and cannot be turned off.
+            // - 4: Permanently Reset.            The mode is always disabled and cannot be turned on.
+            auto reply = "0"s;
+            if (!is_dec_private)
             {
-                case 69: // Left/Right Margins.
-                    escbuf.add("\x1b[?69;0$y"); // We don't support this mode.
-                    break;
-                case 1000: // Mouse reporting.
-                case 1002: //
-                case 1003: //
-                case 1006: //
-                case 1004: // Focus reporting.
-                case 1049: // Altbuf.
-                case 2004: // Bracketed Paste.
-                    escbuf.add("\x1b[?").add(n).add(";1$y");
-                    break;
-                case 2026: // Synchronized Updates.
-                    escbuf.add("\x1b[?2026;0$y"); // We do not support this mode (we rely on lazy rendering).
-                    break;
-                case 2027: // Unicode Core (support grapheme clusters).
-                    // Reply: \e[?2027;2$y  Turned off.
-                    // Reply: \e[?2027;1$y  Terminal supports/active.
-                    // Reply: \e[?2027;0$y  Unknown.
-                    escbuf.add("\x1b[?2027;1$y");
-                    break;
-                case 2031: // Extended Keys / Kitty Keyboard Protocol.
-                    escbuf.add("\x1b[?2031;0$y");
-                    break;
-                case 2048: // Graphics. //todo
-                    escbuf.add("");
-                    break;
-                default:
-                    break;
+                switch (n)
+                {
+                    case 4:  // Insert/Replace Mode (IRM).
+                        reply = insmod ? "1" : "2";
+                        break;
+                    case 20: // LNM-Line Feed/New Line Mode.
+                        reply = target->autocr ? "1" : "2";
+                        break;
+                    default:
+                        break;
+                }
+                escbuf.add("\x1b[").add(n).add(";").add(reply).add("$y");
+            }
+            else
+            {
+                switch (n)
+                {
+                    case 1:    // Cursor keys ANSI mode.
+                        reply = decckm ? "1" : "2";
+                        break;
+                    case 5:    // Inverted rendering (DECSCNM).
+                        reply = invbit ? "1" : "2";
+                        break;
+                    case 6:    // Origin mode (DECOM).
+                        reply = target->decom ? "1" : "2";
+                        break;
+                    case 7:    // Auto-wrap.
+                        reply = target->parser::style.wrp() != wrap::off ? "1" : "2";
+                        break;
+                    case 12:   // Cursor blinking.
+                        reply = caret.has_blink_period() ? "1" : "2";
+                        break;
+                    case 25:   // Cursor off.
+                        reply = caret ? "1" : "2";
+                        break;
+                    case 80:   // Sixel Display Mode. Enable the text cursor to move, and the scrolling region to scroll.
+                        reply = decsdm ? "1" : "2";
+                        break;
+                    case 1000: // Mouse reporting (buttons_press).
+                        reply = mtrack.check_state(input::mouse::mode::buttons_press) ? "1" : "2";
+                        break;
+                    case 1002: // Mouse reporting (buttons_drags).
+                        reply = mtrack.check_state(input::mouse::mode::buttons_drags) ? "1" : "2";
+                        break;
+                    case 1003: // Mouse reporting (all_movements).
+                        reply = mtrack.check_state(input::mouse::mode::all_movements) ? "1" : "2";
+                        break;
+                    case 1004: // Focus reporting.
+                        reply = ftrack.encod == input::focus::prot::dec ? "1" : "2";
+                        break;
+                    case 1006: // SGR mouse reporting.
+                        reply = mtrack.encod == input::mouse::prot::sgr ? "1" : "2";
+                        break;
+                    case 1007: // Alternate scroll mode.
+                        reply = altscr ? "1" : "2";
+                        break;
+                    case 1047: // Altbuf.
+                    case 1049: // Altbuf.
+                        reply = target != &normal ? "1" : "2";
+                        break;
+                    case 1070: // Sixel Private Color Registers. We always have this mode on (colors are baked in place).
+                        reply = "3";
+                        break;
+                    case 2004: // Bracketed Paste.
+                        reply = bpmode ? "1" : "2";
+                        break;
+                    case 1016: // Mouse reporting (pixel mode).
+                        reply = mtrack.pixel ? "1" : "2";
+                        break;
+                    case 2027: // Unicode Core (support grapheme clusters).
+                        reply = "3";
+                        break;
+                    case 2026: // Synchronized Updates. We do not support this mode (we rely on lazy rendering).
+                        reply = "4";
+                        break;
+                    case 2048: // In-band resize reporting. Not supported.
+                    case 69:   // Left/Right Margins. We don't support this mode.
+                    case 2031: // Extended Keys / Kitty Keyboard Protocol.
+                    default:
+                        break;
+                }
+                escbuf.add("\x1b[?").add(n).add(";").add(reply).add("$y");
             }
         }
         // term: Request terminal mode. (DECRQM).
-        void decrqm(fifo& q)
+        void decrqm(fifo& q, bool is_dec_private)
         {
             target->parser::flush();
-            while (auto next = q(0)) _decrqm(next);
+            while (auto next = q(0)) _decrqm(next, is_dec_private);
             answer(escbuf);
         }
         // term: Set scrollback buffer size and grow step.
@@ -9253,8 +9650,13 @@ namespace netxs::ui
         auto _paste(auto& data)
         {
             //todo pasting must be ready to be interruped by any pressed key (to interrupt a huge paste).
-            follow[axis::X] = true;
-            follow[axis::Y] = true;
+            if (defcfg.resetonkey)
+            {
+                base::riseup(tier::release, e2::form::animate::reset, 0); // Reset scroll animation.
+                unsync = true;
+                follow[axis::X] = true;
+                follow[axis::Y] = true;
+            }
             ipccon.paste(data, bpmode, kbmode);
         }
         auto paste(hids& gear)
@@ -9281,7 +9683,7 @@ namespace netxs::ui
             {
                 _copy(gear, data);
             }
-            auto ctrl_pressed = gear.meta(hids::anyCtrl);
+            auto ctrl_pressed = gear.meta(mods::anyCtrl);
             if (onesht != mime::disabled && !ctrl_pressed)
             {
                 selection_oneshot(mime::disabled);
@@ -9356,14 +9758,18 @@ namespace netxs::ui
         void selection_lclick(hids& gear)
         {
             auto& console = *target;
-            auto go_on = gear.meta(hids::anyCtrl);
+            auto go_on = gear.meta(mods::anyCtrl);
             if (go_on && console.selection_active())
             {
                 console.selection_follow(gear.coord, go_on);
                 selection_extend(gear);
                 gear.dismiss();
             }
-            else selection_cancel();
+            else
+            {
+                target->selection_create(gear.click, faux); // Update lookup's beginning position.
+                selection_cancel();
+            }
         }
         void selection_dblclk(hids& gear)
         {
@@ -9382,8 +9788,8 @@ namespace netxs::ui
         void selection_create(hids& gear)
         {
             auto& console = *target;
-            auto boxed = selalt ^ !!gear.meta(hids::anyAlt);
-            auto go_on = gear.meta(hids::anyCtrl);
+            auto boxed = selalt ^ !!gear.meta(mods::anyAlt);
+            auto go_on = gear.meta(mods::anyCtrl);
             console.selection_follow(gear.click, go_on);
             if (go_on) console.selection_extend(gear.click, boxed);
             else       console.selection_create(gear.click, boxed);
@@ -9410,7 +9816,7 @@ namespace netxs::ui
         {
             // Check bounds and scroll if needed.
             auto& console = *target;
-            auto boxed = selalt ^ !!gear.meta(hids::anyAlt);
+            auto boxed = selalt ^ !!gear.meta(mods::anyAlt);
             auto coord = twod{ gear.coord };
             auto vport = rect{ -origin, console.panel };
             auto delta = dot_00;
@@ -9474,7 +9880,7 @@ namespace netxs::ui
                 }
                 else
                 {
-                    if (gear.meta(hids::anyCtrl)) return; // Ctrl+Wheel is reserved for zooming.
+                    if (gear.meta(mods::anyCtrl)) return; // Ctrl+Wheel is reserved for zooming.
                     if (altscr && target != &normal)
                     {
                         if (gear.whlsi)
@@ -9527,6 +9933,10 @@ namespace netxs::ui
         auto& get_color()
         {
             return defclr;
+        }
+        auto& get_invbit() // DECSCNM
+        {
+            return invbit;
         }
         void set_color(cell brush)
         {
@@ -9810,11 +10220,22 @@ namespace netxs::ui
             imefmt.flow::compose<faux>(imebox, test);
             return composit_cursor;
         }
+        void set_deadkey_preview(qiew cluster = {})
+        {
+            auto changed = std::exchange(deadkey_preview, cluster) != cluster;
+            if (io_log && changed) log("%%Deadkey preview: ", prompt::key, ansi::hi(deadkey_preview.size() ? deadkey_preview : " "));
+        }
         void key_event(hids& gear, bool forced_event = faux)
         {
             if (!forced_event && gear.touched && !rawkbd) return;
             switch (gear.payload)
             {
+                case keybd::type::deadkey:
+                    if (gear.keystat == input::key::pressed)
+                    {
+                        set_deadkey_preview(gear.cluster);
+                    }
+                    [[fallthrough]];
                 case keybd::type::keypress:
                     if (defcfg.resetonkey && gear.doinput())
                     {
@@ -9823,7 +10244,14 @@ namespace netxs::ui
                         follow[axis::X] = true;
                         follow[axis::Y] = true;
                     }
-                    ipccon.keybd(gear, decckm, kbmode);
+                    if (gear.payload == keybd::type::keypress)
+                    {
+                        if (deadkey_preview.size() && gear.cluster.size()) // Reset deadkey preview on input.
+                        {
+                            set_deadkey_preview();
+                        }
+                        ipccon.keybd(gear, decckm, kbmode);
+                    }
                     if (forced_event || !gear.touched || gear.keystat != input::key::released || rawkbd) gear.set_handled(faux);
                     break;
                 case keybd::type::imeinput:
@@ -9856,7 +10284,7 @@ namespace netxs::ui
                     else unsync = std::exchange(ime_on, imebox.length()) != ime_on;
                     break;
                 case keybd::type::kblayout:
-                    //todo
+                    if (deadkey_preview.size()) set_deadkey_preview();
                     break;
             }
         }
@@ -9885,27 +10313,26 @@ namespace netxs::ui
             if (image_cache.size() || image_sixel_count) // Signal to wipe all image references.
             {
                 auto images = cell::images(); // Lock.
-                auto removed_image_indexes = e2::data::image::remove.param();
-                removed_image_indexes.reserve(image_sixel_count + image_cache.size());
-                //removed_image_indexes.reserve(image_cache.size() + sixel_cache.size());
+                image_removed_indexes.reserve(image_removed_indexes.size() + image_sixel_count + image_cache.size());
+                //image_removed_indexes.reserve(image_cache.size() + sixel_cache.size());
                 //for (auto cache : { &image_cache, &sixel_cache }) //todo C++23: std::views::concat(image_cache, sixel_cache)
                 //for (auto& [image_id, image_ptr] : *cache) if (image_ptr)
                 for (auto removed_index = 0u; removed_index < image_ref_count.size(); removed_index++)
                 {
                     if (image_ref_count[removed_index])
                     {
-                        removed_image_indexes.push_back((ui16)removed_index);
+                        image_removed_indexes.push_back((ui16)removed_index);
                     }
                 }
                 for (auto& [image_id, image_ptr] : image_cache) if (image_ptr)
                 {
                     auto removed_index = image_ptr->index;
-                    removed_image_indexes.push_back(removed_index);
+                    image_removed_indexes.push_back(removed_index);
                     images.remove(removed_index);
                 }
-                if (removed_image_indexes.size())
+                if (image_removed_indexes.size())
                 {
-                    remove_sixel_images(removed_image_indexes);
+                    remove_sixel_images(faux);
                 }
             }
         }
@@ -9928,7 +10355,7 @@ namespace netxs::ui
               decsdm{ faux },
               bpmode{ faux },
               unsync{ faux },
-              invert{ faux },
+              invbit{ faux },
               styled{ faux },
               io_log{ defcfg.def_io_log },
               selalt{ defcfg.def_selalt },
@@ -10541,6 +10968,7 @@ namespace netxs::ui
             {
                 key_event(gear);
             };
+            auto& prev_image_removed_indexes_size = base::field(size_t{});
             LISTEN(tier::release, e2::render::any, parent_canvas)
             {
                 auto& console = *target;
@@ -10598,8 +11026,15 @@ namespace netxs::ui
                     caret.coor(original_cursor);
                     if (defclr.bga() != 0xFF) parent_canvas.fill(rect{ caret.coor(), dot_11 }, [&](cell& c){ c.fgc(console.brush.fgc()); }); // Prefill the cursor cell placeholder in the case of transparent background.
                     console.output(parent_canvas);
+                    if (deadkey_preview.size())
+                    {
+                        parent_canvas.fill(rect{ caret.coor(), dot_11 }, [&](cell& c){ c.txt(deadkey_preview); });
+                    }
                 }
-                if (invert) parent_canvas.fill(cell::shaders::invbit);
+                if (invbit) // DECSCNM.
+                {
+                    parent_canvas.fill(cell::shaders::invbit);
+                }
 
                 if (oversz.b > 0) // Shade the viewport bottom oversize (futures).
                 {
@@ -10636,6 +11071,13 @@ namespace netxs::ui
                 //    vp = vp.clip(parent_canvas.clip());
                 //    parent_canvas.fill(vp, [](auto& c){ c.fuse(cell{}.bgc(magentalt).bga(50)); });
                 //}
+                if (image_removed_indexes.size()
+                 && (prev_image_removed_indexes_size == image_removed_indexes.size()
+                     || image_removed_indexes.size() > 50)) // Lazy remove sixel images.
+                {
+                    remove_sixel_images(true);
+                }
+                prev_image_removed_indexes_size = image_removed_indexes.size();
             };
         }
     };
@@ -10668,7 +11110,7 @@ namespace netxs::ui
             void direct(s11n::xs::bitmap_dtvt         lock, view& data)
             {
                 auto& bitmap = lock.thing;
-                bitmap.get(data, s11n::nat);
+                bitmap.get(data, s11n::nat, s11n::unk);
                 owner.digest++;
                 if (!waits)
                 {
@@ -10680,7 +11122,10 @@ namespace netxs::ui
             }
             void handle(s11n::xs::img_list            lock)
             {
-                s11n::receive_img(lock);
+                s11n::receive_img(lock, [&](std::bitset<65536> const& touched_images)
+                {
+                    owner.update_touched_images(touched_images); // Update in order to forward to FE.
+                });
                 owner.base::enqueue([&](auto& /*boss*/)
                 {
                     owner.base::signal(tier::general, e2::data::image::sync);
@@ -10690,17 +11135,15 @@ namespace netxs::ui
             void handle(s11n::xs::remove_img_request  lock)
             {
                 auto& image = lock.thing;
-                auto images = cell::images(); // Lock.
-                auto hit = s11n::remove_image_indexes(images, image.indexes);
-                if (hit)
+                s11n::remove_image_indexes(image.indexes, [&](std::bitset<65536> const& touched_images)
                 {
-                    owner.remove_image_bits(image.indexes);
+                    owner.remove_image_bits(touched_images);
                     owner.base::enqueue([&, image_indexes = std::move(image.indexes)](auto& /*boss*/) // To avoid deadlock under cell::images.
                     {
                         owner.base::signal(tier::general, e2::data::image::remove, image_indexes);
                         owner.base::deface();
                     });
-                }
+                });
             }
             void handle(s11n::xs::update_img_request  lock)
             {
@@ -10719,7 +11162,7 @@ namespace netxs::ui
                         {
                             s11n::translate_layers(images, image, is_remote);
                         }
-                        owner.update_image_bits(image_index);
+                        owner.update_image_bits(image_index); // Update in order to forward to FE.
                         owner.base::enqueue([&, image_index](auto& /*boss*/) // To avoid deadlock under cell::images.
                         {
                             owner.base::signal(tier::general, e2::data::image::update, image_index);
@@ -11070,25 +11513,35 @@ namespace netxs::ui
             ipccon.run_dtvt_app(appcfg, base::size(), connect_fx, receiver_fx, shutdown_fx);
         }
         // dtvt: Drop removed image metadata from canvas.
-        void remove_image_bits(std::vector<ui16>& removed_image_indexes)
+        void remove_image_bits(std::bitset<65536> const& touched_images)
         {
             auto bitmap_lock = stream.bitmap_dtvt.freeze();
             auto& grid = bitmap_lock.thing.image;
-            cell::remove_image_bits(grid, removed_image_indexes);
+            cell::remove_image_bits(grid, touched_images);
         }
-        // dtvt: Drop removed image metadata from canvas.
-        void update_image_bits(ui16 updated_image_index)
+        // dtvt: Strike affected image cells on canvas.
+        void _strike_raster_bits(auto pred)
         {
             auto bitmap_lock = stream.bitmap_dtvt.freeze();
             auto& grid = bitmap_lock.thing.image;
             for (auto& c : grid)
             {
                 auto image_index = c.get_image_index();
-                if (image_index == updated_image_index)
+                if (pred(image_index))
                 {
                     c.inc_image_stamp(1);
                 }
             }
+        }
+        // dtvt: Update touched images on canvas.
+        void update_touched_images(std::bitset<65536> const& touched_images)
+        {
+            _strike_raster_bits([&](auto image_index){ return touched_images[image_index]; });
+        }
+        // dtvt: Update image metadata on canvas.
+        void update_image_bits(ui16 updated_image_index)
+        {
+            _strike_raster_bits([&](auto image_index){ return image_index == updated_image_index; });
         }
         // dtvt: Return true if application has never sent its canvas.
         auto is_nodtvt()

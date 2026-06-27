@@ -155,7 +155,7 @@ namespace netxs::app::vtm
                 };
                 boss.LISTEN(tier::release, e2::form::upon::dragged, gear, memo)
                 {
-                    if (gear.meta(hids::anyCtrl))
+                    if (gear.meta(mods::anyCtrl))
                     {
                         robo.actify(gear.fader<quadratic<twod>>(2s), [&](auto delta)
                         {
@@ -279,7 +279,7 @@ namespace netxs::app::vtm
             void check_modifiers(hids& gear)
             {
                 auto& data = slots[gear.id];
-                auto state = !!gear.meta(hids::anyCtrl);
+                auto state = !!gear.meta(mods::anyCtrl);
                 if (data.ctrl != state)
                 {
                     data.ctrl = state;
@@ -294,7 +294,7 @@ namespace netxs::app::vtm
                     auto& slot = data.slot;
                     auto& init = data.init;
                     auto& step = data.step;
-                    data.ctrl = gear.meta(hids::anyCtrl);
+                    data.ctrl = gear.meta(mods::anyCtrl);
                     slot.coor = init = step = gear.click + gear.owner.coor();
                     slot.size = dot_00;
                     boss.base::deface(slot);
@@ -338,7 +338,7 @@ namespace netxs::app::vtm
                     {
                         gear.slot = data.slot;
                         gear.slot_forced = true;
-                        if (gear.meta(hids::anyCtrl))
+                        if (gear.meta(mods::anyCtrl))
                         {
                             log(prompt::hall, "Area copied to clipboard ", gear.slot);
                             gear.owner.base::signal(tier::release, e2::command::printscreen, gear);
@@ -475,7 +475,7 @@ namespace netxs::app::vtm
             }
             auto action_allowed(hids& gear)
             {
-                auto allowed = !gear.meta(hids::anyMod);
+                auto allowed = !gear.meta(mods::anyMod);
                 return allowed;
             }
 
@@ -740,7 +740,7 @@ namespace netxs::app::vtm
                     if (base::hidden) // Restore if it is hidden.
                     {
                         base::hidden = faux;
-                        pro::focus::set(window_ptr, gear.id, gear.meta(hids::anyCtrl) ? solo::off : solo::on, true);
+                        pro::focus::set(window_ptr, gear.id, gear.meta(mods::anyCtrl) ? solo::off : solo::on, true);
                     }
                     else // Hide if visible and refocus.
                     {
@@ -947,9 +947,7 @@ namespace netxs::app::vtm
                 {
                     if (base::holder != std::prev(world.base::subset.end()))
                     {
-                        world.base::subset.push_back(This());
-                        world.base::subset.erase(base::holder);
-                        base::holder = std::prev(world.base::subset.end());
+                        world.base::subset.splice(world.base::subset.end(), world.base::subset, base::holder);
                         if (base::hidden) // Restore if window minimized.
                         {
                             base::hidden = faux;
@@ -960,17 +958,18 @@ namespace netxs::app::vtm
                 };
                 LISTEN(tier::preview, e2::form::layout::bubble, r)
                 {
-                    auto area = base::region;
-                    auto next = base::holder;
-                    if (next != world.base::subset.end())
+                    if (base::holder != world.base::subset.end())
                     {
-                        if (++next != world.base::subset.end() && !area.trim((*next)->region))
+                        auto area = base::region;
+                        auto next = base::holder;
+                        ++next;
+                        if (next != world.base::subset.end() && !area.trim((*next)->region))
                         {
-                            //todo revise: it crashes
-                            world.base::subset.erase(base::holder);
-                            while (++next != world.base::subset.end() && !area.trim((*next)->region))
-                            { }
-                            base::holder = world.base::subset.insert(next, This());
+                            while (next != world.base::subset.end() && !area.trim((*next)->region)) // Find blocking window or top.
+                            {
+                                ++next;
+                            }
+                            world.base::subset.splice(next, world.base::subset, base::holder); // Do bubble.
                             base::strike();
                         }
                     }
@@ -1158,8 +1157,8 @@ namespace netxs::app::vtm
                     {
                         auto head = patch.begin();
                         auto tail = patch.end();
-                        auto fragment = settings{ fallback.appcfg.cfg.size() ? fallback.appcfg.cfg
-                                                                             : (*head++)->snapshot() };
+                        auto fragment = settings{ config.luafx, fallback.appcfg.cfg.size() ? fallback.appcfg.cfg
+                                                                                           : (*head++)->snapshot() };
                         while (head != tail)
                         {
                             auto& p = *head++;
@@ -1403,7 +1402,7 @@ namespace netxs::app::vtm
                                                         utf8_xml += "\"/>";
                                                     });
                                                     log("%%Run %%", prompt::host, ansi::hi(utf::debase437(utf8_xml)));
-                                                    auto appconf = settings{ utf8_xml };
+                                                    auto appconf = settings{ config.luafx, utf8_xml };
                                                     auto item_ptr = appconf.document.root_ptr;
                                                     auto menuid = config.settings::take_value_from(item_ptr, attr::id, ""s);
                                                     auto taskbar_context = config.settings::push_context(path::taskbar);
@@ -1988,9 +1987,9 @@ namespace netxs::app::vtm
                                     parent_canvas.fill(user_name, cell::shaders::contrast);
                                     usergate.fill_pointer(gear, parent_canvas);
                                     // Draw a color focus mark next to the cursor.
-                                    auto area = rect{{ coor.x + user_name.size().x + 1, coor.y }, dot_11 };
+                                    auto area = rect{{ coor.x + user_name.size().x, coor.y }, dot_11 };
                                     gear_color.fgc(hids::get_color(gear.gear_index));
-                                    parent_canvas.fill(area, cell::shaders::skipnulls(gear_color)); // Use skipnulls to be transparent for images.
+                                    parent_canvas.fill(area, cell::shaders::contrast(gear_color)); // Use contrast to be transparent for images.
                                 }
                             }
                         }

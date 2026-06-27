@@ -5,29 +5,8 @@
 
 #include "input.hpp"
 
-namespace netxs::events
+namespace netxs
 {
-    text script_ref::to_string(context_t& context)
-    {
-        auto crop = text{};
-        for (auto ptr : context | std::views::reverse)
-        {
-            crop += utf::bytes2shades(view{ (char*)&ptr, sizeof(void*) });
-            crop += '-';
-        }
-        if (crop.size())
-        {
-            crop.pop_back();
-            auto id = ((ui::base*)context.back())->id;
-            crop += " " + std::to_string(id);
-        }
-        else
-        {
-            crop += " 0";
-        }
-        return crop;
-    }
-
     // luna: Get any text from the stack by index.
     text luna::vtmlua_torawstring(lua_State* lua, si32 idx, bool extended)
     {
@@ -417,7 +396,24 @@ namespace netxs::events
         auto ok = luna::run_with_gear_wo_return(proc);
         luna::set_return(ok);
     }
-    text luna::run(context_t& context, view script_body, auto&& param)
+    text luna::run(view script_body)
+    {
+        auto error = ::luaL_loadbuffer(lua, script_body.data(), script_body.size(), "inlined script body")
+                  || ::lua_pcall(lua, 0, 1, 0);
+        auto result = text{};
+        if (error)
+        {
+            result = ::lua_tostring(lua, -1);
+            log("%%inlined script compilation failed:\n%body%\n%msg%\n", prompt::lua, ansi::hi(ansi::add(script_body).numerate_lines(blacklt)), ansi::err(result));
+        }
+        else if (::lua_gettop(lua))
+        {
+            result = luna::vtmlua_torawstring(lua, -1);
+        }
+        ::lua_settop(lua, 0);
+        return result;
+    }
+    text luna::run(luna::context_t& context, view script_body, auto&& param)
     {
         using T = std::decay_t<decltype(param)>;
         //if constexpr (debugmode) log("%%script:\n%pads%%script%", prompt::lua, prompt::pads, ansi::hi(script_body));
@@ -646,7 +642,29 @@ namespace netxs::events
     {
         if (lua) ::lua_close(lua);
     }
-
+}
+namespace netxs::events
+{
+    text script_ref::to_string(luna::context_t& context)
+    {
+        auto crop = text{};
+        for (auto ptr : context | std::views::reverse)
+        {
+            crop += utf::bytes2shades(view{ (char*)&ptr, sizeof(void*) });
+            crop += '-';
+        }
+        if (crop.size())
+        {
+            crop.pop_back();
+            auto id = ((ui::base*)context.back())->id;
+            crop += " " + std::to_string(id);
+        }
+        else
+        {
+            crop += " 0";
+        }
+        return crop;
+    }
     script_ref::script_ref(auth& indexer, std::reference_wrapper<ui::base> boss_ref, sptr<std::pair<ui64, text>> script_body_ptr)
         : indexer{ indexer },
           boss_ref{ boss_ref },
@@ -666,7 +684,8 @@ namespace netxs::events
           e2_timer_tick_id{ ui::e2::timer::tick.id },
           _null_gear_sptr{ auth::create<input::hids>(*this) },
           active_gear_ref{ *_null_gear_sptr },
-          anykey_event{ get_kbchord_hint(input::key::kmap::any_key) }
+          anykey_event{ get_kbchord_hint(input::key::kmap::any_key) },
+          config{ luafx }
     {
         if (use_timer)
         {
@@ -882,7 +901,7 @@ namespace netxs::ui
                 // Drop it in favor of changing the cell size in GUI mode.
                 //boss.on(tier::mouserelease, input::key::MouseWheel, memo, [&](hids& gear)
                 //{
-                //    if (gear.meta(hids::anyCtrl) && !gear.meta(hids::ScrlLock) && gear.whlsi)
+                //    if (gear.meta(mods::anyCtrl) && !gear.meta(mods::ScrollLock) && gear.whlsi)
                 //    {
                 //        auto& g = gears.take(gear);
                 //        if (!g.zoomon)// && g.inside)
@@ -960,7 +979,7 @@ namespace netxs::ui
                 boss.on(tier::mouserelease, input::key::MouseMove, memo, [&](hids& gear)
                 {
                     auto& g = gears.take(gear);
-                    if (g.zoomon && !gear.meta(hids::anyCtrl))
+                    if (g.zoomon && !gear.meta(mods::anyCtrl))
                     {
                         g.zoomon = faux;
                         gear.setfree();
@@ -995,7 +1014,7 @@ namespace netxs::ui
                     auto& g = gears.take(gear);
                     if (g.seized)
                     {
-                        auto zoom = gear.meta(hids::anyCtrl);
+                        auto zoom = gear.meta(mods::anyCtrl);
                         auto area = boss.base::area();
                         auto coor = area.coor + gear.coord;
                         auto [preview_area, size_delta] = g.drag(area, coor, outer, zoom);
@@ -1338,6 +1357,10 @@ namespace netxs::ui
                     form = new_form;
                     show();
                 }
+            }
+            auto has_blink_period()
+            {
+                return step != span::zero();
             }
             // pro::caret: Set blink period.
             void blink_period(span new_step = skin::globals().blink_period)
@@ -2152,7 +2175,7 @@ namespace netxs::ui
                 if (focus_on_click) boss.on(tier::mouserelease, input::key::LeftClick, memo, [&](hids& gear)
                 {
                     if (!gear) return;
-                    if (gear.meta(hids::anyCtrl))
+                    if (gear.meta(mods::anyCtrl))
                     {
                         if (pro::focus::test(boss, gear))
                         {
@@ -4497,10 +4520,10 @@ namespace netxs::ui
             };
             on(tier::mouserelease, input::key::MouseWheel, [&](hids& gear)
             {
-                if (gear.meta(hids::anyCtrl)) return; // Ctrl+Wheel is reserved for zooming.
+                if (gear.meta(mods::anyCtrl)) return; // Ctrl+Wheel is reserved for zooming.
                 if (gear.whlsi)
                 {
-                    auto hz = (permit[X] && (gear.hzwhl || gear.meta(hids::anyAlt | hids::anyShift)))
+                    auto hz = (permit[X] && (gear.hzwhl || gear.meta(mods::anyAlt | mods::anyShift)))
                            || (permit == xy(axes::X_only));
                     if (hz) wheels<X>(gear.whlsi);
                     else    wheels<Y>(gear.whlsi);
@@ -5039,7 +5062,7 @@ namespace netxs::ui
             };
             base::on(tier::mouserelease, input::key::MouseWheel, [&](hids& gear)
             {
-                if (gear.meta(hids::anyCtrl)) return; // Ctrl+Wheel is reserved for zooming.
+                if (gear.meta(mods::anyCtrl)) return; // Ctrl+Wheel is reserved for zooming.
                 if (gear.whlsi)
                 {
                     auto delta = gear.whlsi > 0 ? 1 : -1;

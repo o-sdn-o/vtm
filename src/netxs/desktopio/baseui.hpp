@@ -761,7 +761,7 @@ namespace netxs::ui
             netxs::events::vtm_class::list::iterator class_iterator; // base: class_metadata.objects std::list iterator.
         };
         utf::unordered_map<text, base_class> base_classes; // base: Base classes map by classname.
-        netxs::events::context_t             scripting_context; // base: Temp buffer for the list of ids of all ancestors.
+        netxs::luna::context_t               scripting_context; // base: Temp buffer for the list of ids of all ancestors.
 
         struct mfocus_node
         {
@@ -842,12 +842,17 @@ namespace netxs::ui
             }
             return sptr{};
         }
-        // base: Update scripting context. Run on anycast, e2::form::upon::started.
         // base: Enqueue task.
         template<bool Sync = true>
         void enqueue(netxs::events::fx<ui::base> proc)
         {
             bell::indexer.enqueue<Sync>(weak_from_this(), std::move(proc));
+        }
+        // base: Enqueue global task.
+        template<bool Sync = true>
+        void enqueue_global(netxs::events::fx<ui::base> proc)
+        {
+            bell::indexer.enqueue_global<Sync>(std::move(proc));
         }
         // base: Clear task queue.
         void dequeue()

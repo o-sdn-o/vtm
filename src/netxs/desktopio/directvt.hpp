@@ -162,9 +162,7 @@ namespace netxs::directvt
             }
             else if constexpr (std::is_same_v<D, ui96>)
             {
-                struct { uint64_t l; uint32_t h; } packed;
-                packed.l = netxs::letoh(data.u64);
-                packed.h = netxs::letoh(data.u32);
+                auto packed = ui96{ netxs::letoh(data.u64), netxs::letoh(data.u32) };
                 block += view{ (char*)&packed, 12 };
             }
             else if constexpr (std::is_same_v<D, view>
@@ -266,7 +264,7 @@ namespace netxs::directvt
 
             // stream: .
             template<class T>
-            void fuse(T&& data) { fuse_ext(block, std::forward<T>(data)); }
+            void fuse(T&& data) { binary::fuse_ext(block, std::forward<T>(data)); }
             // stream: Replace bytes at specified position.
             template<class T>
             inline auto& add_at(sz_t at, T&& data)
@@ -1039,6 +1037,7 @@ namespace netxs::directvt
                                          (si32, scancod)  // syskeybd: Scancode.
                                          (si32, keystat)  // syskeybd: Key state: unknown, pressed, repeated, released.
                                          (si32, keycode)  // syskeybd: Key id.
+                                         (ui32, xlayout)  // syskeybd: Keyboard layout ID (KLID).
                                          (byte, payload)  // syskeybd: Payload type.
                                          (bool, extflag)  // syskeybd: Win32 extflag.
                                          (bool, handled)  // syskeybd: Key event is handled.
@@ -1046,7 +1045,9 @@ namespace netxs::directvt
                                          (text, cluster)  // syskeybd: Generated string.
                                          (text, vkchord)  // sysmouse: Key virtcode-based chord.
                                          (text, scchord)  // sysmouse: Key scancode-based chord.
-                                         (text, chchord)) // sysmouse: Key virtcode+cluster-based chord.
+                                         (text, chchord)  // sysmouse: Key virtcode+cluster-based chord.
+                                         (text, shifted)  // syskeybd: Shifted key code (KKP).
+                                         (text, unshift)) // syskeybd: Unshifted key code (KKP).
         STRUCT_macro(sysmouse,           (id_t, gear_id)  // sysmouse: Device id.
                                          (si32, ctlstat)  // sysmouse: Keybd modifiers.
                                          (time, timecod)  // sysmouse: Event time code.
@@ -1231,7 +1232,7 @@ namespace netxs::directvt
                 delta = sum;
             }
             template<class P = noop, class S = noop>
-            void get(view& data, std::array<ui16, 65536>& ext_to_int_map, P update = {}, S resize = {})
+            void get(view& data, std::array<ui16, 65536>& ext_to_int_map, std::vector<ui16>& unknown_indexes, P update = {}, S resize = {})
             {
                 auto [myid, area, remote_process_id] = stream::take<id_t, rect, time>(data);
                 auto is_remote_forwarding = remote_process_id != binary::process_id;
@@ -1267,7 +1268,7 @@ namespace netxs::directvt
                                 last_int_index = ext_to_int_map[image_ext_index];
                                 if (!last_int_index) // Register a new empty image and get a new index.
                                 {
-                                    last_int_index = cell::register_image(last_ext_index, ext_to_int_map);
+                                    last_int_index = cell::register_image(last_ext_index, ext_to_int_map, unknown_indexes);
                                 }
                             }
                             c.set_image_index(last_int_index);
@@ -1997,6 +1998,7 @@ namespace netxs::directvt
             escx s11n_output; // s11n: Logs buffer.
             escx s11n_logpad; // s11n: Logs left margin.
             std::array<ui16, 65536> nat{}; // s11n: ext_to_int_map: Registered image indexes lookup map. nat[0] indicates local(0)/remote(1)
+            std::vector<ui16>       unk; // s11n: List of unknown image indexes.
 
             // s11n: Deserialize objects.
             void sync(view& data)
@@ -2012,18 +2014,18 @@ namespace netxs::directvt
                     else log(prompt::s11n, "Unsupported frame type: ", (int)frame.next, "\n", utf::debase(frame.data));
                 }
             }
-            // s11n: Request unknown images metadta (after received bitmap synchronization).
+            // s11n: Request unknown images metadata (after receiving bitmap during synchronization).
             void request_images(auto& master)
             {
-                auto images = cell::images();
-                if (images.unk.size())
+                if (s11n::unk.size())
                 {
                     auto list = s11n::request_img.freeze();
-                    for (auto& remote_index : images.unk)
+                    for (auto& remote_index : s11n::unk)
                     {
+                        if constexpr (debugmode) log("send request for unknown remote image index=%%", remote_index);
                         list.thing.push(remote_index);
                     }
-                    images.unk.clear();
+                    s11n::unk.clear();
                     list.thing.sendby(master);
                 }
             }
@@ -2053,7 +2055,7 @@ namespace netxs::directvt
                         auto l_int_index = s11n::nat[l_ext_index];
                         if (!l_int_index)
                         {
-                            l_int_index = cell::register_image(l_ext_index, s11n::nat); // Register and enqueue request for unknown images.
+                            l_int_index = cell::register_image(l_ext_index, s11n::nat, s11n::unk); // Register and enqueue request for unknown images.
                         }
                         if (l_int_index)
                         {
@@ -2075,7 +2077,8 @@ namespace netxs::directvt
                 }
             }
             // s11n: Receive image metadata.
-            void receive_img(s11n::xs::img_list& lock)
+            template<class P = netxs::noop>
+            void receive_img(s11n::xs::img_list& lock, P proc = {})
             {
                 auto images = cell::images();
                 auto is_remote = !!s11n::nat[0];
@@ -2087,42 +2090,65 @@ namespace netxs::directvt
                     {
                         if (auto image_ptr = images.map[local_index])
                         {
+                            images.touched.set(local_index);
                             auto& image = *image_ptr;
                             if constexpr (debugmode) log("%%New image metadata:", prompt::s11n);
                             auto layers_updated = image.receive_image_attributes(new_image.global_attributes);
                             if (layers_updated)
                             {
-                                translate_layers(images, image, is_remote);
+                                s11n::translate_layers(images, image, is_remote);
                             }
                         }
                     }
                 }
+                proc(images.touched);
+                for (auto& new_image : lock.thing) // Clear the index of touched images.
+                {
+                    auto remote_index = new_image.index;
+                    if (auto local_index = s11n::nat[remote_index])
+                    {
+                        images.touched.reset(local_index);
+                    }
+                }
             }
-            auto remove_image_indexes(auto& images, std::vector<ui16>& image_indexes)
+            void remove_image_indexes(std::vector<ui16>& image_indexes, auto proc)
             {
+                auto images = cell::images(); // Lock.
                 auto hit = faux;
                 auto is_remote = s11n::nat[0];
                 if (is_remote)
                 {
                     for (auto& image_index : image_indexes)
                     {
+                        if constexpr (debugmode) log("Remote: Remove image index: remote=%% local=%%", image_index, s11n::nat[image_index]);
                         image_index = std::exchange(s11n::nat[image_index], 0);
                         if (image_index)
                         {
                             images.remove(image_index);
-                            hit |= !!image_index;
+                            images.touched.set(image_index);
+                            hit = true;
                         }
                     }
                 }
                 else
                 {
-                    for (auto image_index : image_indexes)
+                    for (auto& image_index : image_indexes)
                     {
-                        images.remove(image_index);
-                        hit |= !!image_index;
+                        if (image_index)
+                        {
+                            images.touched.set(image_index);
+                            hit = true;
+                        }
                     }
                 }
-                return hit;
+                if (hit)
+                {
+                    proc(images.touched);
+                    for (auto& image_index : image_indexes)
+                    {
+                        images.touched.reset(image_index);
+                    }
+                }
             }
             // s11n: Receive jumbo clusters.
             void receive_jgc(s11n::xs::jgc_list& lock)

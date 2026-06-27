@@ -101,6 +101,7 @@ DynamicXML is a configuration language based on the XML 1.1 syntax, but with sub
    | Aspect                | Difference
    |-----------------------|-----------
    | Element References    | Elements can reference the values or entire structures of other elements using relative or absolute paths. Any unquoted non-numeric value is treated as a reference.
+   | Inline Expressions    | Prefixing any valid element reference with a dollar sign (`$`) turns it into an Inline Script Expression. Instead of returning the raw text of the target element, the application evaluates its content via the host scripting engine at runtime.
    | Namespacing/Scoping   | Each element forms its own namespace (scope).
    | Value Concatenation   | An element's content may consist of several substrings and/or references combined using the vertical bar (`\|`) operator. For quoted substrings, the vertical bar operator may be omitted.
    | Inheritance           | Assigning references to elements makes the scopes of these elements inherited and directly accessible.
@@ -259,6 +260,10 @@ The following forms of element declaration are equivalent:
 
 ## VTM Configuration Overview
 
+### Lua Scripting Integration
+
+Within element values, an unquoted reference prefixed with a dollar sign (e.g., `... Expression='return "value"' element=$Expression ...`) is treated as a dynamic Lua statement or function body. When resolved at runtime, vtm evaluates this Lua code within a persistent Lua state. The expression must execute a return statement.
+
 ### Configuration Structure
 
 ```xml
@@ -270,9 +275,12 @@ The following forms of element declaration are equivalent:
 ...
 <config>  <!-- Global configuration. -->
     ...
-    <element1=global_variable_name/>  <!-- element1 references the value of /global_variable_name (three levels of indirection allowed). -->
-    <element2=/config/element1/>       <!-- element2 references the value of /config/element1. -->
-    <element3="/config/element1"/>     <!-- element3 contains the string value "/config/element1". -->
+    <Counter="N = (N or 0) + 1; return 'ID_' .. N"/>
+    <Element1=global_variable_name/>   <!-- Element1 references the value of /global_variable_name (three levels of indirection allowed). -->
+    <Element2=/config/Element1/>       <!-- Element2 references the value of /config/Element1. -->
+    <Element3="/config/Element1"/>     <!-- Element3 contains the string value "/config/Element1". -->
+    <Element4=$Counter/>               <!-- Element4 is evaluated by the inline script stored in Counter. -->
+    <Element5=$/config/Counter/>       <!-- Element5 is evaluated by the inline script stored in /config/Counter. -->
     ...
     <desktop>  <!-- Desktop settings. -->
         <taskbar ... >  <!-- Taskbar menu settings. -->
@@ -451,9 +459,10 @@ Type        | Example                |Description
 `Specific`  | `LeftShift+RightShift` | A key combination with explicitly specified physical keys.
 `Scancodes` | `0x3B+0x3C`            | A key combination represented solely by scan codes of physical keys in hexadecimal format.
 
-Generic, literal and specific key sequences can be mixed in any order within a key chord list.
-
-The required key combination sequence can be generated on the Info page, by clicking the label in the lower right corner of the vtm desktop.
+Notes:
+- Generic, literal and specific key sequences can be mixed in any order within a key chord list.
+- The required key combination sequence can be generated on the Info page, by clicking the label in the lower right corner of the vtm desktop.
+- "Literal" key combinations automatically filter out keyboard shift modifiers such as Shift/AltGr/IsoLevel5Shift.
 
 #### Mouse events
 
@@ -1080,7 +1089,6 @@ Notes
         </gate>
         <desktop script*>  <!-- Desktop-level bindings. -->
             <script=FocusTaskbar    on="Esc+F1"       />
-            <script=FocusTaskbar    on="Alt+Z"        />
             <script=FocusPrevWindow on="Ctrl+PageUp"  />
             <script=FocusNextWindow on="Ctrl+PageDown"/>
             <script=Disconnect      on="Shift+F7"     />
@@ -1153,7 +1161,6 @@ Notes
         </tile>
         <terminal script*>  <!-- Terminal-specific bindings. -->
             <script=ExclusiveKeyboardMode on="preview: Ctrl-Alt | Alt-Ctrl"/>
-            <script=ExclusiveKeyboardMode on="preview: Alt+Shift+B"/>
             <script="vtm.gear.SetHandled()" on="Esc"/> <!-- Do nothing. The Esc key is used as a modifier. Press/release events are sent only if the key is released without being combined with any other keys. -->
             <script                         on="-Esc">  -- Clear selection (if any) and send Esc press/release events.
                 vtm.terminal.ClearSelection()
