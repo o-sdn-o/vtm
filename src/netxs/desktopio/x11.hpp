@@ -411,7 +411,7 @@ namespace x11
         byte                                  shm_first_event = 0;
         fd_t                                  shm_buffer_fd = os::invalid_fd;
         byte*                                 shm_buffer_ptr = {};
-        size_t                                shm_buffer_size = {};
+        size_t                                shm_buffer_len = {};
         ui32                                  shm_segmen_xid = {};
 
         sptr<os::ipc::stdcon>                 x11connection;  // Active X11 socket connection.
@@ -658,7 +658,7 @@ namespace x11
         }
         bool resize_shared_buffer(size_t size)
         {
-            if (shm_buffer_size)
+            if (shm_buffer_len)
             {
                 //todo implement delayed detach+copy
                 send_shm_detach_fd(shm_segmen_xid);
@@ -666,14 +666,14 @@ namespace x11
                 free_resource_id(shm_segmen_xid);
             }
             shm_buffer_fd =
-            #if defined(__linux__)
-                ::memfd_create("x11_shm_double_buf", MFD_CLOEXEC);
-            #else
-                ::shm_open(SHM_ANON, O_RDWR | O_CREAT | O_EXCL, 0600); // SHM_ANON - native anonymous descriptor in BSD.
-            #endif
+                #if defined(__linux__)
+                    ::memfd_create("x11_shm_buffer", MFD_CLOEXEC);
+                #else
+                    ::shm_open(SHM_ANON, O_RDWR | O_CREAT | O_EXCL, 0600); // SHM_ANON - native anonymous descriptor in BSD.
+                #endif
             if (shm_buffer_fd == os::invalid_fd)
             {
-                log("%%Failed to create anonymous shared memory fd", prompt::gui);
+                log("%%Failed to create anonymous shared memory fd (errno=%%)", prompt::gui, os::error());
             }
             else
             {
@@ -681,7 +681,7 @@ namespace x11
                 {
                     ::close(shm_buffer_fd);
                     shm_buffer_fd = os::invalid_fd;
-                    log("%%Failed to truncate shared memory file to required size", prompt::gui);
+                    log("%%Failed to truncate shared memory file to required size (errno=%%)", prompt::gui, os::error());
                 }
                 else
                 {
@@ -690,26 +690,26 @@ namespace x11
                     {
                         ::close(shm_buffer_fd);
                         shm_buffer_fd = os::invalid_fd;
-                        log("%%Failed to mmap shared memory descriptor", prompt::gui);
+                        log("%%Failed to mmap shared memory descriptor (errno=%%)", prompt::gui, os::error());
                     }
                     else
                     {
                         shm_buffer_ptr = (byte*)mapped_ptr;
-                        shm_buffer_size = size;
+                        shm_buffer_len = size;
                         shm_segmen_xid = new_resource_id();
                         send_shm_attach_fd(shm_segmen_xid);
-                        if constexpr (debugmode) log("%%Shared buffer successfuly created at 0x%%, %% bytes", prompt::x11, utf::to_hex(shm_buffer_ptr), shm_buffer_size);
+                        if constexpr (debugmode) log("%%Shared buffer successfuly created at 0x%%, %% bytes", prompt::x11, utf::to_hex(shm_buffer_ptr), shm_buffer_len);
                     }
                 }
             }
-            return shm_buffer_size > 0;
+            return shm_buffer_len > 0;
         }
         void reset_shared_buffer()
         {
             if (shm_buffer_ptr && shm_buffer_ptr != MAP_FAILED)
             {
-                ::munmap(shm_buffer_ptr, shm_buffer_size);
-                shm_buffer_size = {};
+                ::munmap(shm_buffer_ptr, shm_buffer_len);
+                shm_buffer_len = {};
                 shm_buffer_ptr = {};
             }
             if (shm_buffer_fd != os::invalid_fd)
@@ -883,7 +883,6 @@ namespace x11
     static auto session = sptr<session_t>{}; // x11: Active X11 session.
     auto connect()
     {
-        if (faux) //todo
         if (auto display_env = os::env::get("DISPLAY"); display_env.size())
         if (auto colon_start = display_env.find(':'); colon_start != text::npos)
         if (auto display_num = utf::to_int(display_env.substr(colon_start + 1)))

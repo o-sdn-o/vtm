@@ -5122,7 +5122,7 @@ namespace netxs::os
                         auto reload_command = "udevadm control --reload-rules";
                         log("Trigger to reload udev rules:\n  ", reload_command);
                         if (0 == ::system(reload_command)) log("    Udev rules successfuly reloaded");
-                        else                               log("    Failed to reload udev rules (%%)", errno);
+                        else                               log("    Failed to reload udev rules (%%)", os::error());
                     }
                     else
                     {
@@ -5526,7 +5526,7 @@ namespace netxs::os
                         else
                         {
                             _k0 = -1;
-                            _k1 = errno;
+                            _k1 = os::error();
                         }
                         auto led_state = si32{ 0 };
                         if (-1 != ::ioctl(os::stdin_fd, KDGKBLED, &led_state))
@@ -5541,7 +5541,7 @@ namespace netxs::os
                         else
                         {
                             _k2 = -1;
-                            _k3 = errno;
+                            _k3 = os::error();
                         }
                     #endif
                     return state;
