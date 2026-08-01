@@ -3959,7 +3959,10 @@ namespace netxs::os
     }
 
     #if !defined(__APPLE__) && !defined(_WIN32)
+}
         #include "x11.hpp"
+namespace netxs::os
+{
     #endif
 
     namespace dtvt

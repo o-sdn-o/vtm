@@ -3,8 +3,10 @@
 
 #pragma once
 
-namespace x11
+namespace netxs::x11
 {
+    using fd_t = os::fd_t;
+
     #pragma pack(push, 1)
     template<class T>
     struct data_n_size
@@ -27,7 +29,7 @@ namespace x11
         {
             byte opcode = 1;
             byte depth = 32;          // Color depth.
-            ui16 length = 8;          // 8+n Packet size in 4-byte words.
+            ui16 length;              // Packet size in 4-byte words.
             ui32 window_id;           // New Window ID.
             ui32 parent_id;           // root_window_id.
             si16 x;                   // Initial coords in px.
@@ -36,8 +38,8 @@ namespace x11
             ui16 height;              //
             ui16 border_width = 0;
             ui16 window_class = 1;    // 0: CopyFromParent, 1: InputOutput, 2: InputOnly (input events and painting).
-            ui32 visual_id = 0;       // 0: CopyFromParent.
-            ui32 value_mask = 0x00002800; // event-mask | colormap.
+            ui32 visual_id;           // 0: CopyFromParent.
+            ui32 value_mask;          // Payload bits.
             // payload ...  0x0001u  background-pixmap      4 0: none, 1: ParentRelative or PIXMAP
             //              0x0002u  background-pixel       4 argb
             //              0x0004u  border-pixmap          4 0: CopyFromParent or PIXMAP
@@ -77,7 +79,7 @@ namespace x11
         };
         struct configure_window // Opcode 12 (configure window).
         {
-            byte opcode = 10;
+            byte opcode = 12;
             byte pad1   = 0;
             ui16 length;
             ui32 window_id;
@@ -97,14 +99,23 @@ namespace x11
             //                    3 BottomIf
             //                    4 Opposite
         };
-        struct create_gc // Opcode 55 (create graphical context).
+        struct intern_atom // Opcode 16 (InternAtom)
         {
-            byte opcode = 55;
-            byte pad    = 0;;
-            ui16 length = 4;     // 16 bytes / 4 = 4 words
-            ui32 gc_id;          // Generating id
-            ui32 drawable;       // Our window ID (or root window)
-            ui32 value_mask = 0; // No additional attributes
+            struct reply
+            {
+                byte type;    // Always 1 (Reply).
+                byte pad0;
+                ui16 sequence;
+                ui32 length;  // Always 0.
+                ui32 atom_id; // Requested Atom ID.
+                ui32 pad2[5];
+            };
+            byte opcode = 16;
+            byte only_if_exists; // 0: Create if absent, 1: Only if exists.
+            ui16 length;         // (sizeof(intern_atom) + name_len + padding) / 4
+            ui16 name_len;       // String length in bytes.
+            ui16 pad = 0;
+            // payload: string...
         };
         struct change_property // Opcode 18 (change property).
         {
@@ -112,11 +123,29 @@ namespace x11
             byte mode      = 0;  // 0: Replace
             ui16 length;         // Request length
             ui32 window_id;
-            ui32 property  = 39; // Atom WM_NAME (predefined id = 39)
-            ui32 type      = 31; // Atom STRING (predefined id = 31)
-            byte format    = 8;  // 8-bit chars (string)
+            ui32 property;       // Atom (e.g., WM_NAME)
+            ui32 type;           // Atom (e.g., STRING)
+            byte format;         // Payload unit format (e.g., 8: 8-bit chars (string), 32: 32-bit words)
             byte pad[3]    = {};
-            ui32 data_len;       // Char count
+            ui32 data_len;       // Char count.
+        };
+        struct create_gc // Opcode 55 (create graphical context).
+        {
+            byte opcode = 55;
+            byte pad    = 0;
+            ui16 length = 4;     // 16 bytes / 4 = 4 words
+            ui32 gc_id;          // Generating id
+            ui32 drawable;       // Our window ID (or root window)
+            ui32 value_mask = 0; // No additional attributes
+        };
+        struct create_colormap // Opcode 78 (create colormap)
+        { 
+            byte opcode = 78;
+            byte alloc  = 0;  // 0: None, 1: All
+            ui16 length = 4;
+            ui32 colormap_id; // Our side XID.
+            ui32 window_id;   // Window ID (root_window_id).
+            ui32 visual_id;   // Some argb Visual ID.
         };
         struct query_extension // Opcode 98 (query extension, query MIT-SHM).
         {
@@ -139,6 +168,7 @@ namespace x11
             ui16 pad2   = 0;
             // payload..., e.g. "MIT-SHM"
         };
+        // SHM Minor Opcodes: 0:QueryVersion, 1:Attach, 2:Detach, 3:PutImage, 4:GetImage, 5:CreatePixmap, 6:AttachFd, 7:CreateSegment
         struct shm_query_version // ShmQueryVersion (Minor Opcode 0)
         {
             struct reply // Always 32 bytes.
@@ -154,57 +184,47 @@ namespace x11
                 byte pixmap_format;
                 byte pad2[15];
             };
-            byte major_opcode;   // MIT-SHM major_opcode из query_extension
-            byte minor_opcode = 0; // X_ShmQueryVersion
-            ui16 length = 1;       // 4 bytes / 4 = 1 word
+            byte major_opcode;     // MIT-SHM major_opcode.
+            byte minor_opcode = 0; // 0: QueryVersion.
+            ui16 length       = 1; // 4 bytes / 4 = 1 word.
         };
-        struct shm_attach // ShmAttach (Minor Opcode 1) - bind SHM segment with x-serveer.
+        struct shm_attach_fd // ShmAttachFd (Minor Opcode 6) - bind SHM file descriptor with x-serveer (via ::sendmsg()).
         {
-            byte req_opcode;   // MIT-SHM major_opcode from query_extension.
-            byte minor_opcode = 1; // X_ShmAttach.
-            ui16 length = 4;   // 16 bytes / 4 = 4 words.
-            ui32 shm_seg_id;   // Our side generated unique resource ID (XID).
-            ui32 shmid;        // Linux kernel's segment id (from shmget).
-            byte read_only = 0;
-            byte pad[3] = {};
-        };
-        struct shm_attach_fd // ShmAttachFd (Minor Opcode 6) - bind SHM descriptor with x-serveer.
-        {
-            byte major_opcode;     // MIT-SHM major_opcode from query_extension.
-            byte minor_opcode = 6; // X_ShmAttachFd.
-            ui16 length = 4;
-            ui32 shm_seg_id;   // Our side generated unique resource ID (XID).
-            byte read_only = 0;
-            byte pad[3] = {};
+            byte major_opcode;     // MIT-SHM major_opcode.
+            byte minor_opcode = 6; // 6: AttachFd.
+            ui16 length       = 3;
+            ui32 shm_seg_id;       // Our side generated unique resource ID (XID).
+            byte read_only    = 0;
+            byte pad[3]       = {};
         };
         struct shm_detach // ShmDetach (Minor Opcode 2)
         {
             byte major_opcode;     // MIT-SHM major_opcode.
-            byte minor_opcode = 2; // X_ShmDetach.
-            ui16 length = 2;
+            byte minor_opcode = 2; // 2: Detach.
+            ui16 length       = 2;
             ui32 shm_seg_id;       // Detached segment ID (XID).
         };
         struct shm_put_image // ShmPutImage (Minor Opcode 3) - immediately output from SHM to screen.
         {
-            byte req_opcode;   // Dynamic major_opcode.
-            byte minor_opcode = 3; // X_ShmPutImage.
-            ui16 length = 10;  // 40 bytes / 4 = 10 words.
-            ui32 drawable;     // Our window ID (fg_w).
-            ui32 gc_id;        // Graphical context.
-            ui16 total_width;  // Buffer width/height in SHM
-            ui16 total_height; //
-            ui16 src_x = 0;    // Clip coor.
-            ui16 src_y = 0;    //
-            ui16 src_width;    // Clip size.
-            ui16 src_height;   //
-            si16 dst_x = 0;    // Dest coor.
-            si16 dst_y = 0;    //
-            byte depth = 32;   // 32-bit ARGB
-            byte format = 2;   // 2: ZPixmap
-            byte send_event = 0; // Don't notify on output end.
-            byte pad = 0;
-            ui32 shm_seg_id;   // Linked segment ID.
-            ui32 offset = 0;   // Segment offset.
+            byte major_opcode;      // MIT-SHM major_opcode.
+            byte minor_opcode = 3;  // 3: PutImage.
+            ui16 length       = 10; // 40 bytes / 4 = 10 words.
+            ui32 drawable;          // Our window ID (fg_w).
+            ui32 gc_id;             // Graphical context.
+            ui16 total_width;       // Buffer width/height in SHM
+            ui16 total_height;      //
+            ui16 src_x;             // Clip coor.
+            ui16 src_y;             //
+            ui16 src_width;         // Clip size.
+            ui16 src_height;        //
+            si16 dst_x;             // Dest coor.
+            si16 dst_y;             //
+            byte depth      = 32;   // 32-bit ARGB
+            byte format     = 2;    // 2: ZPixmap
+            byte send_event = 1;    // 0: Don't notify on output end; 1: Send event on output end.
+            byte pad        = 0;
+            ui32 shm_seg_id;        // Linked segment ID.
+            ui32 offset;            // Segment offset.
         };
         struct noop // Opcode 127 (NoOperation).
         {
@@ -216,12 +236,57 @@ namespace x11
     }
     namespace event
     {
+        static constexpr auto KeyPress         = 2;
+        static constexpr auto KeyRelease       = 3;
+        static constexpr auto ButtonPress      = 4;
+        static constexpr auto ButtonRelease    = 5;
+        static constexpr auto MotionNotify     = 6;
+        static constexpr auto EnterNotify      = 7;
+        static constexpr auto LeaveNotify      = 8;
+        static constexpr auto FocusIn          = 9;
+        static constexpr auto FocusOut         = 10;
+        static constexpr auto KeymapNotify     = 11;
+        static constexpr auto Expose           = 12;
+        static constexpr auto GraphicsExpose   = 13;
+        static constexpr auto NoExpose         = 14;
+        static constexpr auto VisibilityNotify = 15;
+        static constexpr auto CreateNotify     = 16;
+        static constexpr auto DestroyNotify    = 17;
+        static constexpr auto UnmapNotify      = 18;
+        static constexpr auto MapNotify        = 19;
+        static constexpr auto MapRequest       = 20;
+        static constexpr auto ReparentNotify   = 21;
+        static constexpr auto ConfigureNotify  = 22;
+        static constexpr auto ConfigureRequest = 23;
+        static constexpr auto GravityNotify    = 24;
+        static constexpr auto ResizeRequest    = 25;
+        static constexpr auto CirculateNotify  = 26;
+        static constexpr auto CirculateRequest = 27;
+        static constexpr auto PropertyNotify   = 28;
+        static constexpr auto SelectionClear   = 29;
+        static constexpr auto SelectionRequest = 30;
+        static constexpr auto SelectionNotify  = 31;
+        static constexpr auto ColormapNotify   = 32;
+        static constexpr auto ClientMessage    = 33;
+        static constexpr auto MappingNotify    = 34;
+        static constexpr auto GenericEvent     = 35;
+
         struct any
         {
             byte type; // Bit 7 may be set if the event is artificially generated (SendEvent).
             byte detail;
             ui16 sequence;
             ui32 pad[7];
+        };
+        struct error // Type 0
+        {
+            byte type;
+            byte error_code;   // Error code (1: BadRequest, 2: BadValue, 3: BadWindow, 128+: Extensions...).
+            ui16 sequence;     // Request stamp.
+            ui32 bad_value;    // Invalid XID.
+            ui16 minor_opcode; // Request's minor opcode.
+            byte major_opcode; // Request's major opcode.
+            byte pad[21];
         };
         struct mouse_click // Type 4 (button press) and 5 (button release).
         {
@@ -396,33 +461,36 @@ namespace x11
             byte max_keycode;                 // 1 byte buffer[27]     = max_keycode
             byte pad[4];                      // 4 ui32 buffer[28..31] = unused
         } s;
-        struct shm_alloc_t
-        {
-            si32 shmid;
-            ui32 shm_seg_id;
-            void* addr;
-        };
 
         text                                  vendor_str;     // buffer[32..32+vendor_length] = vendor_str
         std::vector<format>                   pixmap_formats; // format * number_of_formats = pixmap_formats
-        si32                                  pixmap_format_index = -1;
+        ui32                                  argb_visual32_id = 0; // 32-bit visual_id.
+        ui32                                  argb_colormap_id = 0;
         std::vector<screen>                   roots;          // screen * number_of_screens = roots (always a multiple of 4)
+        ui32                                  atom_motif_wm_hints = 0; // Disable decoractions.
+        //ui32                                  atom_net_wm_state_skip_taskbar = 0; // Hide from the taskbar.
+        //ui32                                  atom_net_wm_state = 0;              //
+        //ui32                                  atom_net_wm_window_type = 0;
+        //ui32                                  atom_net_wm_window_type_combo = 0;
+        //ui32                                  atom_compton_shadow = 0;
         byte                                  shm_major_opcode = 0;
         byte                                  shm_first_event = 0;
         fd_t                                  shm_buffer_fd = os::invalid_fd;
         byte*                                 shm_buffer_ptr = {};
         size_t                                shm_buffer_len = {};
         ui32                                  shm_segmen_xid = {};
+        size_t                                shm_buffer_offset = {};
+        size_t                                current_frame_index = {};
+        bool shm_ready_flag[2]   = { true, true }; // Buffer ready flags.
 
         sptr<os::ipc::stdcon>                 x11connection;  // Active X11 socket connection.
-        std::unordered_map<ui32, shm_alloc_t> active_shm_segments;
         generics::indexer_growing<ui32, 256>  resource_indexer; // Use growing indexer to avoid reusing indexes.
 
         template<bool B = true>
         auto str() const
         {
             if (roots.empty()) return "no screen roots"s;
-            auto str = utf::fprint("%%Connected: id_base/mask=%%/%% root_window_id=%% screens=%% vendor='%%'\n", prompt::x11,
+            auto str = utf::fprint("%%Connected: id_base/mask=%%/%% root_window_id=0x%% screens=%% vendor='%%'\n", prompt::x11,
                 utf::to_hex(s.resource_id_base),
                 utf::to_hex(s.resource_id_mask),
                 utf::to_hex(roots.front().s.root_window_id),
@@ -438,18 +506,18 @@ namespace x11
             for (auto& root : roots)
             {
                 auto& sc = root.s;
-                str += utf::fprint("     root_window_id="        , utf::to_hex(sc.root_window_id),
-                                    "\n\t default_colormap="     , utf::to_hex(sc.default_colormap),
-                                    "\n\t white_pixel="          , utf::to_hex(sc.white_pixel),
-                                    "\n\t black_pixel="          , utf::to_hex(sc.black_pixel),
-                                    "\n\t current_input_masks="  , utf::to_hex(sc.current_input_masks),
+                str += utf::fprint("     root_window_id=0x"      , utf::to_hex(sc.root_window_id),
+                                    "\n\t default_colormap="     , sc.default_colormap,
+                                    "\n\t white_pixel=0x"        , utf::to_hex(sc.white_pixel),
+                                    "\n\t black_pixel=0x"        , utf::to_hex(sc.black_pixel),
+                                    "\n\t current_input_masks=0x", utf::to_hex(sc.current_input_masks),
                                     "\n\t width_in_pixels="      , sc.width_in_pixels,
                                     "\n\t height_in_pixels="     , sc.height_in_pixels,
                                     "\n\t width_in_millimeters=" , sc.width_in_millimeters,
                                     "\n\t height_in_millimeters=", sc.height_in_millimeters,
                                     "\n\t min_installed_maps="   , sc.min_installed_maps,
                                     "\n\t max_installed_maps="   , sc.max_installed_maps,
-                                    "\n\t root_visual="          , utf::to_hex(sc.root_visual),
+                                    "\n\t root_visual=0x"        , utf::to_hex(sc.root_visual),
                                     "\n\t backing_stores="       , (si32)sc.backing_stores,
                                     "\n\t save_unders="          , (si32)sc.save_unders,
                                     "\n\t root_depth="           , (si32)sc.root_depth,
@@ -464,13 +532,13 @@ namespace x11
                     //for (auto& vt : depth.list_of_visual_types)
                     //{
                     //    auto& v = vt.s;
-                    //    str += utf::fprint("\tvisual_id=",              utf::to_hex(v.visual_id),
+                    //    str += utf::fprint("\tvisual_id=0x",              utf::to_hex(v.visual_id),
                     //                        "\n\t\t visual_class=",       (si32)v.visual_class,
                     //                        "\n\t\t bits_per_rgb_value=", (si32)v.bits_per_rgb_value,
                     //                        "\n\t\t colormap_entries=",   v.colormap_entries,
-                    //                        "\n\t\t red_mask=",           utf::to_hex(v.red_mask),
-                    //                        "\n\t\t green_mask=",         utf::to_hex(v.green_mask),
-                    //                        "\n\t\t blue_mask=",          utf::to_hex(v.blue_mask),
+                    //                        "\n\t\t red_mask=0x",         utf::to_hex(v.red_mask),
+                    //                        "\n\t\t green_mask=0x",       utf::to_hex(v.green_mask),
+                    //                        "\n\t\t blue_mask=0x",        utf::to_hex(v.blue_mask),
                     //                        "\n");
                     //}
                 }
@@ -499,19 +567,35 @@ namespace x11
         }
         auto detect_argb_32bit()
         {
-            auto i = 0;
-            for (auto& format : pixmap_formats)
+            auto argb_supported = faux;
+            for (auto& format : pixmap_formats) // Check if argb supported.
             {
                 auto& pf = format.s;
                 if (pf.depth == 32 && pf.bits_per_pixel == 32)
                 {
-                    pixmap_format_index = i;
+                    argb_supported = true;
+                    break;
+                }
+            }
+            if (argb_supported && roots.size()) // Find visual_id with depth=32.
+            for (auto& depth : roots.front().list_of_depths)
+            {
+                if (depth.s.depth == 32)
+                if (depth.list_of_visual_types.size()) // Take first available visual_type.
+                {
+                    auto& v = depth.list_of_visual_types.front().s;
+                    argb_visual32_id = v.visual_id;
+                    argb_colormap_id = new_resource_id();
+                    auto r = x11::req::create_colormap{ .colormap_id = argb_colormap_id,
+                                                        .window_id   = roots.front().s.root_window_id,
+                                                        .visual_id   = argb_visual32_id };
+                    x11connection->send(view{ (char*)&r, sizeof(r) });
+                    if constexpr (debugmode) log("%%ARGB visual id found: argb_visual32_id=0x%%", prompt::x11, utf::to_hex(argb_visual32_id));
                     return true;
                 }
-                i++;
             }
-            auto errmsg = utf::fprint("%%32-bit ARGB pixel format not found on X11 server\n", prompt::x11);
-            errmsg += pixmap_formats.size() ? utf::fprint("    Available pixmap formats(%%):\n", pixmap_formats.size()) : "    There are no pixmap formats\n";
+            auto errmsg = utf::fprint("%%32-bit ARGB pixel format is not supported on X11 server\n", prompt::x11);
+            errmsg += pixmap_formats.size() ? utf::fprint("    Supported pixmap formats(%%):\n", pixmap_formats.size()) : "    There are no pixmap formats\n";
             for (auto& format : pixmap_formats)
             {
                 auto& pf = format.s;
@@ -545,7 +629,7 @@ namespace x11
                 if (v_reply.status == 1)
                 if (v_reply.major_version > 1 || (v_reply.major_version == 1 && v_reply.minor_version >= 2)) // Check min version 1.2.
                 {
-                    if constexpr (debugmode) log("%%MIT-SHM version %%.%% detected", prompt::x11, (si32)v_reply.major_version, (si32)v_reply.minor_version);
+                    if constexpr (debugmode) log("%%MIT-SHM version %%.%% detected (shm_major_opcode=%% shm_first_event=%%)", prompt::x11, (si32)v_reply.major_version, (si32)v_reply.minor_version, (si32)shm_major_opcode, (si32)shm_first_event);
                     return true;
                 }
                 if (v_reply.status == 1)
@@ -600,60 +684,116 @@ namespace x11
             x11connection->send(view{ (char*)&req, sizeof(req) });
             if constexpr (debugmode) log("%%Shared buffer segment XID %% is detached", prompt::x11, client_shmseg_xid);
         }
-        void sync_pixmap(ui32 window_id, ui32 gc_id, twod size)
+        auto create_window_flow(ui32 master_window_id, ui32 new_window_id, twod coor, twod size)
         {
-            auto it = active_shm_segments.find(window_id);
-            if (it != active_shm_segments.end())
-            {
-                auto& shm = it->second;
-                auto req = x11::req::shm_put_image{};
-                req.req_opcode   = shm_major_opcode;
-                req.drawable     = window_id;
-                req.gc_id        = gc_id;
-                req.total_width  = size.x;
-                req.total_height = size.y;
-                req.src_width    = size.x;
-                req.src_height   = size.y;
-                req.shm_seg_id   = shm.shm_seg_id;
-                auto packet = text(sizeof(req), '\0');
-                std::memcpy(packet.data(), &req, sizeof(req));
-                x11connection->send(packet);
-            }
-        }
-        auto create_window_flow(ui32 new_window_id, twod coor, twod size)
-        {
+            if (!size) size = dot_11;
             auto& screen = roots.front();
             auto req = x11::req::create_window{};
             req.window_id = new_window_id;
             req.parent_id = screen.s.root_window_id;
-            req.depth     = 32;//screen.s.root_depth;
-            req.visual_id = screen.s.root_visual;
+            req.depth     = 32;
+            req.visual_id = argb_visual32_id;
             req.x         = (ui16)coor.x;
             req.y         = (ui16)coor.y;
             req.width     = (ui16)size.x;
             req.height    = (ui16)size.y;
-            auto event_mask = 0x0012804Fu; // Bitfield (Focus, Resize, Paint, Mouse, Keyboard).
-            auto colormap = screen.s.default_colormap;
-            // value_mask specifies arguments are stored in the payload block in bit order: CWColormap (0x00002000), CWEventMask (0x00000800).
-            auto create_packet = text(sizeof(req) + sizeof(colormap) + sizeof(event_mask), '\0');
-            std::memcpy(create_packet.data(), &req, sizeof(req));
-            std::memcpy(create_packet.data() + sizeof(req), &colormap, sizeof(colormap));
-            std::memcpy(create_packet.data() + sizeof(req) + sizeof(colormap), &event_mask, sizeof(event_mask));
-            auto map = x11::req::map_window{ .window_id = new_window_id }; // Immediately append the map_window request.
-            auto map_packet = text(sizeof(map), '\0');
-            std::memcpy(map_packet.data(), &map, sizeof(map));
-            return create_packet + map_packet;
+            req.value_mask = 0x00002808u; // CWBorderPixel (0x00000008), CWEventMask (0x00000800), CWColormap (0x00002000): value_mask specifies arguments are stored in the payload block in bit order.
+            req.length = sizeof(req) / 4 + std::popcount(req.value_mask);
+            auto border_pixel = 0x00'000000u; // Own 32-bit ARGB border pixel value.
+            auto event_mask   = 0x0012804Fu; // Window events bitfield: Focus, Resize, Paint, Mouse, Keyboard.
+            auto colormap_id  = argb_colormap_id;
+            auto create_packet = text{};
+            create_packet += view{ (char*)&req,          sizeof(req) };
+            create_packet += view{ (char*)&border_pixel, sizeof(border_pixel) };
+            create_packet += view{ (char*)&event_mask,   sizeof(event_mask) };
+            create_packet += view{ (char*)&colormap_id,  sizeof(colormap_id) };
+
+            // Disable decorations.
+            struct PropMotifHints // Motif WM Hints to disable decorations.
+            {
+                ui32 flags       = 2; // MWM_HINTS_DECORATIONS
+                ui32 functions   = 0;
+                ui32 decorations = 0; // 0: No decors.
+                ui32 input_mode  = 0;
+                ui32 status      = 0;
+            }
+            hints;
+            auto motif_req = x11::req::change_property{ .window_id = req.window_id,
+                                                        .property  = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS".
+                                                        .type      = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS" (same).
+                                                        .format    = 32,                  // Format (e.g., 32: 32-bit words).
+                                                        .data_len  = sizeof(PropMotifHints) / 4 };
+            motif_req.length = sizeof(motif_req) / 4 + motif_req.data_len;
+            create_packet += view{ (char*)&motif_req, sizeof(motif_req) };
+            create_packet += view{ (char*)&hints,     sizeof(hints) };
+
+            // Remove sub-layers from taskbar.
+            if (size == dot_11)
+            {
+                auto trans_req = x11::req::change_property{ .window_id = new_window_id,
+                                                            .property  = 68, // Atom WM_TRANSIENT_FOR=68.
+                                                            .type      = 33, // Atom XA_WINDOW=33.
+                                                            .format    = 32,
+                                                            .data_len  = 1 };
+                trans_req.length = sizeof(trans_req) / 4 + trans_req.data_len;
+                create_packet += view{ (char*)&trans_req,         sizeof(trans_req) };
+                create_packet += view{ (char*)&master_window_id, sizeof(master_window_id) };
+            //    auto wm_state_data = atom_net_wm_state_skip_taskbar;
+            //    auto state_req = x11::req::change_property{ .window_id = new_window_id,
+            //                                                .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
+            //                                                .type      = 4,                 // Atom XA_ATOM=4.
+            //                                                .format    = 32,
+            //                                                .data_len  = 1 };               // 1 word.
+            //    state_req.length = sizeof(state_req) / 4 + state_req.data_len;
+            //    create_packet += view{ (char*)&state_req,     sizeof(state_req) };
+            //    create_packet += view{ (char*)&wm_state_data, sizeof(wm_state_data) };
+            }
+
+            // Disable shadows.
+            //if (atom_net_wm_window_type) // EWMH (_NET_WM_WINDOW_TYPE -> _NET_WM_WINDOW_TYPE_COMBO).
+            //{
+            //    auto window_type_data = atom_net_wm_window_type_combo;
+            //    auto shadow_req1 = x11::req::change_property{ .window_id = req.window_id,
+            //                                                  .property  = atom_net_wm_window_type, // Atom "_NET_WM_WINDOW_TYPE".
+            //                                                  .type      = 4,                       // Atom XA_ATOM=4.
+            //                                                  .format    = 32,                      // 32-bit words.
+            //                                                  .data_len  = 1 };                     // 1 word.
+            //    shadow_req1.length = sizeof(shadow_req1) / 4 + shadow_req1.data_len;
+            //    create_packet += view{ (char*)&shadow_req1,     sizeof(shadow_req1) };
+            //    create_packet += view{ (char*)&window_type_data, sizeof(window_type_data) };
+            //}
+            //if (atom_compton_shadow) // Picom (_COMPTON_SHADOW = 0).
+            //{
+            //    auto disable_shadow_value = 0u; // 0: off, 1: on.
+            //    auto shadow_req2 = x11::req::change_property{ .window_id = req.window_id,
+            //                                                  .property  = atom_compton_shadow,      // Atom "_COMPTON_SHADOW".
+            //                                                  .type      = 6,                        // Atom XA_CARDINAL=6.
+            //                                                  .format    = 32,                       // 32-bit words.
+            //                                                  .data_len  = 1 };
+            //    shadow_req2.length = sizeof(shadow_req2) / 4 + shadow_req2.data_len;
+            //    create_packet += view{ (char*)&shadow_req2,          sizeof(shadow_req2) };
+            //    create_packet += view{ (char*)&disable_shadow_value, sizeof(disable_shadow_value) };
+            //}
+
+            if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% w=%% h=%% colormap_id=0x%%\n%%",
+                utf::to_hex(req.window_id), utf::to_hex(req.parent_id), (si32)req.depth, utf::to_hex(req.visual_id), req.width, req.height,
+                utf::to_hex(colormap_id), utf::buffer_to_hex(create_packet, true));
+            return create_packet;
         }
         void window_set_title(ui32 window_id, view title)
         {
-            auto req = x11::req::change_property{};
-            req.window_id = window_id;
-            req.data_len  = title.size();
+            auto req = x11::req::change_property{ .window_id = window_id,
+                                                  .property  = 39, // Atom WM_NAME (predefined id = 39).
+                                                  .type      = 31, // Atom STRING (predefined id = 31).
+                                                  .format    = 8,  // Format (8: 8-bit chars (string)).
+                                                  .data_len  = (ui32)title.size() };
             auto padded_str_len = (title.size() + 3) & ~3;
-            req.length = (sizeof(req) + padded_str_len) / 4;
-            auto packet = text(sizeof(req) + padded_str_len, '\0');
-            std::memcpy(packet.data(), &req, sizeof(req));
-            std::memcpy(packet.data() + sizeof(req), title.data(), title.size());
+            req.length = (ui16)((sizeof(req) + padded_str_len) / 4);
+            auto packet = text{};
+            packet.reserve(req.length * 4);
+            packet += view{ (char*)&req, sizeof(req) };
+            packet += title;
+            packet.resize(req.length * 4);
             x11connection->send(packet);
         }
         bool resize_shared_buffer(size_t size)
@@ -717,6 +857,68 @@ namespace x11
                 ::close(shm_buffer_fd);
                 shm_buffer_fd = os::invalid_fd;
             }
+        }
+        auto get_atom_id(view name)
+        {
+            auto aligned_name_len = (name.length() + 3) & ~3;
+            auto packet_size = sizeof(x11::req::intern_atom) + aligned_name_len;
+            auto packet = text(packet_size, '\0');
+            auto req = reinterpret_cast<x11::req::intern_atom*>(packet.data());
+            req->opcode         = 16;
+            req->only_if_exists = 1; // 0: Create if absent. 1: Don't create.
+            req->name_len       = name.length();
+            req->length         = packet_size / 4;
+            std::memcpy(packet.data() + sizeof(x11::req::intern_atom), name.data(), name.length());
+            x11connection->send(packet);
+            auto reply = x11::req::intern_atom::reply{};
+            if (x11connection->recv((char*)&reply, sizeof(reply)).size() == 32 && reply.type == 1)
+            {
+                if constexpr (debugmode) log("%%Received atom for '%%'=0x%%", prompt::x11, name, reply.atom_id);
+                return reply.atom_id;
+            }
+            log("%%Failed to intern atom: %%", prompt::x11, name);
+            return 0u;
+        }
+        auto get_atoms()
+        {
+            atom_motif_wm_hints            = get_atom_id("_MOTIF_WM_HINTS");
+            //atom_net_wm_state              = get_atom_id("_NET_WM_STATE");
+            //atom_net_wm_state_skip_taskbar = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR");
+            //atom_net_wm_window_type       = get_atom_id("_NET_WM_WINDOW_TYPE");
+            //atom_net_wm_window_type_combo = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO");
+            //atom_compton_shadow           = get_atom_id("_COMPTON_SHADOW"); // Picom/Compton
+            return atom_motif_wm_hints > 0;
+        }
+        auto get_error(x11::event::error& err)
+        {
+            auto err_str = text{};
+            switch (err.error_code)
+            {
+                case  1: err_str = "Bad Request";        break;
+                case  2: err_str = "Bad Value";          break;
+                case  3: err_str = "Bad Window";         break;
+                case  4: err_str = "Bad Pixmap";         break;
+                case  5: err_str = "Bad Atom";           break;
+                case  6: err_str = "Bad Cursor";         break;
+                case  7: err_str = "Bad Font";           break;
+                case  8: err_str = "Bad Match";          break;
+                case  9: err_str = "Bad Drawable";       break;
+                case 10: err_str = "Bad Access";         break;
+                case 11: err_str = "Bad Alloc";          break;
+                case 12: err_str = "Bad Color";          break;
+                case 13: err_str = "Bad GC";             break;
+                case 14: err_str = "Bad IDChoice";       break;
+                case 15: err_str = "Bad Name";           break;
+                case 16: err_str = "Bad Length";         break;
+                case 17: err_str = "Bad Implementation"; break;
+            }
+            if (err.major_opcode == shm_major_opcode) // MIT-SHM related error.
+            {
+                err_str += " (MIT-SHM Extension Error)";
+            }
+            return utf::fprint("%%Error: code=%%, seq=%%, bad_resource_id=0x%%, major=%%, minor=%% desc: %%", prompt::x11,
+                            (ui32)err.error_code, (ui32)err.sequence, utf::to_hex(err.bad_value),
+                            (ui32)err.major_opcode, (ui32)err.minor_opcode, err_str);
         }
     };
     #pragma pack(pop)
@@ -898,6 +1100,7 @@ namespace x11
                 session.x11connection = socket_link;
                 if (session.detect_argb_32bit())
                 if (session.detect_mit_shm())
+                if (session.get_atoms())
                 {
                     if constexpr (debugmode) log(session.str());
                     auto& x11screen = session.roots.front().s;

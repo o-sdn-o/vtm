@@ -2513,7 +2513,7 @@ namespace netxs::input
                                 auto metadata = iter->second;
                                 k.sign = (byte)(input::key::generic_sign | event_tier);
                                 k.code1 = metadata.event_id;
-                                if constexpr (debugmode) log("generic event: event_str=%% event_id=%% param_typename=%% tier=%%", event_str, metadata.event_id, metadata.param_typename, tier::str[event_tier]);
+                                //if constexpr (debugmode) log("generic event: event_str=%% event_id=%% param_typename=%% tier=%%", event_str, metadata.event_id, metadata.param_typename, tier::str[event_tier]);
                             }
                             else
                             {
