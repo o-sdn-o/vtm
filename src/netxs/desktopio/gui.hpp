@@ -6655,7 +6655,7 @@ namespace netxs::gui
                 //todo debug - Exit on keypress.
                 if (type == x11::event::KeyPress) break;
 
-                //if constexpr (debugmode) log("  recv msg type=%%", type);
+                if constexpr (debugmode) log("%%event=%% (%%)", prompt::x11, x11session.event_str(type), type);
                 switch (type)
                 {
                     case x11::event::CreateNotify:

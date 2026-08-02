@@ -23,6 +23,33 @@ namespace netxs::x11
         ui16 additional_length; // Payload length in 4-byte chunks.
         // payload ...
     };
+    namespace window
+    {
+        namespace mask
+        {
+            #define attrmasks                      \
+                X(BackPixmap_______000000000000001)\
+                X(BackPixel________000000000000010)\
+                X(BorderPixmap_____000000000000100)\
+                X(BorderPixel______000000000001000)\
+                X(BitGravity_______000000000010000)\
+                X(WinGravity_______000000000100000)\
+                X(BackingStore_____000000001000000)\
+                X(BackingPlanes____000000010000000)\
+                X(BackingPixel_____000000100000000)\
+                X(OverrideRedirect_000001000000000)\
+                X(SaveUnder________000010000000000)\
+                X(EventMask________000100000000000)\
+                X(DontPropagate____001000000000000)\
+                X(Colormap_________010000000000000)\
+                X(Cursor___________100000000000000)
+            static constexpr auto _counter = __COUNTER__ + 1;
+            #define X(a) static constexpr auto a = 1 << (__COUNTER__ - _counter);
+                attrmasks
+            #undef X
+            #undef attrmasks
+        }
+    }
     namespace req
     {
         struct create_window // Opcode 1 (create window). This request generates a CreateNotify event.
@@ -206,7 +233,22 @@ namespace netxs::x11
         };
         struct shm_put_image // ShmPutImage (Minor Opcode 3) - immediately output from SHM to screen.
         {
-            byte major_opcode;      // MIT-SHM major_opcode.
+            struct reply // ShmCompletionEvent
+            {
+                byte type;          // shm_completion_event
+                byte pad0;
+                ui16 sequence;
+                ui32 drawable;      // Dest Window ID
+                ui16 minor_opcode;  // 3 (ShmPutImage).
+                byte major_opcode;  // shm_major_opcode.
+                byte pad1;
+                ui32 shmseg;        // Linked segment ID.
+                ui32 offset;        // Segment offset.
+                ui32 pad2;
+                ui32 pad3;
+                ui32 pad4;
+            };
+            byte major_opcode;      // shm_major_opcode.
             byte minor_opcode = 3;  // 3: PutImage.
             ui16 length       = 10; // 40 bytes / 4 = 10 words.
             ui32 drawable;          // Our window ID (fg_w).
@@ -221,7 +263,7 @@ namespace netxs::x11
             si16 dst_y;             //
             byte depth      = 32;   // 32-bit ARGB
             byte format     = 2;    // 2: ZPixmap
-            byte send_event = 1;    // 0: Don't notify on output end; 1: Send event on output end.
+            byte send_event = 1;    // 0: Don't notify on output end; 1: Send event on output end (reply).
             byte pad        = 0;
             ui32 shm_seg_id;        // Linked segment ID.
             ui32 offset;            // Segment offset.
@@ -236,41 +278,93 @@ namespace netxs::x11
     }
     namespace event
     {
-        static constexpr auto KeyPress         = 2;
-        static constexpr auto KeyRelease       = 3;
-        static constexpr auto ButtonPress      = 4;
-        static constexpr auto ButtonRelease    = 5;
-        static constexpr auto MotionNotify     = 6;
-        static constexpr auto EnterNotify      = 7;
-        static constexpr auto LeaveNotify      = 8;
-        static constexpr auto FocusIn          = 9;
-        static constexpr auto FocusOut         = 10;
-        static constexpr auto KeymapNotify     = 11;
-        static constexpr auto Expose           = 12;
-        static constexpr auto GraphicsExpose   = 13;
-        static constexpr auto NoExpose         = 14;
-        static constexpr auto VisibilityNotify = 15;
-        static constexpr auto CreateNotify     = 16;
-        static constexpr auto DestroyNotify    = 17;
-        static constexpr auto UnmapNotify      = 18;
-        static constexpr auto MapNotify        = 19;
-        static constexpr auto MapRequest       = 20;
-        static constexpr auto ReparentNotify   = 21;
-        static constexpr auto ConfigureNotify  = 22;
-        static constexpr auto ConfigureRequest = 23;
-        static constexpr auto GravityNotify    = 24;
-        static constexpr auto ResizeRequest    = 25;
-        static constexpr auto CirculateNotify  = 26;
-        static constexpr auto CirculateRequest = 27;
-        static constexpr auto PropertyNotify   = 28;
-        static constexpr auto SelectionClear   = 29;
-        static constexpr auto SelectionRequest = 30;
-        static constexpr auto SelectionNotify  = 31;
-        static constexpr auto ColormapNotify   = 32;
-        static constexpr auto ClientMessage    = 33;
-        static constexpr auto MappingNotify    = 34;
-        static constexpr auto GenericEvent     = 35;
-
+        namespace mask
+        {
+            #define eventmasks         \
+                X(KeyPress            )\
+                X(KeyRelease          )\
+                X(ButtonPress         )\
+                X(ButtonRelease       )\
+                X(EnterWindow         )\
+                X(LeaveWindow         )\
+                X(PointerMotion       )\
+                X(PointerMotionHint   )\
+                X(Button1Motion       )\
+                X(Button2Motion       )\
+                X(Button3Motion       )\
+                X(Button4Motion       )\
+                X(Button5Motion       )\
+                X(ButtonMotion        )\
+                X(KeymapState         )\
+                X(Exposure            )\
+                X(VisibilityChange    )\
+                X(StructureNotify     )\
+                X(ResizeRedirect      )\
+                X(SubstructureNotify  )\
+                X(SubstructureRedirect)\
+                X(FocusChange         )\
+                X(PropertyChange      )\
+                X(ColormapChange      )\
+                X(OwnerGrabButton     )
+            static constexpr auto _counter = __COUNTER__ + 1;
+            #define X(a) static constexpr auto a = 1 << (__COUNTER__ - _counter);
+                eventmasks
+            #undef X
+            #undef eventmasks
+        }
+        #define eventlist      \
+            X(Error           )\
+            X(Reply           )\
+            X(KeyPress        )\
+            X(KeyRelease      )\
+            X(ButtonPress     )\
+            X(ButtonRelease   )\
+            X(MotionNotify    )\
+            X(EnterNotify     )\
+            X(LeaveNotify     )\
+            X(FocusIn         )\
+            X(FocusOut        )\
+            X(KeymapNotify    )\
+            X(Expose          )\
+            X(GraphicsExpose  )\
+            X(NoExpose        )\
+            X(VisibilityNotify)\
+            X(CreateNotify    )\
+            X(DestroyNotify   )\
+            X(UnmapNotify     )\
+            X(MapNotify       )\
+            X(MapRequest      )\
+            X(ReparentNotify  )\
+            X(ConfigureNotify )\
+            X(ConfigureRequest)\
+            X(GravityNotify   )\
+            X(ResizeRequest   )\
+            X(CirculateNotify )\
+            X(CirculateRequest)\
+            X(PropertyNotify  )\
+            X(SelectionClear  )\
+            X(SelectionRequest)\
+            X(SelectionNotify )\
+            X(ColormapNotify  )\
+            X(ClientMessage   )\
+            X(MappingNotify   )\
+            X(GenericEvent    )\
+            X(_last           )
+        static constexpr auto _counter = __COUNTER__ + 1;
+        #define X(a) static constexpr auto a = __COUNTER__ - _counter;
+            eventlist
+        #undef X
+        auto str(si32 e)
+        {
+            static constexpr auto el = std::to_array(
+            {
+                #define X(a) #a##sv, // "EventName"sv
+                    eventlist
+                #undef X
+            });
+            return e >= 0 && e < _last ? el[e] : "undef"sv;
+        }
+        #undef eventlist
         struct any
         {
             byte type; // Bit 7 may be set if the event is artificially generated (SendEvent).
@@ -467,14 +561,14 @@ namespace netxs::x11
         ui32                                  argb_visual32_id = 0; // 32-bit visual_id.
         ui32                                  argb_colormap_id = 0;
         std::vector<screen>                   roots;          // screen * number_of_screens = roots (always a multiple of 4)
-        ui32                                  atom_motif_wm_hints = 0; // Disable decoractions.
+        //ui32                                  atom_motif_wm_hints = 0; // Disable decoractions.
         //ui32                                  atom_net_wm_state_skip_taskbar = 0; // Hide from the taskbar.
         //ui32                                  atom_net_wm_state = 0;              //
         //ui32                                  atom_net_wm_window_type = 0;
         //ui32                                  atom_net_wm_window_type_combo = 0;
         //ui32                                  atom_compton_shadow = 0;
         byte                                  shm_major_opcode = 0;
-        byte                                  shm_first_event = 0;
+        byte                                  shm_completion_event = 0;
         fd_t                                  shm_buffer_fd = os::invalid_fd;
         byte*                                 shm_buffer_ptr = {};
         size_t                                shm_buffer_len = {};
@@ -486,6 +580,10 @@ namespace netxs::x11
         sptr<os::ipc::stdcon>                 x11connection;  // Active X11 socket connection.
         generics::indexer_growing<ui32, 256>  resource_indexer; // Use growing indexer to avoid reusing indexes.
 
+        auto event_str(si32 e)
+        {
+            return e == shm_completion_event ? "ShmCompletionEvent" : x11::event::str(e);
+        }
         template<bool B = true>
         auto str() const
         {
@@ -620,8 +718,8 @@ namespace netxs::x11
             if (x11connection->recv((char*)&reply, sizeof(reply)).size() == sizeof(reply))
             if (reply.present)
             {
-                shm_major_opcode = reply.major_opcode;
-                shm_first_event  = reply.first_event;
+                shm_major_opcode     = reply.major_opcode;
+                shm_completion_event = reply.first_event;
                 auto v_req = x11::req::shm_query_version{ .major_opcode = shm_major_opcode };
                 x11connection->send(view{ (char*)&v_req, sizeof(v_req) });
                 auto v_reply = x11::req::shm_query_version::reply{};
@@ -629,7 +727,7 @@ namespace netxs::x11
                 if (v_reply.status == 1)
                 if (v_reply.major_version > 1 || (v_reply.major_version == 1 && v_reply.minor_version >= 2)) // Check min version 1.2.
                 {
-                    if constexpr (debugmode) log("%%MIT-SHM version %%.%% detected (shm_major_opcode=%% shm_first_event=%%)", prompt::x11, (si32)v_reply.major_version, (si32)v_reply.minor_version, (si32)shm_major_opcode, (si32)shm_first_event);
+                    if constexpr (debugmode) log("%%MIT-SHM version %%.%% detected (shm_major_opcode=%% shm_completion_event=%%)", prompt::x11, (si32)v_reply.major_version, (si32)v_reply.minor_version, (si32)shm_major_opcode, (si32)shm_completion_event);
                     return true;
                 }
                 if (v_reply.status == 1)
@@ -689,65 +787,76 @@ namespace netxs::x11
             if (!size) size = dot_11;
             auto& screen = roots.front();
             auto req = x11::req::create_window{};
-            req.window_id = new_window_id;
-            req.parent_id = screen.s.root_window_id;
-            req.depth     = 32;
-            req.visual_id = argb_visual32_id;
-            req.x         = (ui16)coor.x;
-            req.y         = (ui16)coor.y;
-            req.width     = (ui16)size.x;
-            req.height    = (ui16)size.y;
-            req.value_mask = 0x00002808u; // CWBorderPixel (0x00000008), CWEventMask (0x00000800), CWColormap (0x00002000): value_mask specifies arguments are stored in the payload block in bit order.
+            req.window_id  = new_window_id;
+            req.parent_id  = screen.s.root_window_id;
+            req.depth      = 32;
+            req.visual_id  = argb_visual32_id;
+            req.x          = (ui16)coor.x;
+            req.y          = (ui16)coor.y;
+            req.width      = (ui16)size.x;
+            req.height     = (ui16)size.y;
+            req.value_mask = x11::window::mask::BorderPixel______000000000001000 // value_mask specifies arguments are stored in the payload block in bit order.
+                           | x11::window::mask::OverrideRedirect_000001000000000
+                           | x11::window::mask::EventMask________000100000000000
+                           | x11::window::mask::Colormap_________010000000000000;
             req.length = sizeof(req) / 4 + std::popcount(req.value_mask);
-            auto border_pixel = 0x00'000000u; // Own 32-bit ARGB border pixel value.
-            auto event_mask   = 0x0012804Fu; // Window events bitfield: Focus, Resize, Paint, Mouse, Keyboard.
-            auto colormap_id  = argb_colormap_id;
+            auto border_pixel      = 0x00'000000u; // Own 32-bit ARGB border pixel value.
+            auto override_redirect = 0;      // 1: On.
+            auto event_mask        = x11::event::mask::KeymapState | x11::event::mask::KeyPress | x11::event::mask::KeyRelease
+                                   | x11::event::mask::ButtonPress | x11::event::mask::ButtonRelease
+                                   | x11::event::mask::EnterWindow | x11::event::mask::LeaveWindow
+                                   | x11::event::mask::PointerMotion
+                                   | x11::event::mask::Exposure
+                                   | x11::event::mask::FocusChange
+                                   | x11::event::mask::StructureNotify;
+            auto colormap_id       = argb_colormap_id;
             auto create_packet = text{};
-            create_packet += view{ (char*)&req,          sizeof(req) };
-            create_packet += view{ (char*)&border_pixel, sizeof(border_pixel) };
-            create_packet += view{ (char*)&event_mask,   sizeof(event_mask) };
-            create_packet += view{ (char*)&colormap_id,  sizeof(colormap_id) };
+            create_packet += view{ (char*)&req,               sizeof(req)               };
+            create_packet += view{ (char*)&border_pixel,      sizeof(border_pixel)      };
+            create_packet += view{ (char*)&override_redirect, sizeof(override_redirect) };
+            create_packet += view{ (char*)&event_mask,        sizeof(event_mask)        };
+            create_packet += view{ (char*)&colormap_id,       sizeof(colormap_id)       };
 
             // Disable decorations.
-            struct PropMotifHints // Motif WM Hints to disable decorations.
-            {
-                ui32 flags       = 2; // MWM_HINTS_DECORATIONS
-                ui32 functions   = 0;
-                ui32 decorations = 0; // 0: No decors.
-                ui32 input_mode  = 0;
-                ui32 status      = 0;
-            }
-            hints;
-            auto motif_req = x11::req::change_property{ .window_id = req.window_id,
-                                                        .property  = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS".
-                                                        .type      = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS" (same).
-                                                        .format    = 32,                  // Format (e.g., 32: 32-bit words).
-                                                        .data_len  = sizeof(PropMotifHints) / 4 };
-            motif_req.length = sizeof(motif_req) / 4 + motif_req.data_len;
-            create_packet += view{ (char*)&motif_req, sizeof(motif_req) };
-            create_packet += view{ (char*)&hints,     sizeof(hints) };
+            //struct PropMotifHints // Motif WM Hints to disable decorations.
+            //{
+            //    ui32 flags       = 2; // MWM_HINTS_DECORATIONS
+            //    ui32 functions   = 0;
+            //    ui32 decorations = 0; // 0: No decors.
+            //    ui32 input_mode  = 0;
+            //    ui32 status      = 0;
+            //}
+            //hints;
+            //auto motif_req = x11::req::change_property{ .window_id = req.window_id,
+            //                                            .property  = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS".
+            //                                            .type      = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS" (same).
+            //                                            .format    = 32,                  // Format (e.g., 32: 32-bit words).
+            //                                            .data_len  = sizeof(PropMotifHints) / 4 };
+            //motif_req.length = sizeof(motif_req) / 4 + motif_req.data_len;
+            //create_packet += view{ (char*)&motif_req, sizeof(motif_req) };
+            //create_packet += view{ (char*)&hints,     sizeof(hints) };
 
             // Remove sub-layers from taskbar.
-            if (size == dot_11)
-            {
-                auto trans_req = x11::req::change_property{ .window_id = new_window_id,
-                                                            .property  = 68, // Atom WM_TRANSIENT_FOR=68.
-                                                            .type      = 33, // Atom XA_WINDOW=33.
-                                                            .format    = 32,
-                                                            .data_len  = 1 };
-                trans_req.length = sizeof(trans_req) / 4 + trans_req.data_len;
-                create_packet += view{ (char*)&trans_req,         sizeof(trans_req) };
-                create_packet += view{ (char*)&master_window_id, sizeof(master_window_id) };
-            //    auto wm_state_data = atom_net_wm_state_skip_taskbar;
-            //    auto state_req = x11::req::change_property{ .window_id = new_window_id,
-            //                                                .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
-            //                                                .type      = 4,                 // Atom XA_ATOM=4.
+            //if (size == dot_11)
+            //{
+            //    auto trans_req = x11::req::change_property{ .window_id = new_window_id,
+            //                                                .property  = 68, // Atom WM_TRANSIENT_FOR=68.
+            //                                                .type      = 33, // Atom XA_WINDOW=33.
             //                                                .format    = 32,
-            //                                                .data_len  = 1 };               // 1 word.
-            //    state_req.length = sizeof(state_req) / 4 + state_req.data_len;
-            //    create_packet += view{ (char*)&state_req,     sizeof(state_req) };
-            //    create_packet += view{ (char*)&wm_state_data, sizeof(wm_state_data) };
-            }
+            //                                                .data_len  = 1 };
+            //    trans_req.length = sizeof(trans_req) / 4 + trans_req.data_len;
+            //    create_packet += view{ (char*)&trans_req,         sizeof(trans_req) };
+            //    create_packet += view{ (char*)&master_window_id, sizeof(master_window_id) };
+            ////    auto wm_state_data = atom_net_wm_state_skip_taskbar;
+            ////    auto state_req = x11::req::change_property{ .window_id = new_window_id,
+            ////                                                .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
+            ////                                                .type      = 4,                 // Atom XA_ATOM=4.
+            ////                                                .format    = 32,
+            ////                                                .data_len  = 1 };               // 1 word.
+            ////    state_req.length = sizeof(state_req) / 4 + state_req.data_len;
+            ////    create_packet += view{ (char*)&state_req,     sizeof(state_req) };
+            ////    create_packet += view{ (char*)&wm_state_data, sizeof(wm_state_data) };
+            //}
 
             // Disable shadows.
             //if (atom_net_wm_window_type) // EWMH (_NET_WM_WINDOW_TYPE -> _NET_WM_WINDOW_TYPE_COMBO).
@@ -881,13 +990,13 @@ namespace netxs::x11
         }
         auto get_atoms()
         {
-            atom_motif_wm_hints            = get_atom_id("_MOTIF_WM_HINTS");
+            //atom_motif_wm_hints            = get_atom_id("_MOTIF_WM_HINTS");
             //atom_net_wm_state              = get_atom_id("_NET_WM_STATE");
             //atom_net_wm_state_skip_taskbar = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR");
             //atom_net_wm_window_type       = get_atom_id("_NET_WM_WINDOW_TYPE");
             //atom_net_wm_window_type_combo = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO");
             //atom_compton_shadow           = get_atom_id("_COMPTON_SHADOW"); // Picom/Compton
-            return atom_motif_wm_hints > 0;
+            return true;//atom_motif_wm_hints > 0;
         }
         auto get_error(x11::event::error& err)
         {
