@@ -7,22 +7,6 @@ namespace netxs::x11
 {
     using fd_t = os::fd_t;
 
-    //constexpr auto get_mask_from_tuple(auto const& t)
-    //{
-    //    auto mask = 0;
-    //    auto current_bit = 1;
-    //    std::apply([&](auto const&... fields)
-    //    {
-    //        ([&]{ if (fields.has_value()) mask |= current_bit;
-    //              current_bit <<= 1; }(), ...); // Fold expression.
-    //    }, t);
-    //    return mask;
-    //}
-    //constexpr auto to_tuple15(auto const& p)
-    //{
-    //    auto const&    [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15] = p;
-    //    return std::tie(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15);
-    //}
     void serialize(text& yield, auto& packet, auto const& payload)
     {
         using field_t = std::optional<ui32>;
@@ -61,6 +45,18 @@ namespace netxs::x11
         ui16 additional_length; // Payload length in 4-byte chunks.
         // payload ...
     };
+    namespace motif
+    {
+        static constexpr auto decorations = 1 << 1;
+        struct hints // Motif WM Hints to disable decorations.
+        {
+            ui32 flags       = 2; // MWM_HINTS_DECORATIONS
+            ui32 functions   = 0;
+            ui32 decorations = 0; // 0: No decors.
+            ui32 input_mode  = 0;
+            ui32 status      = 0;
+        };
+    }
     namespace req
     {
         struct create_window // Opcode 1 (create window). This request generates a CreateNotify event.
@@ -164,13 +160,28 @@ namespace netxs::x11
         {
             byte opcode    = 18;
             byte mode      = 0;  // 0: Replace
-            ui16 length;         // Request length
+            ui16 length;
             ui32 window_id;
             ui32 property;       // Atom (e.g., WM_NAME)
             ui32 type;           // Atom (e.g., STRING)
             byte format;         // Payload unit format (e.g., 8: 8-bit chars (string), 32: 32-bit words)
             byte pad[3]    = {};
-            ui32 data_len;       // Char count.
+            ui32 data_len;       // Payload size in format units.
+
+            void serialize(text& yield, auto const& data)
+            {
+                if constexpr (requires{ data.size(); }) data_len = (ui32)data.size();
+                else                                    data_len = (ui32)(sizeof(data) * 8 / format);
+                auto data_bytes = sizeof(data);
+                auto data_words = (data_bytes + 3) / 4;
+                length = sizeof(*this) / 4 + (ui16)data_words;
+                yield += view{ (char*)this, sizeof(*this) };
+                yield += view{ (char*)&data, sizeof(data) };
+                if constexpr (sizeof(data) % 4 != 0)
+                {
+                    yield += "\0\0\0"sv.substr(0, 4 - (sizeof(data) % 4));
+                }
+            }
         };
         struct create_gc // Opcode 55 (create graphical context).
         {
@@ -574,15 +585,18 @@ namespace netxs::x11
 
         text                                  vendor_str;     // buffer[32..32+vendor_length] = vendor_str
         std::vector<format>                   pixmap_formats; // format * number_of_formats = pixmap_formats
-        ui32                                  argb_visual32_id = 0; // 32-bit visual_id.
-        ui32                                  argb_colormap_id = 0;
         std::vector<screen>                   roots;          // screen * number_of_screens = roots (always a multiple of 4)
-        //ui32                                  atom_motif_wm_hints = 0; // Disable decoractions.
-        //ui32                                  atom_net_wm_state_skip_taskbar = 0; // Hide from the taskbar.
-        //ui32                                  atom_net_wm_state = 0;              //
+
+        ui32                                  argb_visual32_id = 0;
+        ui32                                  argb_colormap_id = 0;
+
+        ui32                                  atom_motif_wm_hints = 0; // Disable decoractions.
+        ui32                                  atom_net_wm_state_skip_taskbar = 0; // Hide from the taskbar.
+        ui32                                  atom_net_wm_state = 0;              //
         //ui32                                  atom_net_wm_window_type = 0;
         //ui32                                  atom_net_wm_window_type_combo = 0;
         //ui32                                  atom_compton_shadow = 0;
+
         byte                                  shm_major_opcode = 0;
         byte                                  shm_completion_event = 0;
         fd_t                                  shm_buffer_fd = os::invalid_fd;
@@ -590,6 +604,7 @@ namespace netxs::x11
         size_t                                shm_buffer_len = {};
         ui32                                  shm_segmen_xid = {};
         size_t                                shm_buffer_offset = {};
+
         size_t                                current_frame_index = {};
         bool shm_ready_flag[2]   = { true, true }; // Buffer ready flags.
 
@@ -801,99 +816,81 @@ namespace netxs::x11
         auto create_window_flow(ui32 master_window_id, ui32 new_window_id, twod coor, twod size)
         {
             if (!size) size = dot_11;
-            auto& screen = roots.front();
-            auto req = x11::req::create_window{};
-            req.window_id  = new_window_id;
-            req.parent_id  = screen.s.root_window_id;
-            req.depth      = 32;
-            req.visual_id  = argb_visual32_id;
-            req.x          = (ui16)coor.x;
-            req.y          = (ui16)coor.y;
-            req.width      = (ui16)size.x;
-            req.height     = (ui16)size.y;
-            auto packet = text{};
-            req.serialize(packet, { .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
-                                    .override_redirect = 0,       // 1: On.
-                                    .event_mask        = x11::event::mask::KeymapState | x11::event::mask::KeyPress | x11::event::mask::KeyRelease
-                                                       | x11::event::mask::ButtonPress | x11::event::mask::ButtonRelease
-                                                       | x11::event::mask::EnterWindow | x11::event::mask::LeaveWindow
-                                                       | x11::event::mask::PointerMotion
-                                                       | x11::event::mask::Exposure
-                                                       | x11::event::mask::FocusChange
-                                                       | x11::event::mask::StructureNotify,
-                                    .colormap_id       = argb_colormap_id });
+            auto yield = text{};
+            x11::req::create_window
+            {
+                .window_id = new_window_id,
+                .parent_id = roots.front().s.root_window_id,
+                .x         = (si16)coor.x,
+                .y         = (si16)coor.y,
+                .width     = (ui16)size.x,
+                .height    = (ui16)size.y,
+                .visual_id = argb_visual32_id
+            }
+            .serialize(yield, { .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
+                                .override_redirect = 0,       // 1: On.
+                                .event_mask        = x11::event::mask::KeymapState | x11::event::mask::KeyPress | x11::event::mask::KeyRelease
+                                                   | x11::event::mask::ButtonPress | x11::event::mask::ButtonRelease
+                                                   | x11::event::mask::EnterWindow | x11::event::mask::LeaveWindow
+                                                   | x11::event::mask::PointerMotion
+                                                   | x11::event::mask::Exposure
+                                                   | x11::event::mask::FocusChange
+                                                   | x11::event::mask::StructureNotify,
+                                .colormap_id       = argb_colormap_id });
 
             // Disable decorations.
-            //struct PropMotifHints // Motif WM Hints to disable decorations.
-            //{
-            //    ui32 flags       = 2; // MWM_HINTS_DECORATIONS
-            //    ui32 functions   = 0;
-            //    ui32 decorations = 0; // 0: No decors.
-            //    ui32 input_mode  = 0;
-            //    ui32 status      = 0;
-            //}
-            //hints;
-            //auto motif_req = x11::req::change_property{ .window_id = req.window_id,
-            //                                            .property  = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS".
-            //                                            .type      = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS" (same).
-            //                                            .format    = 32,                  // Format (e.g., 32: 32-bit words).
-            //                                            .data_len  = sizeof(PropMotifHints) / 4 };
-            //motif_req.length = sizeof(motif_req) / 4 + motif_req.data_len;
-            //packet += view{ (char*)&motif_req, sizeof(motif_req) };
-            //packet += view{ (char*)&hints,     sizeof(hints) };
+            x11::req::change_property
+            {
+                .window_id = new_window_id,
+                .property  = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS".
+                .type      = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS" (same).
+                .format    = 32,                  // Format (e.g., 32: 32-bit words).
+            }
+            .serialize(yield, x11::motif::hints{ .flags = x11::motif::decorations, .decorations = 0 });
 
             // Remove sub-layers from taskbar.
-            //if (size == dot_11)
-            //{
-            //    auto trans_req = x11::req::change_property{ .window_id = new_window_id,
-            //                                                .property  = 68, // Atom WM_TRANSIENT_FOR=68.
-            //                                                .type      = 33, // Atom XA_WINDOW=33.
-            //                                                .format    = 32,
-            //                                                .data_len  = 1 };
-            //    trans_req.length = sizeof(trans_req) / 4 + trans_req.data_len;
-            //    packet += view{ (char*)&trans_req,         sizeof(trans_req) };
-            //    packet += view{ (char*)&master_window_id, sizeof(master_window_id) };
-            ////    auto wm_state_data = atom_net_wm_state_skip_taskbar;
-            ////    auto state_req = x11::req::change_property{ .window_id = new_window_id,
-            ////                                                .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
-            ////                                                .type      = 4,                 // Atom XA_ATOM=4.
-            ////                                                .format    = 32,
-            ////                                                .data_len  = 1 };               // 1 word.
-            ////    state_req.length = sizeof(state_req) / 4 + state_req.data_len;
-            ////    packet += view{ (char*)&state_req,     sizeof(state_req) };
-            ////    packet += view{ (char*)&wm_state_data, sizeof(wm_state_data) };
-            //}
+            if (size == dot_11)
+            {
+                x11::req::change_property
+                {
+                    .window_id = new_window_id,
+                    .property  = 68, // Atom WM_TRANSIENT_FOR=68.
+                    .type      = 33, // Atom XA_WINDOW=33.
+                    .format    = 32,
+                }
+                .serialize(yield, master_window_id);
+                x11::req::change_property
+                {
+                    .window_id = new_window_id,
+                    .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
+                    .type      = 4,                 // Atom XA_ATOM=4.
+                    .format    = 32,
+                }
+                .serialize(yield, atom_net_wm_state_skip_taskbar);
+            }
 
             // Disable shadows.
-            //if (atom_net_wm_window_type) // EWMH (_NET_WM_WINDOW_TYPE -> _NET_WM_WINDOW_TYPE_COMBO).
+            //x11::req::change_property
             //{
-            //    auto window_type_data = atom_net_wm_window_type_combo;
-            //    auto shadow_req1 = x11::req::change_property{ .window_id = req.window_id,
-            //                                                  .property  = atom_net_wm_window_type, // Atom "_NET_WM_WINDOW_TYPE".
-            //                                                  .type      = 4,                       // Atom XA_ATOM=4.
-            //                                                  .format    = 32,                      // 32-bit words.
-            //                                                  .data_len  = 1 };                     // 1 word.
-            //    shadow_req1.length = sizeof(shadow_req1) / 4 + shadow_req1.data_len;
-            //    packet += view{ (char*)&shadow_req1,     sizeof(shadow_req1) };
-            //    packet += view{ (char*)&window_type_data, sizeof(window_type_data) };
+            //    .window_id = new_window_id,
+            //    .property  = atom_net_wm_window_type, // Atom "_NET_WM_WINDOW_TYPE".
+            //    .type      = 4,                       // Atom XA_ATOM=4.
+            //    .format    = 32,                      // 32-bit words.
             //}
-            //if (atom_compton_shadow) // Picom (_COMPTON_SHADOW = 0).
+            //.serialize(yield, atom_net_wm_window_type_combo);
+            //x11::req::change_property
             //{
-            //    auto disable_shadow_value = 0u; // 0: off, 1: on.
-            //    auto shadow_req2 = x11::req::change_property{ .window_id = req.window_id,
-            //                                                  .property  = atom_compton_shadow,      // Atom "_COMPTON_SHADOW".
-            //                                                  .type      = 6,                        // Atom XA_CARDINAL=6.
-            //                                                  .format    = 32,                       // 32-bit words.
-            //                                                  .data_len  = 1 };
-            //    shadow_req2.length = sizeof(shadow_req2) / 4 + shadow_req2.data_len;
-            //    packet += view{ (char*)&shadow_req2,          sizeof(shadow_req2) };
-            //    packet += view{ (char*)&disable_shadow_value, sizeof(disable_shadow_value) };
+            //    .window_id = new_window_id,
+            //    .property  = atom_compton_shadow,      // Atom "_COMPTON_SHADOW".
+            //    .type      = 6,                        // Atom XA_CARDINAL=6.
+            //    .format    = 32,                       // 32-bit words.
             //}
+            //.serialize(yield, 0u); // 0: off, 1: on.
 
-            if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% w=%% h=%% colormap_id=0x%%\n%%",
-                utf::to_hex(req.window_id), utf::to_hex(req.parent_id), (si32)req.depth, utf::to_hex(req.visual_id), req.width, req.height,
-                utf::to_hex(argb_colormap_id), utf::buffer_to_hex(packet, true));
-            return packet;
+            if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% coor=%% size=%% colormap_id=0x%%\n%%",
+                utf::to_hex(new_window_id), utf::to_hex(roots.front().s.root_window_id), 32, utf::to_hex(argb_visual32_id), coor, size,
+                utf::to_hex(argb_colormap_id), utf::buffer_to_hex(yield, true));
+            return yield;
         }
         void window_set_title(ui32 window_id, view title)
         {
@@ -980,7 +977,7 @@ namespace netxs::x11
             auto packet = text(packet_size, '\0');
             auto req = reinterpret_cast<x11::req::intern_atom*>(packet.data());
             req->opcode         = 16;
-            req->only_if_exists = 1; // 0: Create if absent. 1: Don't create.
+            req->only_if_exists = 0; // 0: Create if absent. 1: Don't create.
             req->name_len       = name.length();
             req->length         = packet_size / 4;
             std::memcpy(packet.data() + sizeof(x11::req::intern_atom), name.data(), name.length());
@@ -996,12 +993,12 @@ namespace netxs::x11
         }
         auto get_atoms()
         {
-            //atom_motif_wm_hints            = get_atom_id("_MOTIF_WM_HINTS");
-            //atom_net_wm_state              = get_atom_id("_NET_WM_STATE");
-            //atom_net_wm_state_skip_taskbar = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR");
-            //atom_net_wm_window_type       = get_atom_id("_NET_WM_WINDOW_TYPE");
-            //atom_net_wm_window_type_combo = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO");
-            //atom_compton_shadow           = get_atom_id("_COMPTON_SHADOW"); // Picom/Compton
+            atom_motif_wm_hints            = get_atom_id("_MOTIF_WM_HINTS");
+            atom_net_wm_state              = get_atom_id("_NET_WM_STATE");
+            atom_net_wm_state_skip_taskbar = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR");
+            //atom_net_wm_window_type        = get_atom_id("_NET_WM_WINDOW_TYPE");
+            //atom_net_wm_window_type_combo  = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO");
+            //atom_compton_shadow            = get_atom_id("_COMPTON_SHADOW"); // Picom/Compton
             return true;//atom_motif_wm_hints > 0;
         }
         auto get_error(x11::event::error& err)
