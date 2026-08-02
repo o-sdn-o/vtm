@@ -7,6 +7,44 @@ namespace netxs::x11
 {
     using fd_t = os::fd_t;
 
+    //constexpr auto get_mask_from_tuple(auto const& t)
+    //{
+    //    auto mask = 0;
+    //    auto current_bit = 1;
+    //    std::apply([&](auto const&... fields)
+    //    {
+    //        ([&]{ if (fields.has_value()) mask |= current_bit;
+    //              current_bit <<= 1; }(), ...); // Fold expression.
+    //    }, t);
+    //    return mask;
+    //}
+    //constexpr auto to_tuple15(auto const& p)
+    //{
+    //    auto const&    [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15] = p;
+    //    return std::tie(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15);
+    //}
+    void serialize(text& yield, auto& packet, auto const& payload)
+    {
+        using field_t = std::optional<ui32>;
+        auto vmask = 0u;
+        auto count = sizeof(payload) / sizeof(field_t);
+        auto field = reinterpret_cast<field_t const*>(&payload);
+        auto start = yield.size();
+        yield += view{ (char*)&packet, sizeof(packet) };
+        for (auto i = 0u; i < count; ++i)
+        {
+            if (field[i].has_value())
+            {
+                auto v = field[i].value();
+                yield += view{ (char*)&v, sizeof(v) };
+                vmask |= 1u << i;
+            }
+        }
+        auto& ref = *reinterpret_cast<std::decay_t<decltype(packet)>*>(yield.data() + start);
+        ref.value_mask = vmask;
+        ref.length     = sizeof(packet) / 4 + std::popcount(vmask);
+    }
+
     #pragma pack(push, 1)
     template<class T>
     struct data_n_size
@@ -23,33 +61,6 @@ namespace netxs::x11
         ui16 additional_length; // Payload length in 4-byte chunks.
         // payload ...
     };
-    namespace window
-    {
-        namespace mask
-        {
-            #define attrmasks                      \
-                X(BackPixmap_______000000000000001)\
-                X(BackPixel________000000000000010)\
-                X(BorderPixmap_____000000000000100)\
-                X(BorderPixel______000000000001000)\
-                X(BitGravity_______000000000010000)\
-                X(WinGravity_______000000000100000)\
-                X(BackingStore_____000000001000000)\
-                X(BackingPlanes____000000010000000)\
-                X(BackingPixel_____000000100000000)\
-                X(OverrideRedirect_000001000000000)\
-                X(SaveUnder________000010000000000)\
-                X(EventMask________000100000000000)\
-                X(DontPropagate____001000000000000)\
-                X(Colormap_________010000000000000)\
-                X(Cursor___________100000000000000)
-            static constexpr auto _counter = __COUNTER__ + 1;
-            #define X(a) static constexpr auto a = 1 << (__COUNTER__ - _counter);
-                attrmasks
-            #undef X
-            #undef attrmasks
-        }
-    }
     namespace req
     {
         struct create_window // Opcode 1 (create window). This request generates a CreateNotify event.
@@ -67,21 +78,26 @@ namespace netxs::x11
             ui16 window_class = 1;    // 0: CopyFromParent, 1: InputOutput, 2: InputOnly (input events and painting).
             ui32 visual_id;           // 0: CopyFromParent.
             ui32 value_mask;          // Payload bits.
-            // payload ...  0x0001u  background-pixmap      4 0: none, 1: ParentRelative or PIXMAP
-            //              0x0002u  background-pixel       4 argb
-            //              0x0004u  border-pixmap          4 0: CopyFromParent or PIXMAP
-            //              0x0008u  border-pixel           4 argb
-            //              0x0010u  bit-gravity            1 BITGRAVITY (Forget) defines which region of the window should be retained if the window is resized
-            //              0x0020u  win-gravity            1 WINGRAVITY (NorthWest) defines how the window should be repositioned if the parent is resized
-            //              0x0040u  backing-store          1 0: NotUseful, 1: WhenMapped, 2: Always
-            //              0x0080u  backing-planes         4 (default: all ones)
-            //              0x0100u  backing-pixel          4 argb (0x00000000)
-            //              0x0200u  override-redirect      1 bool  specifies whether map and configure requests on this window should override a SubstructureRedirect on the parent, typically to inform a window manager not to tamper with the window
-            //              0x0400u  save-under             1 bool  If true, the server is advised that when this window is mapped, saving the contents of windows it obscures would be beneficial
-            //              0x0800u  event-mask             4 SETofEVENT
-            //              0x1000u  do-not-propagate-mask  4 SETofDEVICEEVENT
-            //              0x2000u  colormap               4 0: CopyFromParent or COLORMAP
-            //              0x4000u  cursor                 4 0: None or CURSOR
+
+            struct payload
+            {
+                std::optional<ui32> background_pixmap;     // 4 0: none, 1: ParentRelative or PIXMAP
+                std::optional<ui32> background_pixel;      // 4 argb
+                std::optional<ui32> border_pixmap;         // 4 0: CopyFromParent or PIXMAP
+                std::optional<ui32> border_pixel;          // 4 argb
+                std::optional<ui32> bit_gravity;           // 1 BITGRAVITY (Forget) defines which region of the window should be retained if the window is resized
+                std::optional<ui32> win_gravity;           // 1 WINGRAVITY (NorthWest) defines how the window should be repositioned if the parent is resized
+                std::optional<ui32> backing_store;         // 1 0: NotUseful, 1: WhenMapped, 2: Always
+                std::optional<ui32> backing_planes;        // 4 (default: all ones)
+                std::optional<ui32> backing_pixel;         // 4 argb (0x00000000)
+                std::optional<ui32> override_redirect;     // 1 bool  specifies whether map and configure requests on this window should override a SubstructureRedirect on the parent, typically to inform a window manager not to tamper with the window
+                std::optional<ui32> save_under;            // 1 bool  If true, the server is advised that when this window is mapped, saving the contents of windows it obscures would be beneficial
+                std::optional<ui32> event_mask;            // 4 SETofEVENT
+                std::optional<ui32> do_not_propagate_mask; // 4 SETofDEVICEEVENT
+                std::optional<ui32> colormap_id;           // 4 0: CopyFromParent or COLORMAP
+                std::optional<ui32> cursor;                // 4 0: None or CURSOR
+            };
+            auto serialize(text& yield, payload p = {}) { x11::serialize(yield, *this, p); }
         };
         struct destroy_window // Opcode 4 (destroy window).
         {
@@ -795,27 +811,17 @@ namespace netxs::x11
             req.y          = (ui16)coor.y;
             req.width      = (ui16)size.x;
             req.height     = (ui16)size.y;
-            req.value_mask = x11::window::mask::BorderPixel______000000000001000 // value_mask specifies arguments are stored in the payload block in bit order.
-                           | x11::window::mask::OverrideRedirect_000001000000000
-                           | x11::window::mask::EventMask________000100000000000
-                           | x11::window::mask::Colormap_________010000000000000;
-            req.length = sizeof(req) / 4 + std::popcount(req.value_mask);
-            auto border_pixel      = 0x00'000000u; // Own 32-bit ARGB border pixel value.
-            auto override_redirect = 0;      // 1: On.
-            auto event_mask        = x11::event::mask::KeymapState | x11::event::mask::KeyPress | x11::event::mask::KeyRelease
-                                   | x11::event::mask::ButtonPress | x11::event::mask::ButtonRelease
-                                   | x11::event::mask::EnterWindow | x11::event::mask::LeaveWindow
-                                   | x11::event::mask::PointerMotion
-                                   | x11::event::mask::Exposure
-                                   | x11::event::mask::FocusChange
-                                   | x11::event::mask::StructureNotify;
-            auto colormap_id       = argb_colormap_id;
-            auto create_packet = text{};
-            create_packet += view{ (char*)&req,               sizeof(req)               };
-            create_packet += view{ (char*)&border_pixel,      sizeof(border_pixel)      };
-            create_packet += view{ (char*)&override_redirect, sizeof(override_redirect) };
-            create_packet += view{ (char*)&event_mask,        sizeof(event_mask)        };
-            create_packet += view{ (char*)&colormap_id,       sizeof(colormap_id)       };
+            auto packet = text{};
+            req.serialize(packet, { .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
+                                    .override_redirect = 0,       // 1: On.
+                                    .event_mask        = x11::event::mask::KeymapState | x11::event::mask::KeyPress | x11::event::mask::KeyRelease
+                                                       | x11::event::mask::ButtonPress | x11::event::mask::ButtonRelease
+                                                       | x11::event::mask::EnterWindow | x11::event::mask::LeaveWindow
+                                                       | x11::event::mask::PointerMotion
+                                                       | x11::event::mask::Exposure
+                                                       | x11::event::mask::FocusChange
+                                                       | x11::event::mask::StructureNotify,
+                                    .colormap_id       = argb_colormap_id });
 
             // Disable decorations.
             //struct PropMotifHints // Motif WM Hints to disable decorations.
@@ -833,8 +839,8 @@ namespace netxs::x11
             //                                            .format    = 32,                  // Format (e.g., 32: 32-bit words).
             //                                            .data_len  = sizeof(PropMotifHints) / 4 };
             //motif_req.length = sizeof(motif_req) / 4 + motif_req.data_len;
-            //create_packet += view{ (char*)&motif_req, sizeof(motif_req) };
-            //create_packet += view{ (char*)&hints,     sizeof(hints) };
+            //packet += view{ (char*)&motif_req, sizeof(motif_req) };
+            //packet += view{ (char*)&hints,     sizeof(hints) };
 
             // Remove sub-layers from taskbar.
             //if (size == dot_11)
@@ -845,8 +851,8 @@ namespace netxs::x11
             //                                                .format    = 32,
             //                                                .data_len  = 1 };
             //    trans_req.length = sizeof(trans_req) / 4 + trans_req.data_len;
-            //    create_packet += view{ (char*)&trans_req,         sizeof(trans_req) };
-            //    create_packet += view{ (char*)&master_window_id, sizeof(master_window_id) };
+            //    packet += view{ (char*)&trans_req,         sizeof(trans_req) };
+            //    packet += view{ (char*)&master_window_id, sizeof(master_window_id) };
             ////    auto wm_state_data = atom_net_wm_state_skip_taskbar;
             ////    auto state_req = x11::req::change_property{ .window_id = new_window_id,
             ////                                                .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
@@ -854,8 +860,8 @@ namespace netxs::x11
             ////                                                .format    = 32,
             ////                                                .data_len  = 1 };               // 1 word.
             ////    state_req.length = sizeof(state_req) / 4 + state_req.data_len;
-            ////    create_packet += view{ (char*)&state_req,     sizeof(state_req) };
-            ////    create_packet += view{ (char*)&wm_state_data, sizeof(wm_state_data) };
+            ////    packet += view{ (char*)&state_req,     sizeof(state_req) };
+            ////    packet += view{ (char*)&wm_state_data, sizeof(wm_state_data) };
             //}
 
             // Disable shadows.
@@ -868,8 +874,8 @@ namespace netxs::x11
             //                                                  .format    = 32,                      // 32-bit words.
             //                                                  .data_len  = 1 };                     // 1 word.
             //    shadow_req1.length = sizeof(shadow_req1) / 4 + shadow_req1.data_len;
-            //    create_packet += view{ (char*)&shadow_req1,     sizeof(shadow_req1) };
-            //    create_packet += view{ (char*)&window_type_data, sizeof(window_type_data) };
+            //    packet += view{ (char*)&shadow_req1,     sizeof(shadow_req1) };
+            //    packet += view{ (char*)&window_type_data, sizeof(window_type_data) };
             //}
             //if (atom_compton_shadow) // Picom (_COMPTON_SHADOW = 0).
             //{
@@ -880,14 +886,14 @@ namespace netxs::x11
             //                                                  .format    = 32,                       // 32-bit words.
             //                                                  .data_len  = 1 };
             //    shadow_req2.length = sizeof(shadow_req2) / 4 + shadow_req2.data_len;
-            //    create_packet += view{ (char*)&shadow_req2,          sizeof(shadow_req2) };
-            //    create_packet += view{ (char*)&disable_shadow_value, sizeof(disable_shadow_value) };
+            //    packet += view{ (char*)&shadow_req2,          sizeof(shadow_req2) };
+            //    packet += view{ (char*)&disable_shadow_value, sizeof(disable_shadow_value) };
             //}
 
             if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% w=%% h=%% colormap_id=0x%%\n%%",
                 utf::to_hex(req.window_id), utf::to_hex(req.parent_id), (si32)req.depth, utf::to_hex(req.visual_id), req.width, req.height,
-                utf::to_hex(colormap_id), utf::buffer_to_hex(create_packet, true));
-            return create_packet;
+                utf::to_hex(argb_colormap_id), utf::buffer_to_hex(packet, true));
+            return packet;
         }
         void window_set_title(ui32 window_id, view title)
         {
