@@ -193,6 +193,29 @@ namespace netxs::x11
                 }
             }
         };
+        struct get_property // Opcode 20 (get property)
+        {
+            struct reply
+            {
+                byte type = 1;    // Always 1 (Reply).
+                byte format;      // Bits in word.
+                ui16 sequence;
+                ui32 length;      // Payload length in 32-bit words.
+                ui32 prop_type;   // Property type.
+                ui32 bytes_after; // Bytes remains.
+                ui32 value_len;   // Item size (array step).
+                ui32 pad[3];
+                // payload...
+            };
+            byte opcode = 20;
+            byte remove = 0;      // 1: Delete property after read, 0: Do nothing.
+            ui16 length = 6;
+            ui32 window_id;
+            ui32 property;        // Property atom.
+            ui32 prop_type;       // Property type, 0: for any. (e.g., XA_WINDOW=33)
+            ui32 long_offset = 0; // Offset from beginning in 32-bit words.
+            ui32 long_length = 1; // Read ammount in 32-bit words.
+        };
         struct create_gc // Opcode 55 (create graphical context).
         {
             byte opcode = 55;
@@ -407,7 +430,8 @@ namespace netxs::x11
             byte type; // Bit 7 may be set if the event is artificially generated (SendEvent).
             byte detail;
             ui16 sequence;
-            ui32 pad[7];
+            ui32 length; // Reply's payload length in 32-bit words.
+            ui32 pad[6];
         };
         struct error // Type 0
         {
@@ -635,6 +659,9 @@ namespace netxs::x11
 
         sptr<os::ipc::stdcon>                 x11connection;  // Active X11 socket connection.
         generics::indexer_growing<ui32, 256>  resource_indexer; // Use growing indexer to avoid reusing indexes.
+
+        using reply_handler = std::function<void(x11::event::any const& ev, view payload)>;
+        std::deque<reply_handler> reply_callbacks;
 
         auto event_str(si32 e)
         {
@@ -1072,7 +1099,7 @@ namespace netxs::x11
             x11connection->send(yield);
             return true;
         }
-        auto get_root_window_prop(ui32 atom_id)
+        auto get_root_window_prop(ui32 /*atom_id*/)
         {
             //todo
             return 0;

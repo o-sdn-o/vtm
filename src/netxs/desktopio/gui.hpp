@@ -6649,6 +6649,10 @@ namespace netxs::gui
                 {
                     auto& err = reinterpret_cast<x11::event::error&>(ev);
                     log(x11session.get_error(err));
+                    if (x11session.reply_callbacks.size()) // Pop broken request handler.
+                    {
+                        x11session.reply_callbacks.pop_front();
+                    }
                     continue;
                 }
 
@@ -6658,6 +6662,26 @@ namespace netxs::gui
                 if constexpr (debugmode) log("%%event=%% (%%)", prompt::x11, x11session.event_str(type), type);
                 switch (type)
                 {
+                    case x11::event::Reply:
+                    {
+                        if (x11session.reply_callbacks.empty())
+                        {
+                            if constexpr (debugmode) log("%%Error, received unexpected Reply from server with no handler in queue", prompt::x11);
+                        }
+                        else
+                        {
+                            auto extra_data = text{};
+                            if (ev.length > 0)
+                            {
+                                extra_data.resize(ev.length * sizeof(ui32));
+                                x11connection.recv(extra_data.data(), extra_data.size()); // Blocking call.
+                            }
+                            auto& handler = x11session.reply_callbacks.front();
+                            handler(ev, extra_data);
+                            x11session.reply_callbacks.pop_front();
+                        }
+                        break;
+                    }
                     case x11::event::CreateNotify:
                         log("Window created");
                         break;
@@ -6715,22 +6739,34 @@ namespace netxs::gui
                     case x11::event::PropertyNotify:
                     {
                         auto& e = reinterpret_cast<x11::event::property_notify&>(ev);
-                        log("%%PropertyNotify atom=%%", prompt::x11, e.atom);
-                        if (e.atom == x11session.atom_active_window) // Some window has received focus.
+                        if constexpr (debugmode) log("%%PropertyNotify atom=%%", prompt::x11, e.atom);
+                        if (e.window_id == x11session.roots.front().s.root_window_id && e.atom == x11session.atom_active_window && e.state == 0)
                         {
-                            auto active_window = x11session.get_root_window_prop(x11session.atom_active_window);
-                            log("  refocus: active_window=%%", utf::to_hex_0x(active_window));
-                            //auto focus = active_window == fg_w || active_window == bg_w;
-                            //if (focus)
-                            //{
-                            //    current_desktop = get_window_prop(atom_current_desktop);
-                            //}
-                            //else
-                            //{
-                            //    
-                            //}
+                            auto req = x11::req::get_property{ .window_id   = x11session.roots.front().s.root_window_id,
+                                                               .property    = x11session.atom_active_window,
+                                                               .prop_type   = 33, // XA_WINDOW=33
+                                                               .long_length = 1 };
+                            x11connection.send(view{ (char*)&req, sizeof(req) });
+                            x11session.reply_callbacks.push_back([&](auto& ev, view payload)
+                            {
+                                auto& reply = reinterpret_cast<x11::req::get_property::reply const&>(ev);
+                                if (reply.format == 32 && reply.prop_type == 33 && reply.value_len > 0 && payload.size() >= 4)
+                                {
+                                    auto active_window = *reinterpret_cast<ui32 const*>(payload.data());
+                                    if constexpr (debugmode) log("%%  Got reply: refocus: active_window=0x%%", prompt::x11, utf::to_hex(active_window));
+                                    //auto focus = active_window == fg_w || active_window == bg_w;
+                                    //if (focus)
+                                    //{
+                                    //    current_desktop = get_window_prop(atom_current_desktop);
+                                    //}
+                                    //else
+                                    //{
+                                    //
+                                    //}
+                                }
+                            });
                         }
-                        break;
+                        continue; // Skip sys_command(syscmd::update).
                     }
                 }
                 sys_command(syscmd::update);
