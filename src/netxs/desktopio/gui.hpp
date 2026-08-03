@@ -6521,14 +6521,14 @@ namespace netxs::gui
             auto new_gc_id      = x11session.new_resource_id();
             s.hWnd = (arch)new_window_id;
             s.hdc  = (arch)new_gc_id;
-            auto create_flow = x11session.create_window_flow((ui32)master.hWnd, new_window_id, win_coord, grid_size);
-            auto gc_req = x11::req::create_gc{ .gc_id = new_gc_id, .drawable = new_window_id };
-            create_flow += view{ (char*)&gc_req, sizeof(gc_req) };
             if (cell_size)
             {
                 grid_size /= cell_size;
                 s.area = rect{ win_coord, grid_size * cell_size } + border_dent;
             }
+            auto create_flow = x11session.create_window_flow((ui32)master.hWnd, new_window_id, s.area);
+            auto gc_req = x11::req::create_gc{ .gc_id = new_gc_id, .drawable = new_window_id };
+            create_flow += view{ (char*)&gc_req, sizeof(gc_req) };
             auto ok = x11session.x11connection->send(create_flow);
             return ok;
         }
@@ -6599,7 +6599,7 @@ namespace netxs::gui
                     s.prev.size = s.area.size;
                     auto bitmap_span = std::span<argb>{ layer_shm_ptr, (size_t)s.area.size.x * s.area.size.y };
                     s.data = bits{ bitmap_span, s.area };
-                    zeroize = true; 
+                    zeroize = true;
                 }
                 if (zeroize) s.wipe();
             }
@@ -6710,6 +6710,26 @@ namespace netxs::gui
                     {
                         //auto& key = reinterpret_cast<x11::event::key_press&>(ev);
                         //log();
+                        break;
+                    }
+                    case x11::event::PropertyNotify:
+                    {
+                        auto& e = reinterpret_cast<x11::event::property_notify&>(ev);
+                        log("%%PropertyNotify atom=%%", prompt::x11, e.atom);
+                        if (e.atom == x11session.atom_active_window) // Some window has received focus.
+                        {
+                            auto active_window = x11session.get_root_window_prop(x11session.atom_active_window);
+                            log("  refocus: active_window=%%", utf::to_hex_0x(active_window));
+                            //auto focus = active_window == fg_w || active_window == bg_w;
+                            //if (focus)
+                            //{
+                            //    current_desktop = get_window_prop(atom_current_desktop);
+                            //}
+                            //else
+                            //{
+                            //    
+                            //}
+                        }
                         break;
                     }
                 }

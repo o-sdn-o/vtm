@@ -91,9 +91,19 @@ namespace netxs::x11
                 std::optional<ui32> event_mask;            // 4 SETofEVENT
                 std::optional<ui32> do_not_propagate_mask; // 4 SETofDEVICEEVENT
                 std::optional<ui32> colormap_id;           // 4 0: CopyFromParent or COLORMAP
-                std::optional<ui32> cursor;                // 4 0: None or CURSOR
+                std::optional<ui32> cursor_id;             // 4 0: None or CURSOR
             };
             auto serialize(text& yield, payload p = {}) { x11::serialize(yield, *this, p); }
+        };
+        struct change_window_attrs // Opcode 2 (change window attributes).
+        {
+            byte opcode = 2;
+            byte pad    = 0;
+            ui16 length;
+            ui32 window_id;
+            ui32 value_mask; // Bitfield specifies attr list.
+
+            auto serialize(text& yield, create_window::payload p = {}) { x11::serialize(yield, *this, p); }
         };
         struct destroy_window // Opcode 4 (destroy window).
         {
@@ -193,7 +203,7 @@ namespace netxs::x11
             ui32 value_mask = 0; // No additional attributes
         };
         struct create_colormap // Opcode 78 (create colormap)
-        { 
+        {
             byte opcode = 78;
             byte alloc  = 0;  // 0: None, 1: All
             ui16 length = 4;
@@ -485,6 +495,17 @@ namespace netxs::x11
             byte override_redirect;
             byte pad2;
         };
+        struct property_notify // Type 28 (property notify)
+        {
+            byte type;
+            byte pad0;
+            ui16 sequence;
+            ui32 window_id; // Source window ID.
+            ui32 atom;      // Changed property atom.
+            ui32 time;      // Timestamp in ms.
+            byte state;     // 0: PropertyNewValue, 1: PropertyDelete.
+            byte pad1[15];
+        };
         struct client_message // Type 33 (client message).
         {
             byte type;
@@ -596,6 +617,10 @@ namespace netxs::x11
         //ui32                                  atom_net_wm_window_type = 0;
         //ui32                                  atom_net_wm_window_type_combo = 0;
         //ui32                                  atom_compton_shadow = 0;
+        ui32                                  atom_active_window = 0;
+        ui32                                  atom_number_of_desktops = 0;
+        ui32                                  atom_current_desktop = 0;
+        ui32                                  atom_workarea = 0;
 
         byte                                  shm_major_opcode = 0;
         byte                                  shm_completion_event = 0;
@@ -813,18 +838,18 @@ namespace netxs::x11
             x11connection->send(view{ (char*)&req, sizeof(req) });
             if constexpr (debugmode) log("%%Shared buffer segment XID %% is detached", prompt::x11, client_shmseg_xid);
         }
-        auto create_window_flow(ui32 master_window_id, ui32 new_window_id, twod coor, twod size)
+        auto create_window_flow(ui32 master_window_id, ui32 new_window_id, rect area)
         {
-            if (!size) size = dot_11;
+            if (!area) area = rect_11;
             auto yield = text{};
             x11::req::create_window
             {
                 .window_id = new_window_id,
                 .parent_id = roots.front().s.root_window_id,
-                .x         = (si16)coor.x,
-                .y         = (si16)coor.y,
-                .width     = (ui16)size.x,
-                .height    = (ui16)size.y,
+                .x         = (si16)area.coor.x,
+                .y         = (si16)area.coor.y,
+                .width     = (ui16)area.size.x,
+                .height    = (ui16)area.size.y,
                 .visual_id = argb_visual32_id
             }
             .serialize(yield, { .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
@@ -849,7 +874,7 @@ namespace netxs::x11
             .serialize(yield, x11::motif::hints{ .flags = x11::motif::decorations, .decorations = 0 });
 
             // Remove sub-layers from taskbar.
-            if (size == dot_11)
+            if (area.size == dot_11)
             {
                 x11::req::change_property
                 {
@@ -887,8 +912,8 @@ namespace netxs::x11
             //}
             //.serialize(yield, 0u); // 0: off, 1: on.
 
-            if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% coor=%% size=%% colormap_id=0x%%\n%%",
-                utf::to_hex(new_window_id), utf::to_hex(roots.front().s.root_window_id), 32, utf::to_hex(argb_visual32_id), coor, size,
+            if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% area=%% colormap_id=0x%%\n%%",
+                utf::to_hex(new_window_id), utf::to_hex(roots.front().s.root_window_id), 32, utf::to_hex(argb_visual32_id), area,
                 utf::to_hex(argb_colormap_id), utf::buffer_to_hex(yield, true));
             return yield;
         }
@@ -999,6 +1024,10 @@ namespace netxs::x11
             //atom_net_wm_window_type        = get_atom_id("_NET_WM_WINDOW_TYPE");
             //atom_net_wm_window_type_combo  = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO");
             //atom_compton_shadow            = get_atom_id("_COMPTON_SHADOW"); // Picom/Compton
+            atom_active_window             = get_atom_id("_NET_ACTIVE_WINDOW");
+            atom_number_of_desktops        = get_atom_id("_NET_NUMBER_OF_DESKTOPS");
+            atom_current_desktop           = get_atom_id("_NET_CURRENT_DESKTOP");
+            atom_workarea                  = get_atom_id("_NET_WORKAREA");
             return true;//atom_motif_wm_hints > 0;
         }
         auto get_error(x11::event::error& err)
@@ -1031,6 +1060,22 @@ namespace netxs::x11
             return utf::fprint("%%Error: code=%%, seq=%%, bad_resource_id=0x%%, major=%%, minor=%% desc: %%", prompt::x11,
                             (ui32)err.error_code, (ui32)err.sequence, utf::to_hex(err.bad_value),
                             (ui32)err.major_opcode, (ui32)err.minor_opcode, err_str);
+        }
+        auto listen_root_events() // Subscribe on root's property change (to track some desktop window has received focus).
+        {
+            auto yield = text{};
+            x11::req::change_window_attrs
+            {
+                .window_id = roots.front().s.root_window_id,
+            }
+            .serialize(yield, { .event_mask = x11::event::mask::PropertyChange });
+            x11connection->send(yield);
+            return true;
+        }
+        auto get_root_window_prop(ui32 atom_id)
+        {
+            //todo
+            return 0;
         }
     };
     #pragma pack(pop)
@@ -1213,6 +1258,7 @@ namespace netxs::x11
                 if (session.detect_argb_32bit())
                 if (session.detect_mit_shm())
                 if (session.get_atoms())
+                if (session.listen_root_events())
                 {
                     if constexpr (debugmode) log(session.str());
                     auto& x11screen = session.roots.front().s;
