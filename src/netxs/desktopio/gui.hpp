@@ -6498,7 +6498,7 @@ namespace netxs::gui
         void keybd_reset_deadkey(arch /*hkl*/ = {}) {}
         bool layer_create(layer& s, twod win_coord = {}, twod grid_size = {}, dent border_dent = {}, twod cell_size = {})
         {
-            auto& x11session = *x11::session;
+            auto& x11session = *x11::session_ptr;
             auto& x11screen = x11session.roots.front().s;
             if (cell_size)
             {
@@ -6526,31 +6526,27 @@ namespace netxs::gui
                 grid_size /= cell_size;
                 s.area = rect{ win_coord, grid_size * cell_size } + border_dent;
             }
-            auto create_flow = x11session.create_window_flow((ui32)master.hWnd, new_window_id, s.area);
-            auto gc_req = x11::req::create_gc{ .gc_id = new_gc_id, .drawable = new_window_id };
-            create_flow += view{ (char*)&gc_req, sizeof(gc_req) };
-            auto ok = x11session.x11connection->send(create_flow);
-            return ok;
+            x11session.create_window((ui32)master.hWnd, new_window_id, new_gc_id, s.area);
+            return true;
         }
         void layer_move_all() {}
         void layer_present(layer& s)
         {
             if (!s.data.data() || s.area.size.x <= 0 || s.area.size.y <= 0) return;
-            auto& x11session = *x11::session;
-            auto put_req = x11::req::shm_put_image{ .major_opcode = x11session.shm_major_opcode,
-                                                    .drawable     = (ui32)s.hWnd,
-                                                    .gc_id        = (ui32)s.hdc,
-                                                    .total_width  = (ui16)s.area.size.x,
-                                                    .total_height = (ui16)s.area.size.y,
-                                                    .src_x        = 0,
-                                                    .src_y        = 0,
-                                                    .src_width    = (ui16)s.area.size.x,
-                                                    .src_height   = (ui16)s.area.size.y,
-                                                    .dst_x        = (si16)0,//s.area.coor.x,
-                                                    .dst_y        = (si16)0,//s.area.coor.y,
-                                                    .shm_seg_id   = x11session.shm_segmen_xid,
-                                                    .offset       = (ui32)s.shm_offset };
-            x11session.x11connection->send(view{ (char*)&put_req, sizeof(put_req) });
+            auto& x11session = *x11::session_ptr;
+            x11session.sendrq<x11::req::shm_put_image>({ .major_opcode = x11session.shm_major_opcode,
+                                                         .drawable     = (ui32)s.hWnd,
+                                                         .gc_id        = (ui32)s.hdc,
+                                                         .total_width  = (ui16)s.area.size.x,
+                                                         .total_height = (ui16)s.area.size.y,
+                                                         .src_x        = 0,
+                                                         .src_y        = 0,
+                                                         .src_width    = (ui16)s.area.size.x,
+                                                         .src_height   = (ui16)s.area.size.y,
+                                                         .dst_x        = (si16)0,//s.area.coor.x,
+                                                         .dst_y        = (si16)0,//s.area.coor.y,
+                                                         .shm_seg_id   = x11session.shm_segmen_xid,
+                                                         .offset       = (ui32)s.shm_offset });
         }
         void layer_timer_start(layer& /*s*/, span /*elapse*/, ui32 /*eventid*/) {}
         void layer_timer_stop(layer& /*s*/, ui32 /*eventid*/) {}
@@ -6562,7 +6558,7 @@ namespace netxs::gui
             {
                 if (s.resized())
                 {
-                    auto& x11session = *x11::session;
+                    auto& x11session = *x11::session_ptr;
                     //auto& x11screen = x11session.roots.front().s;
 
                     //todo implement allocation logic inside shared memory (+double buffering)
@@ -6610,7 +6606,7 @@ namespace netxs::gui
         rect window_get_fs_area(rect /*window_area*/)
         {
             //todo multi-monitor setup
-            auto& x11session = *x11::session;
+            auto& x11session = *x11::session_ptr;
             auto& x11screen = x11session.roots.front().s;
             return rect{ dot_00, { x11screen.width_in_pixels, x11screen.height_in_pixels }};
         }
@@ -6624,7 +6620,7 @@ namespace netxs::gui
         void window_message_pump()
         {
             if constexpr (debugmode) log("window_message_pump started");
-            auto& x11session = *x11::session;
+            auto& x11session = *x11::session_ptr;
             auto& x11connection = *x11session.x11connection;
             auto atom_wm_delete_window = ui32{};
             auto ev = x11::event::any{};
@@ -6645,43 +6641,25 @@ namespace netxs::gui
                 //{
                 //    event_window = reinterpret_cast<x11::event::client_message&>(ev).window;
                 //}
+
+                if constexpr (debugmode) log("%%seq=%% event=%% (%%)", prompt::x11, ev.sequence, x11session.event_str(type), type);
+
                 if (type == 0) // X11 Core / Extension Error Packet
                 {
+                    log("error");
                     auto& err = reinterpret_cast<x11::event::error&>(ev);
-                    log(x11session.get_error(err));
-                    if (x11session.reply_callbacks.size()) // Pop broken request handler.
-                    {
-                        x11session.reply_callbacks.pop_front();
-                    }
+                    x11session.parse_error(err);
                     continue;
                 }
 
                 //todo debug - Exit on keypress.
                 if (type == x11::event::KeyPress) break;
 
-                if constexpr (debugmode) log("%%event=%% (%%)", prompt::x11, x11session.event_str(type), type);
                 switch (type)
                 {
                     case x11::event::Reply:
-                    {
-                        if (x11session.reply_callbacks.empty())
-                        {
-                            if constexpr (debugmode) log("%%Error, received unexpected Reply from server with no handler in queue", prompt::x11);
-                        }
-                        else
-                        {
-                            auto extra_data = text{};
-                            if (ev.length > 0)
-                            {
-                                extra_data.resize(ev.length * sizeof(ui32));
-                                x11connection.recv(extra_data.data(), extra_data.size()); // Blocking call.
-                            }
-                            auto& handler = x11session.reply_callbacks.front();
-                            handler(ev, extra_data);
-                            x11session.reply_callbacks.pop_front();
-                        }
+                        x11session.parse_reply(ev);
                         break;
-                    }
                     case x11::event::CreateNotify:
                         log("Window created");
                         break;
@@ -6742,18 +6720,17 @@ namespace netxs::gui
                         if constexpr (debugmode) log("%%PropertyNotify atom=%%", prompt::x11, e.atom);
                         if (e.window_id == x11session.roots.front().s.root_window_id && e.atom == x11session.atom_active_window && e.state == 0)
                         {
-                            auto req = x11::req::get_property{ .window_id   = x11session.roots.front().s.root_window_id,
-                                                               .property    = x11session.atom_active_window,
-                                                               .prop_type   = 33, // XA_WINDOW=33
-                                                               .long_length = 1 };
-                            x11connection.send(view{ (char*)&req, sizeof(req) });
-                            x11session.reply_callbacks.push_back([&](auto& ev, view payload)
+                            x11session.sendrq<x11::req::get_property>({ .window_id   = x11session.roots.front().s.root_window_id,
+                                                                        .property    = x11session.atom_active_window,
+                                                                        .prop_type   = 33, // XA_WINDOW=33
+                                                                        .long_length = 1 }, {},
+                            [&](auto& ev, view payload)
                             {
                                 auto& reply = reinterpret_cast<x11::req::get_property::reply const&>(ev);
                                 if (reply.format == 32 && reply.prop_type == 33 && reply.value_len > 0 && payload.size() >= 4)
                                 {
                                     auto active_window = *reinterpret_cast<ui32 const*>(payload.data());
-                                    if constexpr (debugmode) log("%%  Got reply: refocus: active_window=0x%%", prompt::x11, utf::to_hex(active_window));
+                                    if constexpr (debugmode) log("%%  Got reply: refocus: active_window=0x%% seq=%%", prompt::x11, utf::to_hex(active_window), reply.sequence);
                                     //auto focus = active_window == fg_w || active_window == bg_w;
                                     //if (focus)
                                     //{
@@ -6776,14 +6753,12 @@ namespace netxs::gui
         }
         void window_initilize()
         {
-            auto& x11session = *x11::session;
             for (auto& l : layers)
             {
                 auto& p = l.get();
                 if (auto window_id = (ui32)p.hWnd)
                 {
-                    auto map_req = x11::req::map_window{ .window_id = window_id }; // SW_SHOW.
-                    x11session.x11connection->send(view{ (char*)&map_req, sizeof(map_req) });
+                    x11::session_ptr->sendrq<x11::req::map_window>({ .window_id = window_id }); // SW_SHOW.
                 }
             }
         }

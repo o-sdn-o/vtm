@@ -7,7 +7,7 @@ namespace netxs::x11
 {
     using fd_t = os::fd_t;
 
-    void serialize(text& yield, auto& packet, auto const& payload)
+    auto serialize_list(text& yield, auto& packet, auto const& payload)
     {
         using field_t = std::optional<ui32>;
         auto vmask = 0u;
@@ -27,6 +27,32 @@ namespace netxs::x11
         auto& ref = *reinterpret_cast<std::decay_t<decltype(packet)>*>(yield.data() + start);
         ref.value_mask = vmask;
         ref.length     = sizeof(packet) / 4 + std::popcount(vmask);
+    }
+    auto serialize_str(text& yield, auto& packet, auto const& data)
+    {
+        static constexpr auto is_string = requires{ data.size(); };
+        auto data_bytes = 0ul;
+        if constexpr (is_string) // String.
+        {
+            data_bytes = data.size();
+            packet.data_len = data.size();
+        }
+        else // POD.
+        {
+            data_bytes = sizeof(data);
+            packet.data_len = (ui32)(sizeof(data) * 8 / packet.format);
+        }
+        packet.length = (ui16)(sizeof(packet) / 4 + (data_bytes + 3) / 4);
+        yield += view{ (char*)&packet, sizeof(packet) };
+        if constexpr (is_string)
+        {
+            yield += view{ data.data(), data_bytes };
+            yield += "\0\0\0"s.substr(0, 4 - (data_bytes % 4));
+        }
+        else
+        {
+            yield += view{ (char*)&data, data_bytes };
+        }
     }
 
     #pragma pack(push, 1)
@@ -93,7 +119,7 @@ namespace netxs::x11
                 std::optional<ui32> colormap_id;           // 4 0: CopyFromParent or COLORMAP
                 std::optional<ui32> cursor_id;             // 4 0: None or CURSOR
             };
-            auto serialize(text& yield, payload p = {}) { x11::serialize(yield, *this, p); }
+            auto serialize(text& yield, payload p) { x11::serialize_list(yield, *this, p); }
         };
         struct change_window_attrs // Opcode 2 (change window attributes).
         {
@@ -103,7 +129,8 @@ namespace netxs::x11
             ui32 window_id;
             ui32 value_mask; // Bitfield specifies attr list.
 
-            auto serialize(text& yield, create_window::payload p = {}) { x11::serialize(yield, *this, p); }
+            using payload = create_window::payload;
+            auto serialize(text& yield, payload p) { x11::serialize_list(yield, *this, p); }
         };
         struct destroy_window // Opcode 4 (destroy window).
         {
@@ -162,9 +189,10 @@ namespace netxs::x11
             byte opcode = 16;
             byte only_if_exists; // 0: Create if absent, 1: Only if exists.
             ui16 length;         // (sizeof(intern_atom) + name_len + padding) / 4
-            ui16 name_len;       // String length in bytes.
+            ui16 data_len;       // Name string length in bytes.
             ui16 pad = 0;
-            // payload: string...
+
+            auto serialize(text& yield, view name) { x11::serialize_str(yield, *this, name); }
         };
         struct change_property // Opcode 18 (change property).
         {
@@ -174,24 +202,11 @@ namespace netxs::x11
             ui32 window_id;
             ui32 property;       // Atom (e.g., WM_NAME)
             ui32 type;           // Atom (e.g., STRING)
-            byte format;         // Payload unit format (e.g., 8: 8-bit chars (string), 32: 32-bit words)
+            byte format    = 32; // Payload unit format (e.g., 8: 8-bit chars (string), 32: 32-bit words)
             byte pad[3]    = {};
             ui32 data_len;       // Payload size in format units.
 
-            void serialize(text& yield, auto const& data)
-            {
-                if constexpr (requires{ data.size(); }) data_len = (ui32)data.size();
-                else                                    data_len = (ui32)(sizeof(data) * 8 / format);
-                auto data_bytes = sizeof(data);
-                auto data_words = (data_bytes + 3) / 4;
-                length = sizeof(*this) / 4 + (ui16)data_words;
-                yield += view{ (char*)this, sizeof(*this) };
-                yield += view{ (char*)&data, sizeof(data) };
-                if constexpr (sizeof(data) % 4 != 0)
-                {
-                    yield += "\0\0\0"sv.substr(0, 4 - (sizeof(data) % 4));
-                }
-            }
+            auto serialize(text& yield, auto const& data) { x11::serialize_str(yield, *this, data); }
         };
         struct get_property // Opcode 20 (get property)
         {
@@ -215,6 +230,21 @@ namespace netxs::x11
             ui32 prop_type;       // Property type, 0: for any. (e.g., XA_WINDOW=33)
             ui32 long_offset = 0; // Offset from beginning in 32-bit words.
             ui32 long_length = 1; // Read ammount in 32-bit words.
+        };
+        struct get_input_focus // Opcode 43 (get_input focus).
+        {
+            struct reply
+            {
+                byte type;
+                byte revertTo; // Focus destination after focused window deletion: 0: ToNone, 1: ToRoot, 2: ToParent.
+                ui16 sequence;
+                ui32 length;
+                ui32 focused_window_id;
+                ui32 pad[5];
+            };
+            byte opcode = 43;
+            byte pad    = 0;
+            ui16 length = 1;
         };
         struct create_gc // Opcode 55 (create graphical context).
         {
@@ -251,9 +281,10 @@ namespace netxs::x11
             byte opcode = 98;
             byte pad1   = 0;
             ui16 length;
-            ui16 name_len;
+            ui16 data_len; // Extension name length in bytes.
             ui16 pad2   = 0;
-            // payload..., e.g. "MIT-SHM"
+
+            auto serialize(text& yield, view name) { x11::serialize_str(yield, *this, name); }
         };
         // SHM Minor Opcodes: 0:QueryVersion, 1:Attach, 2:Detach, 3:PutImage, 4:GetImage, 5:CreatePixmap, 6:AttachFd, 7:CreateSegment
         struct shm_query_version // ShmQueryVersion (Minor Opcode 0)
@@ -660,9 +691,64 @@ namespace netxs::x11
         sptr<os::ipc::stdcon>                 x11connection;  // Active X11 socket connection.
         generics::indexer_growing<ui32, 256>  resource_indexer; // Use growing indexer to avoid reusing indexes.
 
-        using reply_handler = std::function<void(x11::event::any const& ev, view payload)>;
-        std::deque<reply_handler> reply_callbacks;
+        struct seq_handler
+        {
+            using fx_t = std::function<void(x11::event::any const& ev, view payload)>;
+            ui16 sequence;
+            fx_t callback;
+        };
+        std::deque<seq_handler> reply_callbacks;
+        std::mutex              mutex;
+        ui16                    sequence_counter = 0; // Sent request counter.
 
+        template<class R, class V = qiew, class P = noop>
+        void sendrq(R request, V payload = {}, P callback = {})
+        {
+            auto lock = std::lock_guard{ mutex };
+            sequence_counter++;
+                auto packet = text{};
+            if constexpr (requires{ request.serialize(packet, payload); })
+            {
+                request.serialize(packet, payload);
+                x11connection->send(packet);
+            }
+            else
+            {
+                assert(!payload);
+                x11connection->send(view{ (char*)&request, sizeof(request) });
+            }
+            if constexpr (!std::is_same_v<P, noop>)
+            {
+                reply_callbacks.push_back({ sequence_counter, std::move(callback) });
+            }
+        }
+        auto parse_reply(x11::event::any& ev)
+        {
+            auto r = std::decay_t<decltype(reply_callbacks.front())>{};
+            {
+                auto lock = std::lock_guard{ mutex };
+                if (reply_callbacks.size())
+                {
+                    r = std::move(reply_callbacks.front());
+                    reply_callbacks.pop_front();
+                }
+            }
+            if (!r.callback)
+            {
+                if constexpr (debugmode) log("%%unexpected Reply with empty queue", prompt::x11);
+            }
+            else
+            {
+                auto extra_data = text{};
+                if (ev.length > 0)
+                {
+                    extra_data.resize(ev.length * sizeof(ui32));
+                    x11connection->recv(extra_data.data(), extra_data.size()); // Blocking call.
+                }
+                if constexpr (debugmode) log("%%seq=%%", prompt::x11, r.sequence);
+                r.callback(ev, extra_data);
+            }
+        }
         auto event_str(si32 e)
         {
             return e == shm_completion_event ? "ShmCompletionEvent" : x11::event::str(e);
@@ -727,14 +813,6 @@ namespace netxs::x11
             if (str.back() == '\n') str.pop_back();
             return str;
         }
-        auto reset()
-        {
-            roots.clear();
-        }
-        constexpr explicit operator bool () const
-        {
-            return !roots.empty();
-        }
         auto new_resource_id()
         {
             auto current_idx = resource_indexer.get_new();
@@ -767,10 +845,9 @@ namespace netxs::x11
                     auto& v = depth.list_of_visual_types.front().s;
                     argb_visual32_id = v.visual_id;
                     argb_colormap_id = new_resource_id();
-                    auto r = x11::req::create_colormap{ .colormap_id = argb_colormap_id,
+                    sendrq<x11::req::create_colormap>({ .colormap_id = argb_colormap_id,
                                                         .window_id   = roots.front().s.root_window_id,
-                                                        .visual_id   = argb_visual32_id };
-                    x11connection->send(view{ (char*)&r, sizeof(r) });
+                                                        .visual_id   = argb_visual32_id });
                     if constexpr (debugmode) log("%%ARGB visual id found: argb_visual32_id=0x%%", prompt::x11, utf::to_hex(argb_visual32_id));
                     return true;
                 }
@@ -787,24 +864,15 @@ namespace netxs::x11
         }
         auto detect_mit_shm()
         {
-            auto ext_name = "MIT-SHM"s;
             auto errdetails = text{};
-            auto req = x11::req::query_extension{};
-            req.name_len = ext_name.size();
-            auto padded_len = (ext_name.size() + 3) & ~3;
-            req.length = (sizeof(req) + padded_len) / 4;
-            auto packet = text(sizeof(req) + padded_len, '\0');
-            std::memcpy(packet.data(), &req, sizeof(req));
-            std::memcpy(packet.data() + sizeof(req), ext_name.data(), ext_name.size());
-            x11connection->send(packet);
+            sendrq<x11::req::query_extension>({}, qiew{ "MIT-SHM" });
             auto reply = x11::req::query_extension::reply{};
             if (x11connection->recv((char*)&reply, sizeof(reply)).size() == sizeof(reply))
             if (reply.present)
             {
                 shm_major_opcode     = reply.major_opcode;
                 shm_completion_event = reply.first_event;
-                auto v_req = x11::req::shm_query_version{ .major_opcode = shm_major_opcode };
-                x11connection->send(view{ (char*)&v_req, sizeof(v_req) });
+                sendrq<x11::req::shm_query_version>({ .major_opcode = shm_major_opcode });
                 auto v_reply = x11::req::shm_query_version::reply{};
                 if (x11connection->recv((char*)&v_reply, sizeof(v_reply)).size() == sizeof(v_reply))
                 if (v_reply.status == 1)
@@ -828,10 +896,8 @@ namespace netxs::x11
         }
         void send_shm_attach_fd(ui32 client_shmseg_xid)
         {
-            auto request = x11::req::shm_attach_fd{};
-            request.major_opcode = shm_major_opcode;
-            request.shm_seg_id   = client_shmseg_xid;
-            // Fill iovec.
+            auto request = x11::req::shm_attach_fd{ .major_opcode = shm_major_opcode,
+                                                    .shm_seg_id   = client_shmseg_xid };
             auto iov = ::iovec{ .iov_base = &request,
                                 .iov_len  = sizeof(request) };
             union // Ancillary Data
@@ -851,8 +917,9 @@ namespace netxs::x11
             cmsg->cmsg_level = SOL_SOCKET;
             cmsg->cmsg_type  = SCM_RIGHTS;
             *reinterpret_cast<fd_t*>(CMSG_DATA(cmsg)) = shm_buffer_fd;
-            auto x11_socket_fd = x11connection->handle.w;
-            auto bytes_sent = ::sendmsg(x11_socket_fd, &msg, 0);
+            auto lock = std::lock_guard{ mutex };
+            sequence_counter++;
+            auto bytes_sent = ::sendmsg(x11connection->handle.w, &msg, 0);
             if (bytes_sent == -1)
             {
                 log("%%sendmsg failed during shm_attach_fd invocation", prompt::x11);
@@ -860,105 +927,71 @@ namespace netxs::x11
         }
         void send_shm_detach_fd(ui32 client_shmseg_xid)
         {
-            auto req = x11::req::shm_detach{ .major_opcode = shm_major_opcode,
-                                             .shm_seg_id   = client_shmseg_xid };
-            x11connection->send(view{ (char*)&req, sizeof(req) });
+            sendrq<x11::req::shm_detach>({ .major_opcode = shm_major_opcode,
+                                           .shm_seg_id   = client_shmseg_xid });
             if constexpr (debugmode) log("%%Shared buffer segment XID %% is detached", prompt::x11, client_shmseg_xid);
         }
-        auto create_window_flow(ui32 master_window_id, ui32 new_window_id, rect area)
+        auto create_window(ui32 master_window_id, ui32 new_window_id, ui32 new_gc_id, rect area)
         {
             if (!area) area = rect_11;
-            auto yield = text{};
-            x11::req::create_window
-            {
-                .window_id = new_window_id,
-                .parent_id = roots.front().s.root_window_id,
-                .x         = (si16)area.coor.x,
-                .y         = (si16)area.coor.y,
-                .width     = (ui16)area.size.x,
-                .height    = (ui16)area.size.y,
-                .visual_id = argb_visual32_id
-            }
-            .serialize(yield, { .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
-                                .override_redirect = 0,       // 1: On.
-                                .event_mask        = x11::event::mask::KeymapState | x11::event::mask::KeyPress | x11::event::mask::KeyRelease
-                                                   | x11::event::mask::ButtonPress | x11::event::mask::ButtonRelease
-                                                   | x11::event::mask::EnterWindow | x11::event::mask::LeaveWindow
-                                                   | x11::event::mask::PointerMotion
-                                                   | x11::event::mask::Exposure
-                                                   | x11::event::mask::FocusChange
-                                                   | x11::event::mask::StructureNotify,
-                                .colormap_id       = argb_colormap_id });
-
+            sendrq<x11::req::create_window>({ .window_id = new_window_id,
+                                              .parent_id = roots.front().s.root_window_id,
+                                              .x         = (si16)area.coor.x,
+                                              .y         = (si16)area.coor.y,
+                                              .width     = (ui16)area.size.x,
+                                              .height    = (ui16)area.size.y,
+                                              .visual_id = argb_visual32_id },
+                                            x11::req::create_window::payload{ .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
+                                                                              .override_redirect = 0,       // 1: On.
+                                                                              .event_mask        = x11::event::mask::KeymapState | x11::event::mask::KeyPress | x11::event::mask::KeyRelease
+                                                                                                 | x11::event::mask::ButtonPress | x11::event::mask::ButtonRelease
+                                                                                                 | x11::event::mask::EnterWindow | x11::event::mask::LeaveWindow
+                                                                                                 | x11::event::mask::PointerMotion
+                                                                                                 | x11::event::mask::Exposure
+                                                                                                 | x11::event::mask::FocusChange
+                                                                                                 | x11::event::mask::StructureNotify,
+                                                                              .colormap_id       = argb_colormap_id });
             // Disable decorations.
-            x11::req::change_property
-            {
-                .window_id = new_window_id,
-                .property  = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS".
-                .type      = atom_motif_wm_hints, // Atom "_MOTIF_WM_HINTS" (same).
-                .format    = 32,                  // Format (e.g., 32: 32-bit words).
-            }
-            .serialize(yield, x11::motif::hints{ .flags = x11::motif::decorations, .decorations = 0 });
+            sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                                                .property  = atom_motif_wm_hints,   // Atom "_MOTIF_WM_HINTS".
+                                                .type      = atom_motif_wm_hints }, // Atom "_MOTIF_WM_HINTS" (same).
+                                            x11::motif::hints{ .flags = x11::motif::decorations, .decorations = 0 });
 
             // Remove sub-layers from taskbar.
             if (area.size == dot_11)
             {
-                x11::req::change_property
-                {
-                    .window_id = new_window_id,
-                    .property  = 68, // Atom WM_TRANSIENT_FOR=68.
-                    .type      = 33, // Atom XA_WINDOW=33.
-                    .format    = 32,
-                }
-                .serialize(yield, master_window_id);
-                x11::req::change_property
-                {
-                    .window_id = new_window_id,
-                    .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
-                    .type      = 4,                 // Atom XA_ATOM=4.
-                    .format    = 32,
-                }
-                .serialize(yield, atom_net_wm_state_skip_taskbar);
+                sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                                                    .property  = 68,   // Atom WM_TRANSIENT_FOR=68.
+                                                    .type      = 33 }, // Atom XA_WINDOW=33.
+                                                master_window_id);
+                sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                                                    .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
+                                                    .type      = 4 },               // Atom XA_ATOM=4.
+                                                atom_net_wm_state_skip_taskbar);
             }
 
             // Disable shadows.
-            //x11::req::change_property
-            //{
-            //    .window_id = new_window_id,
-            //    .property  = atom_net_wm_window_type, // Atom "_NET_WM_WINDOW_TYPE".
-            //    .type      = 4,                       // Atom XA_ATOM=4.
-            //    .format    = 32,                      // 32-bit words.
-            //}
-            //.serialize(yield, atom_net_wm_window_type_combo);
-            //x11::req::change_property
-            //{
-            //    .window_id = new_window_id,
-            //    .property  = atom_compton_shadow,      // Atom "_COMPTON_SHADOW".
-            //    .type      = 6,                        // Atom XA_CARDINAL=6.
-            //    .format    = 32,                       // 32-bit words.
-            //}
-            //.serialize(yield, 0u); // 0: off, 1: on.
+            //sendrq<x11::req::change_property>({ .window_id = new_window_id,
+            //                                    .property  = atom_net_wm_window_type, // Atom "_NET_WM_WINDOW_TYPE".
+            //                                    .type      = 4 },                     // Atom XA_ATOM=4.
+            //                                atom_net_wm_window_type_combo);
+            //sendrq<x11::req::change_property>({ .window_id = new_window_id,
+            //                                    .property  = atom_compton_shadow,      // Atom "_COMPTON_SHADOW".
+            //                                    .type      = 6 },                      // Atom XA_CARDINAL=6.
+            //                                0u); // 0: off, 1: on.
 
-            if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% area=%% colormap_id=0x%%\n%%",
-                utf::to_hex(new_window_id), utf::to_hex(roots.front().s.root_window_id), 32, utf::to_hex(argb_visual32_id), area,
-                utf::to_hex(argb_colormap_id), utf::buffer_to_hex(yield, true));
-            return yield;
+            sendrq<x11::req::create_gc>({ .gc_id = new_gc_id, .drawable = new_window_id });
+
+            if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% area=%% colormap_id=0x%%",
+                utf::to_hex(new_window_id), utf::to_hex(roots.front().s.root_window_id), 32, utf::to_hex(argb_visual32_id), area, utf::to_hex(argb_colormap_id));
         }
-        void window_set_title(ui32 window_id, view title)
+        void window_set_title(ui32 window_id, qiew title)
         {
-            auto req = x11::req::change_property{ .window_id = window_id,
-                                                  .property  = 39, // Atom WM_NAME (predefined id = 39).
-                                                  .type      = 31, // Atom STRING (predefined id = 31).
-                                                  .format    = 8,  // Format (8: 8-bit chars (string)).
-                                                  .data_len  = (ui32)title.size() };
-            auto padded_str_len = (title.size() + 3) & ~3;
-            req.length = (ui16)((sizeof(req) + padded_str_len) / 4);
-            auto packet = text{};
-            packet.reserve(req.length * 4);
-            packet += view{ (char*)&req, sizeof(req) };
-            packet += title;
-            packet.resize(req.length * 4);
-            x11connection->send(packet);
+            sendrq<x11::req::change_property>({ .window_id = window_id,
+                                                .property  = 39,   // Atom WM_NAME (predefined id = 39).
+                                                .type      = 31,   // Atom STRING (predefined id = 31).
+                                                .format    = 8 },  // Format (8: 8-bit chars (string)).
+                                            title);
         }
         bool resize_shared_buffer(size_t size)
         {
@@ -1022,39 +1055,32 @@ namespace netxs::x11
                 shm_buffer_fd = os::invalid_fd;
             }
         }
-        auto get_atom_id(view name)
-        {
-            auto aligned_name_len = (name.length() + 3) & ~3;
-            auto packet_size = sizeof(x11::req::intern_atom) + aligned_name_len;
-            auto packet = text(packet_size, '\0');
-            auto req = reinterpret_cast<x11::req::intern_atom*>(packet.data());
-            req->opcode         = 16;
-            req->only_if_exists = 0; // 0: Create if absent. 1: Don't create.
-            req->name_len       = name.length();
-            req->length         = packet_size / 4;
-            std::memcpy(packet.data() + sizeof(x11::req::intern_atom), name.data(), name.length());
-            x11connection->send(packet);
-            auto reply = x11::req::intern_atom::reply{};
-            if (x11connection->recv((char*)&reply, sizeof(reply)).size() == 32 && reply.type == 1)
-            {
-                if constexpr (debugmode) log("%%Received atom for '%%'=0x%%", prompt::x11, name, reply.atom_id);
-                return reply.atom_id;
-            }
-            log("%%Failed to intern atom: %%", prompt::x11, name);
-            return 0u;
-        }
         auto get_atoms()
         {
-            atom_motif_wm_hints            = get_atom_id("_MOTIF_WM_HINTS");
-            atom_net_wm_state              = get_atom_id("_NET_WM_STATE");
-            atom_net_wm_state_skip_taskbar = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR");
-            //atom_net_wm_window_type        = get_atom_id("_NET_WM_WINDOW_TYPE");
-            //atom_net_wm_window_type_combo  = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO");
-            //atom_compton_shadow            = get_atom_id("_COMPTON_SHADOW"); // Picom/Compton
-            atom_active_window             = get_atom_id("_NET_ACTIVE_WINDOW");
-            atom_number_of_desktops        = get_atom_id("_NET_NUMBER_OF_DESKTOPS");
-            atom_current_desktop           = get_atom_id("_NET_CURRENT_DESKTOP");
-            atom_workarea                  = get_atom_id("_NET_WORKAREA");
+            auto get_atom_id = [&](qiew name, bool create)
+            {
+                sendrq<x11::req::intern_atom>({ .only_if_exists = !create }, name); // 0: Create if absent. 1: Don't create.
+                auto reply = x11::req::intern_atom::reply{};
+                if (x11connection->recv((char*)&reply, sizeof(reply)).size() == 32 && reply.type == 1)
+                {
+                    if constexpr (debugmode) log("%%Received atom for '%%'=0x%%", prompt::x11, name, reply.atom_id);
+                    return reply.atom_id;
+                }
+                log("%%Failed to intern atom: %%", prompt::x11, name);
+                return 0u;
+            };
+            // Window related.
+            atom_motif_wm_hints            = get_atom_id("_MOTIF_WM_HINTS", true);
+            atom_net_wm_state              = get_atom_id("_NET_WM_STATE", true);
+            atom_net_wm_state_skip_taskbar = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR", true);
+            //atom_net_wm_window_type        = get_atom_id("_NET_WM_WINDOW_TYPE", true);
+            //atom_net_wm_window_type_combo  = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO", true);
+            //atom_compton_shadow            = get_atom_id("_COMPTON_SHADOW", true); // Picom/Compton
+            // Server related.
+            atom_active_window      = get_atom_id("_NET_ACTIVE_WINDOW", faux);
+            //atom_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
+            //atom_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP", faux);
+            //atom_workarea           = get_atom_id("_NET_WORKAREA", faux);
             return true;//atom_motif_wm_hints > 0;
         }
         auto get_error(x11::event::error& err)
@@ -1088,15 +1114,20 @@ namespace netxs::x11
                             (ui32)err.error_code, (ui32)err.sequence, utf::to_hex(err.bad_value),
                             (ui32)err.major_opcode, (ui32)err.minor_opcode, err_str);
         }
+        auto parse_error(x11::event::error& err)
+        {
+            log(get_error(err));
+            auto lock = std::lock_guard{ mutex };
+            if (reply_callbacks.size())
+            if (reply_callbacks.front().sequence == err.sequence) // Pop broken request handler.
+            {
+                reply_callbacks.pop_front();
+            }
+        }
         auto listen_root_events() // Subscribe on root's property change (to track some desktop window has received focus).
         {
-            auto yield = text{};
-            x11::req::change_window_attrs
-            {
-                .window_id = roots.front().s.root_window_id,
-            }
-            .serialize(yield, { .event_mask = x11::event::mask::PropertyChange });
-            x11connection->send(yield);
+            sendrq<x11::req::change_window_attrs>({ .window_id = roots.front().s.root_window_id },
+                x11::req::change_window_attrs::payload{ .event_mask = x11::event::mask::PropertyChange });
             return true;
         }
         auto get_root_window_prop(ui32 /*atom_id*/)
@@ -1201,7 +1232,8 @@ namespace netxs::x11
     auto parse_connection_reply(auto x11connection)
     {
         auto header = x11::reply_header{};
-        auto session = x11::session_t{};
+        auto session_ptr = ptr::shared<x11::session_t>();
+        auto& session = *session_ptr;
         if (auto l1 = x11connection->recv((char*)&header, sizeof(header)); l1.size() == sizeof(header))
         {
             auto remaining_bytes = (size_t)header.additional_length * 4;
@@ -1257,16 +1289,17 @@ namespace netxs::x11
                         }
                     }
                 }
-                if (failed) session.reset();
+                if (failed) session_ptr.reset();
+                else        session_ptr->x11connection = x11connection;
             }
         }
         else
         {
             log("%%Error reading response header", prompt::x11);
         }
-        return session;
+        return session_ptr;
     }
-    static auto session = sptr<session_t>{}; // x11: Active X11 session.
+    static auto session_ptr = sptr<session_t>{}; // x11: Active X11 session.
     auto connect()
     {
         if (auto display_env = os::env::get("DISPLAY"); display_env.size())
@@ -1279,9 +1312,9 @@ namespace netxs::x11
             auto cookie_data = x11::get_cookie(display_str);
             auto init_packet = x11::build_connect_packet(cookie_data);
             socket_link->send(init_packet);
-            if (auto session = x11::parse_connection_reply(socket_link))
+            if (auto session_ptr = x11::parse_connection_reply(socket_link))
             {
-                session.x11connection = socket_link;
+                auto& session = *session_ptr;
                 if (session.detect_argb_32bit())
                 if (session.detect_mit_shm())
                 if (session.get_atoms())
@@ -1293,7 +1326,7 @@ namespace netxs::x11
                     auto required_buffer_size = 2 * 3 * max_grid_size * sizeof(argb); // 2: Double buffer, 3: master+blinks+header/footer/tooltip.
                     if (session.resize_shared_buffer(required_buffer_size))
                     {
-                        x11::session = ptr::shared(std::move(session));
+                        x11::session_ptr = session_ptr;
                         return true;
                     }
                 }
