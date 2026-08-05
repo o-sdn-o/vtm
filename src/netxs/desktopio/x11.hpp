@@ -56,21 +56,6 @@ namespace netxs::x11
     }
 
     #pragma pack(push, 1)
-    template<class T>
-    struct data_n_size
-    {
-        auto data() { return (void*)this; }
-        auto size() { return sizeof(T::s); }
-    };
-    struct reply_header
-    {
-        byte status;            // 0: Failed, 1: Success.
-        byte pad1;
-        ui16 major_version;
-        ui16 minor_version;
-        ui16 additional_length; // Payload length in 4-byte chunks.
-        // payload ...
-    };
     namespace motif
     {
         static constexpr auto decorations = 1 << 1;
@@ -606,8 +591,33 @@ namespace netxs::x11
             ui32 data32[5];    // Payload. If data32[0]==atom_WM_DELETE_WINDOW -> Close window
         };
     }
+    template<class T>
+    struct data_n_size
+    {
+        auto data() { return (void*)this; }
+        auto size() { return sizeof(T::s); }
+    };
     struct session_t : data_n_size<session_t>
     {
+        struct auth
+        {
+            struct reply
+            {
+                byte status;            // 0: Failed, 1: Success.
+                byte pad1;
+                ui16 major_version;
+                ui16 minor_version;
+                ui16 additional_length; // Payload length in 4-byte chunks.
+                // payload ...
+            };
+            byte byte_order;       // 0x6c ('l') or 0x42 ('B')
+            byte pad1;             //
+            ui16 major_version;    // X_PROTOCOL
+            ui16 minor_version;    // X_PROTOCOL_REVISION
+            ui16 auth_proto_len;   //
+            ui16 auth_data_len;    //
+            ui16 pad2;             //
+        };
         struct format : data_n_size<format>
         {
             struct
@@ -1184,25 +1194,6 @@ namespace netxs::x11
     };
     #pragma pack(pop)
 
-    auto read_ui16be(std::ifstream& fs)
-    {
-        auto uword = ui16{};
-        auto bytes = text(2, '\0');
-        if (fs.read(bytes.data(), bytes.size()))
-        {
-            uword = ((ui16)(byte)bytes[0] << 8) | (byte)bytes[1];
-        }
-        return uword;
-    }
-    auto read_string(std::ifstream& fs, ui16 length)
-    {
-        auto buffer = text(length, '\0');
-        if (length > 0)
-        {
-            fs.read(buffer.data(), length);
-        }
-        return buffer;
-    }
     auto get_cookie(view target_display_num)
     {
         struct x11cookie_t
@@ -1223,17 +1214,28 @@ namespace netxs::x11
         if (auth_path.size())
         if (auto fs = std::ifstream{ auth_path, std::ios::binary }; fs.is_open())
         {
+            auto read_ui16be = [&]
+            {
+                auto bytes = text(2, '\0');
+                return fs.read(bytes.data(), bytes.size()) ? ((ui16)(byte)bytes[0] << 8) | (byte)bytes[1] : ui16{};
+            };
+            auto read_string = [&](ui16 length)
+            {
+                auto string = text(length, '\0');
+                if (length > 0) fs.read(string.data(), length);
+                return string;
+            };
             while (fs.peek() != EOF)
             {
-[[maybe_unused]]auto family   = read_ui16be(fs); // family = 256 (FamilyLocal).
-                auto addr_len = read_ui16be(fs);
-[[maybe_unused]]auto addr_str = read_string(fs, addr_len);
-                auto disp_len = read_ui16be(fs);
-                auto disp_str = read_string(fs, disp_len);
-                auto name_len = read_ui16be(fs);
-                auto name_str = read_string(fs, name_len);
-                auto data_len = read_ui16be(fs);
-                auto data_str = read_string(fs, data_len);
+[[maybe_unused]]auto family   = read_ui16be(); // family = 256 (FamilyLocal).
+                auto addr_len = read_ui16be();
+[[maybe_unused]]auto addr_str = read_string(addr_len);
+                auto disp_len = read_ui16be();
+                auto disp_str = read_string(disp_len);
+                auto name_len = read_ui16be();
+                auto name_str = read_string(name_len);
+                auto data_len = read_ui16be();
+                auto data_str = read_string(data_len);
                 if (!fs) break; // Unexpected errors.
                 if constexpr (debugmode) log("XAuth entry: family=%%, disp='%%', proto='%%', data_size=%%", family, disp_str, name_str, data_len);
                 if (name_str == "MIT-MAGIC-COOKIE-1" && (disp_str == target_display_num || disp_str.empty()))
@@ -1247,48 +1249,35 @@ namespace netxs::x11
         }
         return x11cookie;
     }
-    auto build_connect_packet(auto& cookie_data)
+    auto build_auth_packet(auto& cookie_data)
     {
-        #pragma pack(push, 1)
-        struct x11_connect_request
-        {
-            byte byte_order;       // 0x6c ('l') or 0x42 ('B')
-            byte pad1;             //
-            ui16 major_version;    // X_PROTOCOL
-            ui16 minor_version;    // X_PROTOCOL_REVISION
-            ui16 auth_proto_len;   //
-            ui16 auth_data_len;    //
-            ui16 pad2;             //
-        };
-        #pragma pack(pop)
-        auto header = x11_connect_request{};
-        header.byte_order = netxs::endian_LE ? 'l' : 'B';
-        header.major_version = 11;
-        header.minor_version = 0;
-        header.auth_proto_len = (ui16)cookie_data.auth_name.size();
-        header.auth_data_len  = (ui16)cookie_data.auth_data.size();
-        auto auth_name_padded_len = (header.auth_proto_len + 3) & ~3; // Rounding up to a multiple of 4.
-        auto auth_data_padded_len = (header.auth_data_len  + 3) & ~3; //
-        auto packet = text(sizeof(header) + auth_name_padded_len + auth_data_padded_len, '\0');
-        std::memcpy(packet.data(), &header, sizeof(header));
-        std::memcpy(packet.data() + sizeof(header), cookie_data.auth_name.data(), cookie_data.auth_name.size());
-        std::memcpy(packet.data() + sizeof(header) + auth_name_padded_len, cookie_data.auth_data.data(), cookie_data.auth_data.size());
+        auto req = x11::session_t::auth{ .byte_order     = netxs::endian_LE ? 'l' : 'B',
+                                         .major_version  = 11,
+                                         .minor_version  = 0,
+                                         .auth_proto_len = (ui16)cookie_data.auth_name.size(),
+                                         .auth_data_len  = (ui16)cookie_data.auth_data.size() };
+        auto auth_name_padded_len = (req.auth_proto_len + 3) & ~3; // Rounding up to a multiple of 4.
+        auto auth_data_padded_len = (req.auth_data_len  + 3) & ~3; //
+        auto packet = text(sizeof(req) + auth_name_padded_len + auth_data_padded_len, '\0');
+        std::memcpy(packet.data(), &req, sizeof(req));
+        std::memcpy(packet.data() + sizeof(req), cookie_data.auth_name.data(), cookie_data.auth_name.size());
+        std::memcpy(packet.data() + sizeof(req) + auth_name_padded_len, cookie_data.auth_data.data(), cookie_data.auth_data.size());
         return packet;
     }
-    auto parse_connection_reply(auto x11connection)
+    auto parse_auth_reply(auto x11connection)
     {
-        auto header = x11::reply_header{};
         auto session_ptr = ptr::shared<x11::session_t>();
         auto& session = *session_ptr;
-        if (auto l1 = x11connection->recv((char*)&header, sizeof(header)); l1.size() == sizeof(header))
+        auto reply = x11::session_t::auth::reply{};
+        if (auto l1 = x11connection->recv((char*)&reply, sizeof(reply)); l1.size() == sizeof(reply))
         {
-            auto remaining_bytes = (size_t)header.additional_length * 4;
+            auto remaining_bytes = (size_t)reply.additional_length * 4;
             auto buffer = text(remaining_bytes, '\0');
-            if (header.status == 0) // Failed.
+            if (reply.status == 0) // Failed.
             {
                 log("%%Connection rejected: '%%'", prompt::x11, utf::debase<faux, faux>(x11connection->recv(buffer.data(), buffer.size())));
             }
-            else if (header.status != 1)
+            else if (reply.status != 1)
             {
                 log("%%Unknown response status", prompt::x11);
             }
@@ -1341,11 +1330,11 @@ namespace netxs::x11
         }
         else
         {
-            log("%%Error reading response header", prompt::x11);
+            log("%%Error reading connection reply", prompt::x11);
         }
         return session_ptr;
     }
-    static auto session_ptr = sptr<session_t>{}; // x11: Active X11 session.
+    static auto session_ptr = sptr<x11::session_t>{}; // x11: Active X11 session.
     auto connect()
     {
         if (auto display_env = os::env::get("DISPLAY"); display_env.size())
@@ -1356,9 +1345,9 @@ namespace netxs::x11
         {
             auto display_str = std::to_string(display_num.value());
             auto cookie_data = x11::get_cookie(display_str);
-            auto init_packet = x11::build_connect_packet(cookie_data);
-            socket_link->send(init_packet);
-            if (auto session_ptr = x11::parse_connection_reply(socket_link))
+            auto auth_packet = x11::build_auth_packet(cookie_data);
+            socket_link->send(auth_packet);
+            if (auto session_ptr = x11::parse_auth_reply(socket_link))
             {
                 auto& session = *session_ptr;
                 if (session.detect_argb_32bit())
@@ -1374,11 +1363,10 @@ namespace netxs::x11
                     if (session.resize_shared_buffer(required_buffer_size))
                     {
                         x11::session_ptr = session_ptr;
-                        return true;
                     }
                 }
             }
         }
-        return faux;
+        return !!x11::session_ptr;
     }
 }
