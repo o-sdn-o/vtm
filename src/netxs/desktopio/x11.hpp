@@ -286,79 +286,81 @@ namespace netxs::x11
 
             auto serialize(text& yield, view name) { x11::serialize_str(yield, *this, name); }
         };
-        // SHM Minor Opcodes: 0:QueryVersion, 1:Attach, 2:Detach, 3:PutImage, 4:GetImage, 5:CreatePixmap, 6:AttachFd, 7:CreateSegment
-        struct shm_query_version // ShmQueryVersion (Minor Opcode 0)
+        namespace shm // SHM Minor Opcodes: 0:QueryVersion, 1:Attach, 2:Detach, 3:PutImage, 4:GetImage, 5:CreatePixmap, 6:AttachFd, 7:CreateSegment
         {
-            struct reply // Always 32 bytes.
+            struct query_version // ShmQueryVersion (Minor Opcode 0)
             {
-                byte status;         // 1: Success.
-                byte pad1;
-                ui16 sequence;       // X11 request sequence number.
-                ui32 length;         // Attached payload length (0)
-                ui16 major_version;  // (required 1)
-                ui16 minor_version;  // (required >= 2)
-                ui16 uid;
-                ui16 gid;
-                byte pixmap_format;
-                byte pad2[15];
+                struct reply // Always 32 bytes.
+                {
+                    byte status;         // 1: Success.
+                    byte pad1;
+                    ui16 sequence;       // X11 request sequence number.
+                    ui32 length;         // Attached payload length (0)
+                    ui16 major_version;  // (required 1)
+                    ui16 minor_version;  // (required >= 2)
+                    ui16 uid;
+                    ui16 gid;
+                    byte pixmap_format;
+                    byte pad2[15];
+                };
+                byte major_opcode;     // MIT-SHM major_opcode.
+                byte minor_opcode = 0; // 0: QueryVersion.
+                ui16 length       = 1; // 4 bytes / 4 = 1 word.
             };
-            byte major_opcode;     // MIT-SHM major_opcode.
-            byte minor_opcode = 0; // 0: QueryVersion.
-            ui16 length       = 1; // 4 bytes / 4 = 1 word.
-        };
-        struct shm_attach_fd // ShmAttachFd (Minor Opcode 6) - bind SHM file descriptor with x-serveer (via ::sendmsg()).
-        {
-            byte major_opcode;     // MIT-SHM major_opcode.
-            byte minor_opcode = 6; // 6: AttachFd.
-            ui16 length       = 3;
-            ui32 shm_seg_id;       // Our side generated unique resource ID (XID).
-            byte read_only    = 0;
-            byte pad[3]       = {};
-        };
-        struct shm_detach // ShmDetach (Minor Opcode 2)
-        {
-            byte major_opcode;     // MIT-SHM major_opcode.
-            byte minor_opcode = 2; // 2: Detach.
-            ui16 length       = 2;
-            ui32 shm_seg_id;       // Detached segment ID (XID).
-        };
-        struct shm_put_image // ShmPutImage (Minor Opcode 3) - immediately output from SHM to screen.
-        {
-            struct reply // ShmCompletionEvent
+            struct attach_fd // ShmAttachFd (Minor Opcode 6) - bind SHM file descriptor with x-serveer (via ::sendmsg()).
             {
-                byte type;          // shm_completion_event
-                byte pad0;
-                ui16 sequence;
-                ui32 drawable;      // Dest Window ID
-                ui16 minor_opcode;  // 3 (ShmPutImage).
-                byte major_opcode;  // shm_major_opcode.
-                byte pad1;
-                ui32 shmseg;        // Linked segment ID.
-                ui32 offset;        // Segment offset.
-                ui32 pad2;
-                ui32 pad3;
-                ui32 pad4;
+                byte major_opcode;     // MIT-SHM major_opcode.
+                byte minor_opcode = 6; // 6: AttachFd.
+                ui16 length       = 3;
+                ui32 shm_seg_id;       // Our side generated unique resource ID (XID).
+                byte read_only    = 0;
+                byte pad[3]       = {};
             };
-            byte major_opcode;      // shm_major_opcode.
-            byte minor_opcode = 3;  // 3: PutImage.
-            ui16 length       = 10; // 40 bytes / 4 = 10 words.
-            ui32 drawable;          // Our window ID (fg_w).
-            ui32 gc_id;             // Graphical context.
-            ui16 total_width;       // Buffer width/height in SHM
-            ui16 total_height;      //
-            ui16 src_x;             // Clip coor.
-            ui16 src_y;             //
-            ui16 src_width;         // Clip size.
-            ui16 src_height;        //
-            si16 dst_x;             // Dest coor.
-            si16 dst_y;             //
-            byte depth      = 32;   // 32-bit ARGB
-            byte format     = 2;    // 2: ZPixmap
-            byte send_event = 1;    // 0: Don't notify on output end; 1: Send event on output end (reply).
-            byte pad        = 0;
-            ui32 shm_seg_id;        // Linked segment ID.
-            ui32 offset;            // Segment offset.
-        };
+            struct detach // ShmDetach (Minor Opcode 2)
+            {
+                byte major_opcode;     // MIT-SHM major_opcode.
+                byte minor_opcode = 2; // 2: Detach.
+                ui16 length       = 2;
+                ui32 shm_seg_id;       // Detached segment ID (XID).
+            };
+            struct put_image // ShmPutImage (Minor Opcode 3) - immediately output from SHM to screen.
+            {
+                struct reply // ShmCompletionEvent
+                {
+                    byte type;          // shm_completion_event
+                    byte pad0;
+                    ui16 sequence;
+                    ui32 drawable;      // Dest Window ID
+                    ui16 minor_opcode;  // 3 (ShmPutImage).
+                    byte major_opcode;  // shm_major_opcode.
+                    byte pad1;
+                    ui32 shmseg;        // Linked segment ID.
+                    ui32 offset;        // Segment offset.
+                    ui32 pad2;
+                    ui32 pad3;
+                    ui32 pad4;
+                };
+                byte major_opcode;      // shm_major_opcode.
+                byte minor_opcode = 3;  // 3: PutImage.
+                ui16 length       = 10; // 40 bytes / 4 = 10 words.
+                ui32 drawable;          // Our window ID (fg_w).
+                ui32 gc_id;             // Graphical context.
+                ui16 total_width;       // Buffer width/height in SHM
+                ui16 total_height;      //
+                ui16 src_x;             // Clip coor.
+                ui16 src_y;             //
+                ui16 src_width;         // Clip size.
+                ui16 src_height;        //
+                si16 dst_x;             // Dest coor.
+                si16 dst_y;             //
+                byte depth      = 32;   // 32-bit ARGB
+                byte format     = 2;    // 2: ZPixmap
+                byte send_event = 1;    // 0: Don't notify on output end; 1: Send event on output end (reply).
+                byte pad        = 0;
+                ui32 shm_seg_id;        // Linked segment ID.
+                ui32 offset;            // Segment offset.
+            };
+        }
         struct noop // Opcode 127 (NoOperation).
         {
             byte opcode = 127;
@@ -872,8 +874,8 @@ namespace netxs::x11
             {
                 shm_major_opcode     = reply.major_opcode;
                 shm_completion_event = reply.first_event;
-                sendrq<x11::req::shm_query_version>({ .major_opcode = shm_major_opcode });
-                auto v_reply = x11::req::shm_query_version::reply{};
+                sendrq<x11::req::shm::query_version>({ .major_opcode = shm_major_opcode });
+                auto v_reply = x11::req::shm::query_version::reply{};
                 if (x11connection->recv((char*)&v_reply, sizeof(v_reply)).size() == sizeof(v_reply))
                 if (v_reply.status == 1)
                 if (v_reply.major_version > 1 || (v_reply.major_version == 1 && v_reply.minor_version >= 2)) // Check min version 1.2.
@@ -896,8 +898,8 @@ namespace netxs::x11
         }
         void send_shm_attach_fd(ui32 client_shmseg_xid)
         {
-            auto request = x11::req::shm_attach_fd{ .major_opcode = shm_major_opcode,
-                                                    .shm_seg_id   = client_shmseg_xid };
+            auto request = x11::req::shm::attach_fd{ .major_opcode = shm_major_opcode,
+                                                     .shm_seg_id   = client_shmseg_xid };
             auto iov = ::iovec{ .iov_base = &request,
                                 .iov_len  = sizeof(request) };
             union // Ancillary Data
@@ -927,8 +929,8 @@ namespace netxs::x11
         }
         void send_shm_detach_fd(ui32 client_shmseg_xid)
         {
-            sendrq<x11::req::shm_detach>({ .major_opcode = shm_major_opcode,
-                                           .shm_seg_id   = client_shmseg_xid });
+            sendrq<x11::req::shm::detach>({ .major_opcode = shm_major_opcode,
+                                            .shm_seg_id   = client_shmseg_xid });
             if constexpr (debugmode) log("%%Shared buffer segment XID %% is detached", prompt::x11, client_shmseg_xid);
         }
         auto create_window(ui32 master_window_id, ui32 new_window_id, ui32 new_gc_id, rect area)

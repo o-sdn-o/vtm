@@ -6534,19 +6534,19 @@ namespace netxs::gui
         {
             if (!s.data.data() || s.area.size.x <= 0 || s.area.size.y <= 0) return;
             auto& x11session = *x11::session_ptr;
-            x11session.sendrq<x11::req::shm_put_image>({ .major_opcode = x11session.shm_major_opcode,
-                                                         .drawable     = (ui32)s.hWnd,
-                                                         .gc_id        = (ui32)s.hdc,
-                                                         .total_width  = (ui16)s.area.size.x,
-                                                         .total_height = (ui16)s.area.size.y,
-                                                         .src_x        = 0,
-                                                         .src_y        = 0,
-                                                         .src_width    = (ui16)s.area.size.x,
-                                                         .src_height   = (ui16)s.area.size.y,
-                                                         .dst_x        = (si16)0,//s.area.coor.x,
-                                                         .dst_y        = (si16)0,//s.area.coor.y,
-                                                         .shm_seg_id   = x11session.shm_segmen_xid,
-                                                         .offset       = (ui32)s.shm_offset });
+            x11session.sendrq<x11::req::shm::put_image>({ .major_opcode = x11session.shm_major_opcode,
+                                                          .drawable     = (ui32)s.hWnd,
+                                                          .gc_id        = (ui32)s.hdc,
+                                                          .total_width  = (ui16)s.area.size.x,
+                                                          .total_height = (ui16)s.area.size.y,
+                                                          .src_x        = 0,
+                                                          .src_y        = 0,
+                                                          .src_width    = (ui16)s.area.size.x,
+                                                          .src_height   = (ui16)s.area.size.y,
+                                                          .dst_x        = (si16)0,//s.area.coor.x,
+                                                          .dst_y        = (si16)0,//s.area.coor.y,
+                                                          .shm_seg_id   = x11session.shm_segmen_xid,
+                                                          .offset       = (ui32)s.shm_offset });
         }
         void layer_timer_start(layer& /*s*/, span /*elapse*/, ui32 /*eventid*/) {}
         void layer_timer_stop(layer& /*s*/, ui32 /*eventid*/) {}
