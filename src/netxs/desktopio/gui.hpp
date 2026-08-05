@@ -6534,19 +6534,50 @@ namespace netxs::gui
         {
             if (!s.data.data() || s.area.size.x <= 0 || s.area.size.y <= 0) return;
             auto& x11session = *x11::session_ptr;
-            x11session.sendrq<x11::req::shm::put_image>({ .major_opcode = x11session.shm_major_opcode,
-                                                          .drawable     = (ui32)s.hWnd,
-                                                          .gc_id        = (ui32)s.hdc,
-                                                          .total_width  = (ui16)s.area.size.x,
-                                                          .total_height = (ui16)s.area.size.y,
-                                                          .src_x        = 0,
-                                                          .src_y        = 0,
-                                                          .src_width    = (ui16)s.area.size.x,
-                                                          .src_height   = (ui16)s.area.size.y,
-                                                          .dst_x        = (si16)0,//s.area.coor.x,
-                                                          .dst_y        = (si16)0,//s.area.coor.y,
-                                                          .shm_seg_id   = x11session.shm_segmen_xid,
-                                                          .offset       = (ui32)s.shm_offset });
+            auto target_coor = s.live ? s.area.coor : s.hidden;
+            auto windowmoved = s.prev.coor != target_coor;
+            if (s.sync.empty())
+            {
+                if (windowmoved)
+                {
+                    s.prev.coor = target_coor;
+                    x11session.move_window(s.hWnd, target_coor);
+                }
+                return;
+            }
+            if (windowmoved)
+            {
+                s.prev.coor = target_coor;
+                x11session.move_window(s.hWnd, target_coor);
+            }
+            for (auto r : s.sync)
+            {
+                auto local_rect_coor = r.coor - s.area.coor;
+                if (local_rect_coor.x < 0 || local_rect_coor.y < 0
+                 || local_rect_coor.x + r.size.x > s.area.size.x
+                 || local_rect_coor.y + r.size.y > s.area.size.y)
+                {
+                    continue;
+                }
+                auto dirty_offset = (ui32)s.shm_offset + (local_rect_coor.y * s.area.size.x * sizeof(ui32));
+                x11session.sendrq<x11::req::shm::put_image>(
+                {
+                    .major_opcode = x11session.shm_major_opcode,
+                    .drawable     = (ui32)s.hWnd,
+                    .gc_id        = (ui32)s.hdc,
+                    .total_width  = (ui16)s.area.size.x,
+                    .total_height = (ui16)s.area.size.y,
+                    .src_x        = (ui16)local_rect_coor.x,
+                    .src_y        = (ui16)0,                 // Use 0, because dirty_offset already points to the required line Y.
+                    .src_width    = (ui16)r.size.x,          // Dirty rect width.
+                    .src_height   = (ui16)r.size.y,          // Dirty rect height.
+                    .dst_x        = (si16)local_rect_coor.x, // Window dest coors.
+                    .dst_y        = (si16)local_rect_coor.y, //
+                    .shm_seg_id   = x11session.shm_segment_xid,
+                    .offset       = (ui32)dirty_offset       // New data start.
+                });
+            }
+            s.sync.clear();
         }
         void layer_timer_start(layer& /*s*/, span /*elapse*/, ui32 /*eventid*/) {}
         void layer_timer_stop(layer& /*s*/, ui32 /*eventid*/) {}
@@ -6755,10 +6786,7 @@ namespace netxs::gui
             for (auto& l : layers)
             {
                 auto& p = l.get();
-                if (auto window_id = (ui32)p.hWnd)
-                {
-                    x11::session_ptr->sendrq<x11::req::map_window>({ .window_id = window_id }); // SW_SHOW.
-                }
+                x11::session_ptr->sendrq<x11::req::map_window>({ .window_id = (ui32)p.hWnd }); // SW_SHOW.
             }
         }
         void window_shutdown() {}

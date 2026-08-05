@@ -146,19 +146,18 @@ namespace netxs::x11
             ui32 window_id;
             ui16 value_mask; // value bit list
             ui16 pad2   = 0;
-            // payload ... value-list
-            //             2 si16 x
-            //             2 si16 y
-            //             2 ui16 width
-            //             2 ui16 height
-            //             2 ui16 border-width
-            //             4 ui32 sibling (window id)
-            //             1 byte stack-mode
-            //                    0 Above
-            //                    1 Below
-            //                    2 TopIf
-            //                    3 BottomIf
-            //                    4 Opposite
+
+            struct payload
+            {
+                std::optional<ui32> x;
+                std::optional<ui32> y;
+                std::optional<ui32> width;
+                std::optional<ui32> height;
+                std::optional<ui32> border_width;
+                std::optional<ui32> sibling;
+                std::optional<ui32> stack_mode; // 0: Above, 1: Below, 2: TopIf, 3: BottomIf, 4: Opposite.
+            };
+            auto serialize(text& yield, payload p) { x11::serialize_list(yield, *this, p); }
         };
         struct intern_atom // Opcode 16 (InternAtom)
         {
@@ -720,7 +719,7 @@ namespace netxs::x11
         ui32                                  atom_active_window = 0;
         ui32                                  atom_number_of_desktops = 0;
         ui32                                  atom_current_desktop = 0;
-        ui32                                  atom_workarea = 0;
+        ui32                                  atom_workarea = 0; // workarea = desktop_area if is not set (atom_workarea=0).
 
         byte                                  xfixes_major_opcode = 0;
         byte                                  xfixes_first_event = 0;
@@ -730,7 +729,7 @@ namespace netxs::x11
         fd_t                                  shm_buffer_fd = os::invalid_fd;
         byte*                                 shm_buffer_ptr = {};
         size_t                                shm_buffer_len = {};
-        ui32                                  shm_segmen_xid = {};
+        ui32                                  shm_segment_xid = {};
         size_t                                shm_buffer_offset = {};
 
         size_t                                current_frame_index = {};
@@ -1050,9 +1049,9 @@ namespace netxs::x11
             if (shm_buffer_len)
             {
                 //todo implement delayed detach+copy
-                send_shm_detach_fd(shm_segmen_xid);
+                send_shm_detach_fd(shm_segment_xid);
                 reset_shared_buffer();
-                free_resource_id(shm_segmen_xid);
+                free_resource_id(shm_segment_xid);
             }
             shm_buffer_fd =
                 #if defined(__linux__)
@@ -1085,8 +1084,8 @@ namespace netxs::x11
                     {
                         shm_buffer_ptr = (byte*)mapped_ptr;
                         shm_buffer_len = size;
-                        shm_segmen_xid = new_resource_id();
-                        send_shm_attach_fd(shm_segmen_xid);
+                        shm_segment_xid = new_resource_id();
+                        send_shm_attach_fd(shm_segment_xid);
                         if constexpr (debugmode) log("%%Shared buffer successfuly created at 0x%%, %% bytes", prompt::x11, utf::to_hex(shm_buffer_ptr), shm_buffer_len);
                     }
                 }
@@ -1129,10 +1128,14 @@ namespace netxs::x11
             //atom_net_wm_window_type_combo  = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO", true);
             //atom_compton_shadow            = get_atom_id("_COMPTON_SHADOW", true); // Picom/Compton
             // Server related.
-            atom_active_window      = get_atom_id("_NET_ACTIVE_WINDOW", faux);
-            //atom_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
-            //atom_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP", faux);
-            //atom_workarea           = get_atom_id("_NET_WORKAREA", faux);
+            atom_active_window = get_atom_id("_NET_ACTIVE_WINDOW", faux);
+            auto is_wsl = os::env::get("WSL_DISTRO_NAME").size();
+            if (!is_wsl) // WSLg deadlocks on these requests.
+            {
+                atom_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
+                atom_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP", faux);
+                atom_workarea           = get_atom_id("_NET_WORKAREA", faux);
+            }
             return true;//atom_motif_wm_hints > 0;
         }
         auto get_error(x11::event::error& err)
@@ -1190,6 +1193,12 @@ namespace netxs::x11
         {
             //todo
             return 0;
+        }
+        auto move_window(arch window_id, twod coor)
+        {
+            sendrq<x11::req::configure_window>({ .window_id = (ui32)window_id, },
+                                            x11::req::configure_window::payload{ .x = (ui16)coor.x,
+                                                                                 .y = (ui16)coor.y });
         }
     };
     #pragma pack(pop)
