@@ -361,6 +361,39 @@ namespace netxs::x11
                 ui32 offset;            // Segment offset.
             };
         }
+        namespace xfixes
+        {
+            struct query_version 
+            {
+                struct reply
+                {
+                    byte status;         // 1: Reply
+                    byte pad1;
+                    ui16 sequence;
+                    ui32 length;
+                    ui32 major_version;
+                    ui32 minor_version;
+                    ui32 pad2[4];
+                };
+                byte major_opcode;       // xfixes_major_opcode.
+                byte minor_opcode = 0;   // 0: XFixesQueryVersion.
+                ui16 length = 3;
+                ui32 client_major_version = 2; // Required 2.0+ (Window Shape(Input) Region).
+                ui32 client_minor_version = 0;
+            };
+            struct set_window_shape_region // XFixesSetWindowShapeRegion (Minor opcode 21).
+            {
+                byte major_opcode;      // xfixes_major_opcode.
+                byte minor_opcode = 21; // 21: XFixesSetWindowShapeRegion
+                ui16 length       = 5;
+                ui32 window_id;         // Dest window ID.
+                byte shape_kind   = 1;  // 1: ShapeInput (input region).
+                byte pad[3]       = {};
+                si16 x_offset     = 0;  // Region offset.
+                si16 y_offset     = 0;  //
+                ui32 region       = 0;  // 0 (None): empty region (make window transparent for mouse).
+            };
+        }
         struct noop // Opcode 127 (NoOperation).
         {
             byte opcode = 127;
@@ -679,6 +712,9 @@ namespace netxs::x11
         ui32                                  atom_current_desktop = 0;
         ui32                                  atom_workarea = 0;
 
+        byte                                  xfixes_major_opcode = 0;
+        byte                                  xfixes_first_event = 0;
+
         byte                                  shm_major_opcode = 0;
         byte                                  shm_completion_event = 0;
         fd_t                                  shm_buffer_fd = os::invalid_fd;
@@ -864,35 +900,36 @@ namespace netxs::x11
             log<faux>(errmsg);
             return faux;
         }
-        auto detect_mit_shm()
+        template<class ExtensionQueryVersion>
+        auto detect_extension(qiew extension_name, byte& major_opcode, byte& first_event, ui16 required_major_version, ui16 required_minor_version)
         {
             auto errdetails = text{};
-            sendrq<x11::req::query_extension>({}, qiew{ "MIT-SHM" });
+            sendrq<x11::req::query_extension>({}, extension_name);
             auto reply = x11::req::query_extension::reply{};
             if (x11connection->recv((char*)&reply, sizeof(reply)).size() == sizeof(reply))
             if (reply.present)
             {
-                shm_major_opcode     = reply.major_opcode;
-                shm_completion_event = reply.first_event;
-                sendrq<x11::req::shm::query_version>({ .major_opcode = shm_major_opcode });
-                auto v_reply = x11::req::shm::query_version::reply{};
+                major_opcode = reply.major_opcode;
+                first_event  = reply.first_event;
+                sendrq<ExtensionQueryVersion>({ .major_opcode = reply.major_opcode });
+                auto v_reply = typename ExtensionQueryVersion::reply{};
                 if (x11connection->recv((char*)&v_reply, sizeof(v_reply)).size() == sizeof(v_reply))
                 if (v_reply.status == 1)
-                if (v_reply.major_version > 1 || (v_reply.major_version == 1 && v_reply.minor_version >= 2)) // Check min version 1.2.
+                if (v_reply.major_version > required_major_version || (v_reply.major_version == required_major_version && v_reply.minor_version >= required_minor_version)) // Check min version major.minor.
                 {
-                    if constexpr (debugmode) log("%%MIT-SHM version %%.%% detected (shm_major_opcode=%% shm_completion_event=%%)", prompt::x11, (si32)v_reply.major_version, (si32)v_reply.minor_version, (si32)shm_major_opcode, (si32)shm_completion_event);
+                    if constexpr (debugmode) log("%%%% version %%.%% detected (ext_major_opcode=%% ext_completion_event=%%)", prompt::x11, extension_name, (si32)v_reply.major_version, (si32)v_reply.minor_version, (si32)major_opcode, (si32)first_event);
                     return true;
                 }
                 if (v_reply.status == 1)
                 {
-                    errdetails = utf::fprint("\n\tMIT-SHM version %%.%% detected", (si32)v_reply.major_version, (si32)v_reply.minor_version);
+                    errdetails = utf::fprint("\n\t%% version %%.%% detected", extension_name, (si32)v_reply.major_version, (si32)v_reply.minor_version);
                 }
                 else
                 {
-                    errdetails = utf::fprint("\n\tFailed to receive MIT-SHM version details");
+                    errdetails = utf::fprint("\n\tFailed to receive %% version details", extension_name);
                 }
             }
-            auto errmsg = utf::fprint("%%The required MIT-SHM extension (or required min version 1.2) is missing", prompt::x11);
+            auto errmsg = utf::fprint("%%The required %% extension (or required min version %%.%%) is missing", prompt::x11, extension_name, required_major_version, required_minor_version);
             log(errmsg + errdetails);
             return faux;
         }
@@ -959,9 +996,9 @@ namespace netxs::x11
                                                 .type      = atom_motif_wm_hints }, // Atom "_MOTIF_WM_HINTS" (same).
                                             x11::motif::hints{ .flags = x11::motif::decorations, .decorations = 0 });
 
-            // Remove sub-layers from taskbar.
             if (area.size == dot_11)
             {
+                // Remove sub-layers from taskbar.
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                     .property  = 68,   // Atom WM_TRANSIENT_FOR=68.
                                                     .type      = 33 }, // Atom XA_WINDOW=33.
@@ -970,6 +1007,9 @@ namespace netxs::x11
                                                     .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
                                                     .type      = 4 },               // Atom XA_ATOM=4.
                                                 atom_net_wm_state_skip_taskbar);
+                // Make sub-layer transparent for mouse.
+                sendrq<x11::req::xfixes::set_window_shape_region>({ .major_opcode = xfixes_major_opcode,
+                                                                    .window_id    = new_window_id });
             }
 
             // Disable shadows.
@@ -1111,6 +1151,10 @@ namespace netxs::x11
             if (err.major_opcode == shm_major_opcode) // MIT-SHM related error.
             {
                 err_str += " (MIT-SHM Extension Error)";
+            }
+            else if (err.major_opcode == xfixes_major_opcode) // XFIXES related error.
+            {
+                err_str += " (XFIXES Extension Error)";
             }
             return utf::fprint("%%Error: code=%%, seq=%%, bad_resource_id=0x%%, major=%%, minor=%% desc: %%", prompt::x11,
                             (ui32)err.error_code, (ui32)err.sequence, utf::to_hex(err.bad_value),
@@ -1318,7 +1362,8 @@ namespace netxs::x11
             {
                 auto& session = *session_ptr;
                 if (session.detect_argb_32bit())
-                if (session.detect_mit_shm())
+                if (session.detect_extension<x11::req::shm::query_version>("MIT-SHM", session.shm_major_opcode, session.shm_completion_event, 1, 2)) // MIT-SHM ver >= 1.2
+                if (session.detect_extension<x11::req::xfixes::query_version>("XFIXES", session.xfixes_major_opcode, session.xfixes_first_event, 2, 0)) // XFIXES ver >= 2.0
                 if (session.get_atoms())
                 if (session.listen_root_events())
                 {

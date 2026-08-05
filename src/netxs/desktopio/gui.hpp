@@ -6646,7 +6646,6 @@ namespace netxs::gui
 
                 if (type == 0) // X11 Core / Extension Error Packet
                 {
-                    log("error");
                     auto& err = reinterpret_cast<x11::event::error&>(ev);
                     x11session.parse_error(err);
                     continue;
