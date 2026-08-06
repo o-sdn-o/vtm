@@ -6675,10 +6675,9 @@ namespace netxs::gui
 
                 if constexpr (debugmode) log("%%seq=%% event=%% (%%)", prompt::x11, ev.sequence, x11session.event_str(type), type);
 
-                if (type == 0) // X11 Core / Extension Error Packet
+                if (type == x11::event::Error) // X11 Core / Extension Error Packet
                 {
-                    auto& err = reinterpret_cast<x11::event::error&>(ev);
-                    x11session.parse_error(err);
+                    x11session.parse_error(ev);
                     continue;
                 }
 
@@ -6756,6 +6755,11 @@ namespace netxs::gui
                                                                         .long_length = 1 }, {},
                             [&](auto& ev, view payload)
                             {
+                                if (ev.type == x11::event::Error)
+                                {
+                                    if constexpr (debugmode) log("get_property error");
+                                    return;
+                                }
                                 auto& reply = reinterpret_cast<x11::req::get_property::reply const&>(ev);
                                 if (reply.format == 32 && reply.prop_type == 33 && reply.value_len > 0 && payload.size() >= 4)
                                 {

@@ -749,13 +749,13 @@ namespace netxs::x11
         ui16                    sequence_counter = 0; // Sent request counter.
 
         template<class R, class V = qiew, class P = noop>
-        void sendrq(R request, V payload = {}, P callback = {})
+        void sendrq(R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
         {
             auto lock = std::lock_guard{ mutex };
             sequence_counter++;
-                auto packet = text{};
-            if constexpr (requires{ request.serialize(packet, payload); })
+            if constexpr (requires(text packet){ request.serialize(packet, payload); })
             {
+                auto packet = text{};
                 request.serialize(packet, payload);
                 x11connection->send(packet);
             }
@@ -787,13 +787,62 @@ namespace netxs::x11
             else
             {
                 auto extra_data = text{};
-                if (ev.length > 0)
+                if (ev.type == x11::event::Reply && ev.length > 0)
                 {
                     extra_data.resize(ev.length * sizeof(ui32));
                     x11connection->recv(extra_data.data(), extra_data.size()); // Blocking call.
                 }
                 if constexpr (debugmode) log("%%seq=%%", prompt::x11, r.sequence);
                 r.callback(ev, extra_data);
+            }
+        }
+        auto get_error(x11::event::error& err)
+        {
+            auto err_str = text{};
+            switch (err.error_code)
+            {
+                case  1: err_str = "Bad Request";        break;
+                case  2: err_str = "Bad Value";          break;
+                case  3: err_str = "Bad Window";         break;
+                case  4: err_str = "Bad Pixmap";         break;
+                case  5: err_str = "Bad Atom";           break;
+                case  6: err_str = "Bad Cursor";         break;
+                case  7: err_str = "Bad Font";           break;
+                case  8: err_str = "Bad Match";          break;
+                case  9: err_str = "Bad Drawable";       break;
+                case 10: err_str = "Bad Access";         break;
+                case 11: err_str = "Bad Alloc";          break;
+                case 12: err_str = "Bad Color";          break;
+                case 13: err_str = "Bad GC";             break;
+                case 14: err_str = "Bad IDChoice";       break;
+                case 15: err_str = "Bad Name";           break;
+                case 16: err_str = "Bad Length";         break;
+                case 17: err_str = "Bad Implementation"; break;
+            }
+            if (err.major_opcode == shm_major_opcode) // MIT-SHM related error.
+            {
+                err_str += " (MIT-SHM Extension Error)";
+            }
+            else if (err.major_opcode == xfixes_major_opcode) // XFIXES related error.
+            {
+                err_str += " (XFIXES Extension Error)";
+            }
+            return utf::fprint("%%Error: code=%%, seq=%%, bad_resource_id=0x%%, major=%%, minor=%% desc: %%", prompt::x11,
+                            (ui32)err.error_code, (ui32)err.sequence, utf::to_hex(err.bad_value),
+                            (ui32)err.major_opcode, (ui32)err.minor_opcode, err_str);
+        }
+        auto parse_error(x11::event::any& ev)
+        {
+            auto& err = reinterpret_cast<x11::event::error&>(ev);
+            log(get_error(err));
+            auto is_reply = faux;
+            {
+                auto lock = std::lock_guard{ mutex };
+                is_reply = reply_callbacks.size() && reply_callbacks.front().sequence == err.sequence;
+            }
+            if (is_reply) // Forward broken request reply to handler.
+            {
+                parse_reply(ev);
             }
         }
         auto event_str(si32 e)
@@ -1137,51 +1186,6 @@ namespace netxs::x11
                 atom_workarea           = get_atom_id("_NET_WORKAREA", faux);
             }
             return true;//atom_motif_wm_hints > 0;
-        }
-        auto get_error(x11::event::error& err)
-        {
-            auto err_str = text{};
-            switch (err.error_code)
-            {
-                case  1: err_str = "Bad Request";        break;
-                case  2: err_str = "Bad Value";          break;
-                case  3: err_str = "Bad Window";         break;
-                case  4: err_str = "Bad Pixmap";         break;
-                case  5: err_str = "Bad Atom";           break;
-                case  6: err_str = "Bad Cursor";         break;
-                case  7: err_str = "Bad Font";           break;
-                case  8: err_str = "Bad Match";          break;
-                case  9: err_str = "Bad Drawable";       break;
-                case 10: err_str = "Bad Access";         break;
-                case 11: err_str = "Bad Alloc";          break;
-                case 12: err_str = "Bad Color";          break;
-                case 13: err_str = "Bad GC";             break;
-                case 14: err_str = "Bad IDChoice";       break;
-                case 15: err_str = "Bad Name";           break;
-                case 16: err_str = "Bad Length";         break;
-                case 17: err_str = "Bad Implementation"; break;
-            }
-            if (err.major_opcode == shm_major_opcode) // MIT-SHM related error.
-            {
-                err_str += " (MIT-SHM Extension Error)";
-            }
-            else if (err.major_opcode == xfixes_major_opcode) // XFIXES related error.
-            {
-                err_str += " (XFIXES Extension Error)";
-            }
-            return utf::fprint("%%Error: code=%%, seq=%%, bad_resource_id=0x%%, major=%%, minor=%% desc: %%", prompt::x11,
-                            (ui32)err.error_code, (ui32)err.sequence, utf::to_hex(err.bad_value),
-                            (ui32)err.major_opcode, (ui32)err.minor_opcode, err_str);
-        }
-        auto parse_error(x11::event::error& err)
-        {
-            log(get_error(err));
-            auto lock = std::lock_guard{ mutex };
-            if (reply_callbacks.size())
-            if (reply_callbacks.front().sequence == err.sequence) // Pop broken request handler.
-            {
-                reply_callbacks.pop_front();
-            }
         }
         auto listen_root_events() // Subscribe on root's property change (to track some desktop window has received focus).
         {
