@@ -6575,7 +6575,6 @@ namespace netxs::gui
             auto& x11session = *x11::session_ptr;
             auto target_coor = s.live ? s.area.coor : s.hidden;
             auto windowmoved = s.prev.coor != target_coor;
-
             auto visibility_changed = windowmoved && (s.prev.coor == s.hidden || target_coor == s.hidden);
             if (visibility_changed)
             {
@@ -6592,7 +6591,6 @@ namespace netxs::gui
                     return;
                 }
             }
-
             if (windowmoved)
             {
                 assert(target_coor != s.hidden);
@@ -6632,76 +6630,6 @@ namespace netxs::gui
             {
                 if constexpr (debugmode) log("Show window %%", utf::to_hex((ui32)s.hWnd));
                 x11session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.hWnd });
-            }
-            s.sync.clear();
-        }
-        void layer_present_old(layer& s)
-        {
-            if (!s.data.data() || s.area.size.x <= 0 || s.area.size.y <= 0) return;
-            auto& x11session = *x11::session_ptr;
-            auto target_coor = s.live ? s.area.coor : s.hidden;
-            auto windowmoved = s.prev.coor != target_coor;
-
-            auto visibility_changed = windowmoved && (s.prev.coor == s.hidden || target_coor == s.hidden);
-            if (visibility_changed)
-            {
-                s.prev.coor = target_coor;
-                s.sync.clear();
-                if (s.live)
-                {
-                    s.sync.push_back(rect{ dot_00, s.area.size });
-                }
-                else
-                {
-                    x11session.sendrq(x11::req::unmap_window{ .window_id = (ui32)s.hWnd });
-                    return;
-                }
-            }
-
-            if (s.sync.empty())
-            {
-                if (windowmoved)
-                {
-                    s.prev.coor = target_coor;
-                    x11session.move_window(s.hWnd, target_coor);
-                }
-                return;
-            }
-            if (windowmoved)
-            {
-                s.prev.coor = target_coor;
-                x11session.move_window(s.hWnd, target_coor);
-            }
-            for (auto r : s.sync)
-            {
-                r.coor -= s.area.coor;
-                if (r.coor.x < 0 || r.coor.y < 0
-                 || r.coor.x + r.size.x > s.area.size.x
-                 || r.coor.y + r.size.y > s.area.size.y)
-                {
-                    continue;
-                }
-                auto dirty_offset = (ui32)s.shm_offset + (r.coor.y * s.area.size.x * sizeof(ui32));
-                x11session.sendrq<x11::req::shm::put_image>(
-                {
-                    .major_opcode = x11session.shm_major_opcode,
-                    .drawable     = (ui32)s.hWnd,
-                    .gc_id        = (ui32)s.hdc,
-                    .total_width  = (ui16)s.area.size.x,
-                    .total_height = (ui16)s.area.size.y,
-                    .src_x        = (ui16)r.coor.x,
-                    .src_y        = (ui16)0,        // Use 0, because dirty_offset already points to the required line Y.
-                    .src_width    = (ui16)r.size.x, // Dirty rect size.
-                    .src_height   = (ui16)r.size.y, //
-                    .dst_x        = (si16)r.coor.x, // Window dest coor.
-                    .dst_y        = (si16)r.coor.y, //
-                    .shm_seg_id   = x11session.shm_segment_xid,
-                    .offset       = (ui32)dirty_offset, // New data start.
-                });
-            }
-            if (visibility_changed && s.live) // Show window.
-            {
-                x11session.sendrq(x11::req::map_window{ .window_id = (ui32)s.hWnd });
             }
             s.sync.clear();
         }
