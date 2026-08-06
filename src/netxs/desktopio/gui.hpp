@@ -6658,40 +6658,22 @@ namespace netxs::gui
             while (x11connection.recv((char*)&ev, 32).size() == 32)
             {
                 auto type = ev.type & 0x7F;
-                //// Take event window id.
-                //auto event_window = 0u;
-                //if (type == 4 || type == 5 || type == 6) // Mouse events
-                //{
-                //    event_window = reinterpret_cast<x11::event::mouse_click&>(ev).event_window;
-                //}
-                //else if (type == 22) // ConfigureNotify
-                //{
-                //    event_window = reinterpret_cast<x11::event::configure&>(ev).window;
-                //}
-                //else if (type == 33) // ClientMessage
-                //{
-                //    event_window = reinterpret_cast<x11::event::client_message&>(ev).window;
-                //}
-
                 if constexpr (debugmode) log("%%seq=%% event=%% (%%)", prompt::x11, ev.sequence, x11session.event_str(type), type);
-
-                if (type == x11::event::Error) // X11 Core / Extension Error Packet
-                {
-                    x11session.parse_error(ev);
-                    continue;
-                }
-
-                //todo debug - Exit on keypress.
-                if (type == x11::event::KeyPress) break;
-
                 switch (type)
                 {
+                    case x11::event::Error: // X11 Core / Extension Error Packet
+                        x11session.parse_error(ev);
+                        continue;
                     case x11::event::Reply:
                         x11session.parse_reply(ev);
                         break;
                     case x11::event::CreateNotify:
-                        log("Window created");
+                        if constexpr (debugmode) log("Window created");
                         break;
+                    case x11::event::KeyPress:
+                        //todo debug - Exit on keypress.
+                        //auto& key = reinterpret_cast<x11::event::key_press&>(ev);
+                        goto break_break;
                     case x11::event::MotionNotify: // WM_MOUSEMOVE
                     {
                         //auto& m = reinterpret_cast<x11::event::motion&>(ev);
@@ -6699,10 +6681,15 @@ namespace netxs::gui
                         break;
                     }
                     case x11::event::EnterNotify:
-                        break;
                     case x11::event::LeaveNotify: // WM_MOUSELEAVE
+                    {
+                        auto& c = reinterpret_cast<x11::event::crossing&>(ev);
+                        auto t = type == x11::event::EnterNotify ? "enter" : "leave";
+                        if constexpr (debugmode) log("mouse %%: event_window=%% child_window=%% root_x=%% root_y=%% event_x=%% event_y=%% state=%% mode=%% flags=%%", t, utf::to_hex(c.event_window), utf::to_hex(c.child_window),
+                        c.root_x, c.root_y, c.event_x, c.event_y, c.state, (si32)c.mode, (si32)c.flags);
                         mouse_leave();
                         break;
+                    }
                     case x11::event::ButtonPress:
                     case x11::event::ButtonRelease:
                     {
@@ -6735,12 +6722,6 @@ namespace netxs::gui
                         {
                             sys_command(syscmd::close);
                         }
-                        break;
-                    }
-                    case x11::event::KeyPress:
-                    {
-                        //auto& key = reinterpret_cast<x11::event::key_press&>(ev);
-                        //log();
                         break;
                     }
                     case x11::event::PropertyNotify:
@@ -6782,6 +6763,7 @@ namespace netxs::gui
                 }
                 sys_command(syscmd::update);
             }
+            break_break:
             window_cleanup();
             if constexpr (debugmode) log("window_message_pump ended");
         }
