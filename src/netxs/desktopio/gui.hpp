@@ -3536,8 +3536,8 @@ namespace netxs::gui
 
         virtual bool layer_create(layer& s, twod win_coord = {}, twod grid_size = {}, dent border_dent = {}, twod cell_size = {}) = 0;
         //virtual void layer_delete(layer& s) = 0;
-        virtual void layer_move_all() = 0;
-        virtual void layer_present(layer& s) = 0;
+        virtual void layers_move() = 0;
+        virtual void layers_present() = 0;
         virtual bits layer_get_bits(layer& s, bool zeroize = faux) = 0;
         virtual void layer_timer_start(layer& s, span elapse, ui32 eventid) = 0;
         virtual void layer_timer_stop(layer& s, ui32 eventid) = 0;
@@ -3652,7 +3652,7 @@ namespace netxs::gui
             if (mfocus.focused() && blinky.live) // Hide blinking layer to avoid visual desync.
             {
                 blinky.hide();
-                layer_move_all();
+                layers_move();
                 blinky.show();
             }
         }
@@ -4236,7 +4236,7 @@ namespace netxs::gui
             if (!reload || waitsz) return;
             auto what = reload;
             reload = {};
-                 if (what == task::moved) layer_move_all();
+                 if (what == task::moved) layers_move();
             else if (what)
             {
                 if (what == task::all)
@@ -4278,10 +4278,7 @@ namespace netxs::gui
                     fit_to_displays(tooltip_layer.area, dent{ contour });
                     draw_tooltip();
                 }
-                for (auto& l : layers)
-                {
-                    layer_present(l);
-                }
+                layers_present();
             }
             isbusy.exchange(faux);
         }
@@ -5498,7 +5495,7 @@ namespace netxs::gui
                 s.klok.erase(iter);
             }
         }
-        void layer_move_all()
+        void layers_move()
         {
             auto lock = ::BeginDeferWindowPos((si32)layers.size());
             for (auto& l : layers)
@@ -5616,6 +5613,13 @@ namespace netxs::gui
                 update_proc();
             }
             s.sync.clear();
+        }
+        void layers_present()
+        {
+            for (auto& l : layers)
+            {
+                layer_present(l);
+            }
         }
         void window_set_title(view utf8) { ::SetWindowTextW((HWND)master.hWnd, utf::to_utf(utf8).data()); }
         bool keybd_test_pressed(si32 virtcod, si32 keycode = 0)
@@ -6476,6 +6480,9 @@ namespace netxs::gui
 {
     struct window : winbase
     {
+        text batch_buffer;
+        twod current_mouse_pos;
+
         window(auto&& ...Args)
             : winbase{ Args... }
         { }
@@ -6526,16 +6533,131 @@ namespace netxs::gui
                 grid_size /= cell_size;
                 s.area = rect{ win_coord, grid_size * cell_size } + border_dent;
             }
-            x11session.create_window((ui32)master.hWnd, new_window_id, new_gc_id, s.area);
+            x11session.create_window(master.hWnd, new_window_id, new_gc_id, s.area);
             return true;
         }
-        void layer_move_all() {}
-        void layer_present(layer& s)
+        void layers_move()
+        {
+            auto& x11session = *x11::session_ptr;
+            auto lock = std::lock_guard{ x11session.mutex };
+            for (auto& l : layers)
+            {
+                auto& s = l.get();
+
+                auto target_coor = s.live ? s.area.coor : s.hidden;
+                auto windowmoved = s.prev.coor != target_coor;
+                auto visibility_changed = windowmoved && (s.prev.coor == s.hidden || target_coor == s.hidden);
+                if (visibility_changed)
+                {
+                    layer_present(batch_buffer, s);
+                }
+                else if (s.prev.coor(s.live ? s.area.coor : s.hidden))
+                {
+                    x11session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd },
+                                                x11::req::configure_window::payload{ .x = (ui32)(si16)s.prev.coor.x,
+                                                                                     .y = (ui32)(si16)s.prev.coor.y, });
+                }
+            }
+            if (batch_buffer.size())
+            {
+                x11session.x11connection->send(batch_buffer);
+                if constexpr (debugmode)
+                {
+                    log("%% layer_move_all: Batched layout update sent to X-server (size=%% bytes)", 
+                        prompt::x11, batch_buffer.size());
+                }
+                batch_buffer.clear();
+            }
+        }
+        void layer_present(text& batch_buffer, layer& s)
         {
             if (!s.data.data() || s.area.size.x <= 0 || s.area.size.y <= 0) return;
             auto& x11session = *x11::session_ptr;
             auto target_coor = s.live ? s.area.coor : s.hidden;
             auto windowmoved = s.prev.coor != target_coor;
+
+            auto visibility_changed = windowmoved && (s.prev.coor == s.hidden || target_coor == s.hidden);
+            if (visibility_changed)
+            {
+                s.prev.coor = target_coor;
+                s.sync.clear();
+                if (s.live)
+                {
+                    s.sync.push_back(rect{ dot_00, s.area.size });
+                }
+                else
+                {
+                    if constexpr (debugmode) log("Hide window %%", utf::to_hex((ui32)s.hWnd));
+                    x11session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = (ui32)s.hWnd });
+                    return;
+                }
+            }
+
+            if (windowmoved)
+            {
+                assert(target_coor != s.hidden);
+                s.prev.coor = target_coor;
+                x11session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd, },
+                                        x11::req::configure_window::payload{ .x = (ui16)target_coor.x,
+                                                                             .y = (ui16)target_coor.y });
+            }
+            for (auto r : s.sync)
+            {
+                r.coor -= s.area.coor;
+                if (r.coor.x < 0 || r.coor.y < 0
+                 || r.coor.x + r.size.x > s.area.size.x
+                 || r.coor.y + r.size.y > s.area.size.y)
+                {
+                    continue;
+                }
+                auto dirty_offset = (ui32)s.shm_offset + (r.coor.y * s.area.size.x * sizeof(ui32));
+                x11session.accumrq(batch_buffer, x11::req::shm::put_image
+                {
+                    .major_opcode = x11session.shm_major_opcode,
+                    .drawable     = (ui32)s.hWnd,
+                    .gc_id        = (ui32)s.hdc,
+                    .total_width  = (ui16)s.area.size.x,
+                    .total_height = (ui16)s.area.size.y,
+                    .src_x        = (ui16)r.coor.x,
+                    .src_y        = (ui16)0,        // Use 0, because dirty_offset already points to the required line Y.
+                    .src_width    = (ui16)r.size.x, // Dirty rect size.
+                    .src_height   = (ui16)r.size.y, //
+                    .dst_x        = (si16)r.coor.x, // Window dest coor.
+                    .dst_y        = (si16)r.coor.y, //
+                    .shm_seg_id   = x11session.shm_segment_xid,
+                    .offset       = (ui32)dirty_offset, // New data start.
+                });
+            }
+            if (visibility_changed && s.live) // Show window.
+            {
+                if constexpr (debugmode) log("Show window %%", utf::to_hex((ui32)s.hWnd));
+                x11session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.hWnd });
+            }
+            s.sync.clear();
+        }
+        void layer_present_old(layer& s)
+        {
+            if (!s.data.data() || s.area.size.x <= 0 || s.area.size.y <= 0) return;
+            auto& x11session = *x11::session_ptr;
+            auto target_coor = s.live ? s.area.coor : s.hidden;
+            auto windowmoved = s.prev.coor != target_coor;
+
+            auto visibility_changed = windowmoved && (s.prev.coor == s.hidden || target_coor == s.hidden);
+            if (visibility_changed)
+            {
+                s.prev.coor = target_coor;
+                s.sync.clear();
+                if (s.live)
+                {
+                    s.sync.push_back(rect{ dot_00, s.area.size });
+                }
+                else
+                {
+                    x11session.sendrq(x11::req::unmap_window{ .window_id = (ui32)s.hWnd });
+                    return;
+                }
+            }
+
             if (s.sync.empty())
             {
                 if (windowmoved)
@@ -6552,14 +6674,14 @@ namespace netxs::gui
             }
             for (auto r : s.sync)
             {
-                auto local_rect_coor = r.coor - s.area.coor;
-                if (local_rect_coor.x < 0 || local_rect_coor.y < 0
-                 || local_rect_coor.x + r.size.x > s.area.size.x
-                 || local_rect_coor.y + r.size.y > s.area.size.y)
+                r.coor -= s.area.coor;
+                if (r.coor.x < 0 || r.coor.y < 0
+                 || r.coor.x + r.size.x > s.area.size.x
+                 || r.coor.y + r.size.y > s.area.size.y)
                 {
                     continue;
                 }
-                auto dirty_offset = (ui32)s.shm_offset + (local_rect_coor.y * s.area.size.x * sizeof(ui32));
+                auto dirty_offset = (ui32)s.shm_offset + (r.coor.y * s.area.size.x * sizeof(ui32));
                 x11session.sendrq<x11::req::shm::put_image>(
                 {
                     .major_opcode = x11session.shm_major_opcode,
@@ -6567,17 +6689,35 @@ namespace netxs::gui
                     .gc_id        = (ui32)s.hdc,
                     .total_width  = (ui16)s.area.size.x,
                     .total_height = (ui16)s.area.size.y,
-                    .src_x        = (ui16)local_rect_coor.x,
-                    .src_y        = (ui16)0,                 // Use 0, because dirty_offset already points to the required line Y.
-                    .src_width    = (ui16)r.size.x,          // Dirty rect width.
-                    .src_height   = (ui16)r.size.y,          // Dirty rect height.
-                    .dst_x        = (si16)local_rect_coor.x, // Window dest coors.
-                    .dst_y        = (si16)local_rect_coor.y, //
+                    .src_x        = (ui16)r.coor.x,
+                    .src_y        = (ui16)0,        // Use 0, because dirty_offset already points to the required line Y.
+                    .src_width    = (ui16)r.size.x, // Dirty rect size.
+                    .src_height   = (ui16)r.size.y, //
+                    .dst_x        = (si16)r.coor.x, // Window dest coor.
+                    .dst_y        = (si16)r.coor.y, //
                     .shm_seg_id   = x11session.shm_segment_xid,
-                    .offset       = (ui32)dirty_offset       // New data start.
+                    .offset       = (ui32)dirty_offset, // New data start.
                 });
             }
+            if (visibility_changed && s.live) // Show window.
+            {
+                x11session.sendrq(x11::req::map_window{ .window_id = (ui32)s.hWnd });
+            }
             s.sync.clear();
+        }
+        void layers_present()
+        {
+            auto& x11session = *x11::session_ptr;
+            auto lock = std::lock_guard{ x11session.mutex };
+            for (auto& l : layers)
+            {
+                layer_present(batch_buffer, l);
+            }
+            if (batch_buffer.size())
+            {
+                x11session.x11connection->send(batch_buffer);
+                batch_buffer.clear();
+            }
         }
         void layer_timer_start(layer& /*s*/, span /*elapse*/, ui32 /*eventid*/) {}
         void layer_timer_stop(layer& /*s*/, ui32 /*eventid*/) {}
@@ -6676,8 +6816,9 @@ namespace netxs::gui
                         goto break_break;
                     case x11::event::MotionNotify: // WM_MOUSEMOVE
                     {
-                        //auto& m = reinterpret_cast<x11::event::motion&>(ev);
-                        mouse_moved(); // In X11, the mouse position is updated implicitly within the event structure.
+                        auto& m = reinterpret_cast<x11::event::motion&>(ev);
+                        current_mouse_pos = { m.root_x, m.root_y };
+                        mouse_moved();
                         break;
                     }
                     case x11::event::EnterNotify:
@@ -6699,10 +6840,10 @@ namespace netxs::gui
                         else if (b.button == 2) mouse_press(bttn::middle, pressed);
                         else if (b.button == 3) mouse_press(bttn::right, pressed);
                         //todo use XInput2
-                        //else if (b.button == 4 && pressed) mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
-                        //else if (b.button == 5 && pressed) mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
-                        //else if (b.button == 6 && pressed) mouse_wheel(-120, 1); // WheelLeft
-                        //else if (b.button == 7 && pressed) mouse_wheel(120, 1);  // WheelRight
+                        else if (b.button == 4 && pressed) mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
+                        else if (b.button == 5 && pressed) mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
+                        else if (b.button == 6 && pressed) mouse_wheel(-120, 1); // WheelLeft
+                        else if (b.button == 7 && pressed) mouse_wheel(120, 1);  // WheelRight
                         break;
                     }
                     case x11::event::FocusIn: // WM_SETFOCUS
@@ -6711,8 +6852,8 @@ namespace netxs::gui
                         break;
                     case x11::event::ConfigureNotify: // WM_WINDOWPOSCHANGED
                     {
-                        auto& cfg = reinterpret_cast<x11::event::configure&>(ev);
-                        check_window(twod{ cfg.x, cfg.y }); // Window move/resize.
+                        //auto& cfg = reinterpret_cast<x11::event::configure&>(ev);
+                        //check_window(twod{ cfg.x, cfg.y }); // Window move/resize.
                         break;
                     }
                     case x11::event::ClientMessage: // ?WM_CLOSE
@@ -6769,16 +6910,29 @@ namespace netxs::gui
         }
         void window_initilize()
         {
+            auto& x11session = *x11::session_ptr;
+            auto lock = std::lock_guard{ x11session.mutex };
             for (auto& l : layers)
             {
                 auto& p = l.get();
-                x11::session_ptr->sendrq<x11::req::map_window>({ .window_id = (ui32)p.hWnd }); // SW_SHOW.
+                x11::session_ptr->accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)p.hWnd }); // SW_SHOW.
+            }
+            if (batch_buffer.size())
+            {
+                x11session.x11connection->send(batch_buffer);
+                batch_buffer.clear();
             }
         }
         void window_shutdown() {}
         void window_cleanup() {}
-        void window_set_title(view /*utf8*/) {}
-        twod mouse_get_pos() { return twod{}; }
+        void window_set_title(view utf8)
+        {
+            x11::session_ptr->window_set_title(master.hWnd, utf8);
+        }
+        twod mouse_get_pos()
+        {
+            return current_mouse_pos;
+        }
         void mouse_capture(si32 /*captured_by*/) {}
         void mouse_release(si32 /*released_by*/) {}
         void mouse_catch_outside() {}
@@ -6817,8 +6971,8 @@ namespace netxs::gui
         void keybd_sync_state(si32 /*virtcod*/) {}
         void keybd_reset_deadkey(arch /*hkl*/ = {}) {}
         bool layer_create(layer& /*s*/, twod /*win_coord*/ = {}, twod /*grid_size*/ = {}, dent /*border_dent*/ = {}, twod /*cell_size*/ = {}) { return faux; }
-        void layer_move_all() {}
-        void layer_present(layer& /*s*/) {}
+        void layers_move() {}
+        void layers_present() {}
         void layer_timer_start(layer& /*s*/, span /*elapse*/, ui32 /*eventid*/) {}
         void layer_timer_stop(layer& /*s*/, ui32 /*eventid*/) {}
         bits layer_get_bits(layer& /*s*/, bool /*zeroize*/ = faux) { return bits{}; }

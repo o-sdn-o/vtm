@@ -749,6 +749,25 @@ namespace netxs::x11
         ui16                    sequence_counter = 0; // Sent request counter.
 
         template<class R, class V = qiew, class P = noop>
+        void accumrq(text& batch_buffer, R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
+        {
+            //auto lock = std::lock_guard{ mutex };
+            sequence_counter++;
+            if constexpr (requires(text packet){ request.serialize(packet, payload); })
+            {
+                request.serialize(batch_buffer, payload);
+            }
+            else
+            {
+                assert(!payload);
+                batch_buffer += view{ (char*)&request, sizeof(request) };
+            }
+            if constexpr (!std::is_same_v<P, noop>)
+            {
+                reply_callbacks.push_back({ sequence_counter, std::move(callback) });
+            }
+        }
+        template<class R, class V = qiew, class P = noop>
         void sendrq(R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
         {
             auto lock = std::lock_guard{ mutex };
@@ -1028,7 +1047,7 @@ namespace netxs::x11
                                             .shm_seg_id   = client_shmseg_xid });
             if constexpr (debugmode) log("%%Shared buffer segment XID %% is detached", prompt::x11, client_shmseg_xid);
         }
-        auto create_window(ui32 master_window_id, ui32 new_window_id, ui32 new_gc_id, rect area)
+        auto create_window(arch master_window_id, ui32 new_window_id, ui32 new_gc_id, rect area)
         {
             if (!area) area = rect_11;
             sendrq<x11::req::create_window>({ .window_id = new_window_id,
@@ -1060,7 +1079,7 @@ namespace netxs::x11
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                     .property  = 68,   // Atom WM_TRANSIENT_FOR=68.
                                                     .type      = 33 }, // Atom XA_WINDOW=33.
-                                                master_window_id);
+                                                (ui32)master_window_id);
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                     .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
                                                     .type      = 4 },               // Atom XA_ATOM=4.
@@ -1085,9 +1104,16 @@ namespace netxs::x11
             if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% area=%% colormap_id=0x%%",
                 utf::to_hex(new_window_id), utf::to_hex(roots.front().s.root_window_id), 32, utf::to_hex(argb_visual32_id), area, utf::to_hex(argb_colormap_id));
         }
-        void window_set_title(ui32 window_id, qiew title)
+        void window_set_title(arch window_id, qiew title)
         {
-            sendrq<x11::req::change_property>({ .window_id = window_id,
+            return; //todo
+            auto utf8 = title.str();
+            for (auto& c : utf8) // The window will be forcibly dismissed if the title contains control characters.
+            {
+                if ((byte)c < 0x20 || c == 0x7F) c = ' ';
+            }
+            title = qiew{ utf8 };
+            sendrq<x11::req::change_property>({ .window_id = (ui32)window_id,
                                                 .property  = 39,   // Atom WM_NAME (predefined id = 39).
                                                 .type      = 31,   // Atom STRING (predefined id = 31).
                                                 .format    = 8 },  // Format (8: 8-bit chars (string)).
@@ -1181,8 +1207,9 @@ namespace netxs::x11
             auto is_wsl = os::env::get("WSL_DISTRO_NAME").size();
             if (!is_wsl) // WSLg deadlocks on these requests.
             {
-                atom_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
-                atom_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP", faux);
+                //todo ???GNOME too
+                //atom_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
+                //atom_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP", faux);
                 atom_workarea           = get_atom_id("_NET_WORKAREA", faux);
             }
             return true;//atom_motif_wm_hints > 0;
