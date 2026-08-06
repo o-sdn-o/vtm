@@ -47,7 +47,7 @@ namespace netxs::x11
         if constexpr (is_string)
         {
             yield += view{ data.data(), data_bytes };
-            yield += "\0\0\0"s.substr(0, 4 - (data_bytes % 4));
+            yield.append(-data_bytes & 3, '\0');
         }
         else
         {
@@ -711,11 +711,13 @@ namespace netxs::x11
         ui32                                  argb_colormap_id = 0;
 
         ui32                                  atom_motif_wm_hints = 0; // Disable decoractions.
+        ui32                                  atom_net_wm_name = 0;
         ui32                                  atom_net_wm_state_skip_taskbar = 0; // Hide from the taskbar.
         ui32                                  atom_net_wm_state = 0;              //
         //ui32                                  atom_net_wm_window_type = 0;
         //ui32                                  atom_net_wm_window_type_combo = 0;
         //ui32                                  atom_compton_shadow = 0;
+        ui32                                  atom_utf8_string = 0;
         ui32                                  atom_active_window = 0;
         ui32                                  atom_number_of_desktops = 0;
         ui32                                  atom_current_desktop = 0;
@@ -1106,16 +1108,9 @@ namespace netxs::x11
         }
         void window_set_title(arch window_id, qiew title)
         {
-            return; //todo
-            auto utf8 = title.str();
-            for (auto& c : utf8) // The window will be forcibly dismissed if the title contains control characters.
-            {
-                if ((byte)c < 0x20 || c == 0x7F) c = ' ';
-            }
-            title = qiew{ utf8 };
             sendrq<x11::req::change_property>({ .window_id = (ui32)window_id,
-                                                .property  = 39,   // Atom WM_NAME (predefined id = 39).
-                                                .type      = 31,   // Atom STRING (predefined id = 31).
+                                                .property  = atom_net_wm_name,
+                                                .type      = atom_utf8_string,
                                                 .format    = 8 },  // Format (8: 8-bit chars (string)).
                                             title);
         }
@@ -1197,22 +1192,19 @@ namespace netxs::x11
             };
             // Window related.
             atom_motif_wm_hints            = get_atom_id("_MOTIF_WM_HINTS", true);
+            atom_net_wm_name               = get_atom_id("_NET_WM_NAME", true);
             atom_net_wm_state              = get_atom_id("_NET_WM_STATE", true);
             atom_net_wm_state_skip_taskbar = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR", true);
             //atom_net_wm_window_type        = get_atom_id("_NET_WM_WINDOW_TYPE", true);
             //atom_net_wm_window_type_combo  = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO", true);
             //atom_compton_shadow            = get_atom_id("_COMPTON_SHADOW", true); // Picom/Compton
             // Server related.
-            atom_active_window = get_atom_id("_NET_ACTIVE_WINDOW", faux);
-            auto is_wsl = os::env::get("WSL_DISTRO_NAME").size();
-            if (!is_wsl) // WSLg deadlocks on these requests.
-            {
-                //todo ???GNOME too
-                //atom_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
-                //atom_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP", faux);
-                atom_workarea           = get_atom_id("_NET_WORKAREA", faux);
-            }
-            return true;//atom_motif_wm_hints > 0;
+            atom_utf8_string        = get_atom_id("UTF8_STRING", faux);
+            atom_active_window      = get_atom_id("_NET_ACTIVE_WINDOW", faux);
+            atom_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
+            atom_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP", faux);
+            atom_workarea           = get_atom_id("_NET_WORKAREA", faux);
+            return true;
         }
         auto listen_root_events() // Subscribe on root's property change (to track some desktop window has received focus).
         {
