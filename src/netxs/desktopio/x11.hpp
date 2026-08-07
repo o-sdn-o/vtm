@@ -248,7 +248,7 @@ namespace netxs::x11
             ui32 window_id;   // Window ID (root_window_id).
             ui32 visual_id;   // Some argb Visual ID.
         };
-        struct query_extension // Opcode 98 (query extension, query MIT-SHM).
+        struct query_extension // Opcode 98 (query extension).
         {
             struct reply
             {
@@ -347,7 +347,7 @@ namespace netxs::x11
         }
         namespace xfixes
         {
-            struct query_version 
+            struct query_version
             {
                 struct reply
                 {
@@ -376,6 +376,270 @@ namespace netxs::x11
                 si16 x_offset     = 0;  // Region offset.
                 si16 y_offset     = 0;  //
                 ui32 region       = 0;  // 0 (None): empty region (make window transparent for mouse).
+            };
+        }
+        namespace xi2
+        {
+            struct query_version
+            {
+                struct reply
+                {
+                    byte status;         // 1: Reply
+                    byte xi_opcode;      // minor_opcode (47)
+                    ui16 sequence;
+                    ui32 length;         // Always 0.
+                    ui16 major_version;
+                    ui16 minor_version;
+                    ui32 pad[5];
+                };
+                byte major_opcode;       // xi2_major_opcode.
+                byte minor_opcode = 47;  // 47: XI2QueryVersion.
+                ui16 length = 2;
+                ui16 client_major_version = 2; // Required version 2.2 of the input stack for smooth scroll and touchpad.
+                ui16 client_minor_version = 2; //
+            };
+            namespace mods
+            {
+                static constexpr auto Shift    = 1u << 0; // Shift.
+                static constexpr auto CapsLock = 1u << 1; // CapsLock.
+                static constexpr auto Ctrl     = 1u << 2; // Control.
+                static constexpr auto mod1     = 1u << 3; // Alt.
+                static constexpr auto mod2     = 1u << 4; // NumLock.
+                static constexpr auto mod3     = 1u << 5; // AltGr.
+                static constexpr auto mod4     = 1u << 6; // Win/Super.
+                static constexpr auto mod5     = 1u << 7; // ScrollLock.
+            }
+            namespace event
+            {
+                #define eventlist        \
+                    X(undef             )\
+                    X(DeviceChanged     )\
+                    X(KeyPress          )\
+                    X(KeyRelease        )\
+                    X(ButtonPress       )\
+                    X(ButtonRelease     )\
+                    X(Motion            )\
+                    X(Enter             )\
+                    X(Leave             )\
+                    X(FocusIn           )\
+                    X(FocusOut          )\
+                    X(HierarchyChanged  )\
+                    X(PropertyEvent     )\
+                    X(RawKeyPress       )\
+                    X(RawKeyRelease     )\
+                    X(RawButtonPress    )\
+                    X(RawButtonRelease  )\
+                    X(RawMotion         )\
+                    X(TouchBegin        ) /*v2.2*/\
+                    X(TouchUpdate       )\
+                    X(TouchEnd          )\
+                    X(TouchOwnership    )\
+                    X(RawTouchBegin     )\
+                    X(RawTouchUpdate    )\
+                    X(RawTouchEnd       )\
+                    X(BarrierHit        ) /*v2.3*/\
+                    X(BarrierLeave      )\
+                    X(GesturePinchBegin ) /*v2.4*/\
+                    X(GesturePinchUpdate)\
+                    X(GesturePinchEnd   )\
+                    X(GestureSwipeBegin )\
+                    X(GestureSwipeUpdate)\
+                    X(GestureSwipeEnd   )
+                static constexpr auto _counter = __COUNTER__ + 1;
+                #define X(a) static constexpr auto a = __COUNTER__ - _counter;
+                    eventlist
+                #undef X
+                #define X(a) #a##sv,
+                    static constexpr auto names = std::to_array({ eventlist });
+                #undef X
+                #undef eventlist
+
+                struct base
+                {
+                    byte type;           // Always 35 (GenericEvent).
+                    byte extension;      // xi_major_opcode.
+                    ui16 sequence;
+                    ui32 length;         // Payload length in 32-bit words.
+                    ui16 evtype;         // Event type (e.g., 2: KeyPress, 3: KeyRelease).
+                    ui16 deviceid;       // Physical or virtual device id.
+                    ui32 time;           // Time stamp.
+                    //// Arbitrary payload:
+                    //// - buttons_mask:   Mouse button mask array (buttons_len * 4 bytes).
+                    //// - valuators_mask: Valuators axis mask array. (valuators_len * 4 bytes).
+                    //// - valuators_data: Valuators axis values (fp64).
+                    //auto buttons_mask_ptr() const
+                    //{
+                    //    return reinterpret_cast<ui32 const*>(reinterpret_cast<char const*>(this) + 80);
+                    //}
+                    //auto valuators_mask_ptr() const
+                    //{
+                    //    return buttons_mask_ptr() + buttons_len;
+                    //}
+                    //auto valuators_data_ptr() const
+                    //{
+                    //    return reinterpret_cast<double const*>(valuators_mask_ptr() + valuators_len);
+                    //}
+                };
+                struct device_changed // 1.
+                {
+                    static constexpr auto KeyClass      = 0;
+                    static constexpr auto ButtonClass   = 1;
+                    static constexpr auto ValuatorClass = 2;
+                    static constexpr auto ScrollClass   = 3;
+                    static constexpr auto TouchClass    = 4;
+
+                    base header;
+                    ui16 reason;  // 1: XI_MasterDeviceChanged, 2: XI_DeviceSlaveChanged
+                    ui16 num_classes; // any_class count in payload.
+
+                    struct any_class // Header of device properties.
+                    {
+                        ui16 type;     // 0: Key, 1: Button, 2: Valuator (axis), 3: Scroll, 4: Touch.
+                        ui16 length;   // Length in bytes including this header.
+                        ui16 sourceid; // Device id.
+                        ui16 pad;
+                    };
+                    struct key_class // 0. KeyClass (keybd scancode range).
+                    {
+                        ui16 type;          // 0: KeyClass.
+                        ui16 length;        // KeyClass length with payload.
+                        ui16 sourceid;      // Device ID.
+                        ui16 num_keys;      // Key count.
+
+                        auto keys_ptr() const
+                        {
+                            return reinterpret_cast<ui32 const*>(reinterpret_cast<char const*>(this) + 8);
+                        }
+                    };
+                    struct button_class // 1. ButtonClass (Mouse button count + buuton names (atoms)).
+                    {
+                        ui16 type;          // 1: ButtonClass.
+                        ui16 length;        // Pack length.
+                        ui16 sourceid;
+                        ui16 num_buttons;   // Button count.
+
+                        auto state_mask_ptr() const // Button state array.
+                        {
+                            return reinterpret_cast<ui32 const*>(reinterpret_cast<char const*>(this) + 8);
+                        }
+                        auto labels_ptr() const // Button name array (atom list).
+                        {
+                            auto mask_words = (size_t)(num_buttons + 31) / 32;
+                            return state_mask_ptr() + mask_words;
+                        }
+                    };
+                    struct valuator_class // 2. ValuatorClass (absolute/relative axis bounds for mouse/touchpad).
+                    {
+                        ui16 type;          // 2: ValuatorClass.
+                        ui16 length = 40;
+                        ui16 sourceid;
+                        ui16 number;        // Axis number (e.g., 0: X, 1: Y).
+                        ui32 label;         // Atom: axis name (e.g., "Rel X").
+                        fp64 min;           // Min value.
+                        fp64 max;           // Max value.
+                        fp64 value;         // Current value.
+                        ui32 resolution;    // Resolution in unit/meter.
+                        byte mode;          // 0: Absolute, 1: Relative
+                        byte pad[3];
+                    };
+                    struct scroll_class // 3. Scroll direction + step length.
+                    {
+                        ui16 type;          // 3: ScrollClass.
+                        ui16 length = 24;
+                        ui16 sourceid;      // Device ID.
+                        ui16 number;        // Wheel axis (valuator number).
+                        ui16 scroll_type;   // 1: Vertical, 2: Horizontal.
+                        ui16 pad;
+                        ui32 flags;         // 1: DontIncrement (emulation), 2: Preferred.
+                        fp64 increment;     // Scroll step.
+                    };
+                    struct touch_class // 4. TouchClass (multitouch panel).
+                    {
+                        ui16 type;          // 4: TouchClass.
+                        ui16 length;        // Pack length.
+                        ui16 sourceid;
+                        byte mode;          // 0: Direct (touch-screen), 1: Dependent (touchpad).
+                        byte pad;
+                        ui16 num_touches;   // Max touches supported.
+                    };
+
+                    auto classes_ptr() const
+                    {
+                        return reinterpret_cast<any_class const*>(reinterpret_cast<char const*>(this) + sizeof(device_changed));
+                    }
+                };
+                struct keybd
+                {
+                    // GenericEvent
+                    byte type;           // Always 35 (GenericEvent).
+                    byte extension;      // xi2_major_opcode.
+                    ui16 sequence;
+                    ui32 length;         // Payload length in 32-bit words.
+                    // XInput2 Metadata
+                    ui16 evtype;         // Event type (e.g., 2: KeyPress, 3: KeyRelease).
+                    ui16 deviceid;       // Physical or virtual device id.
+                    ui32 time;           // Time stamp.
+                    // Event payload
+                    ui32 detail;         // Keybd: Keycode. Mouse: Button: 1: Left, 2: Middle, 3: Right, 4/5: Scroll.
+                    ui32 root;           // Root window id.
+                    ui32 event;          // Event window id.
+                    ui32 child;          // Event child window id.
+                    // Event Coords
+                    si32 root_x;         // Global fixed 16.16 coords.
+                    si32 root_y;         //
+                    si32 event_x;        // Relative fixed 16.16 coords.
+                    si32 event_y;        //
+                    // Axes metadata + flags.
+                    ui16 buttons_len;    // Button mask array length in 32-bit words.
+                    ui16 valuators_len;  // Valuators axis mask array length in 32-bit words.
+                    ui16 sourceid;       // Event source device id.
+                    ui16 pad;
+                    ui32 flags;          // 1 << 16 means XIKeyRepeat.
+
+                    struct // Keybd modifiers (bitfields).
+                    {
+                        ui32 base;      // Pressed modifiers (Shift, Ctrl, ...).
+                        ui32 latched;   // Sticky keys.
+                        ui32 locked;    // Locks (CapsLock, NumLock).
+                        ui32 effective; // All mods.
+                    } mods;
+                    struct //  // Keybd layout state (XKB Groups).
+                    {
+                        byte base;
+                        byte latched;
+                        byte locked;
+                        byte effective; // 0: EN, 1: RU etc.
+                    } group;
+                };
+            }
+            namespace dev_type
+            {
+                static constexpr auto all_devices        = 0; // All system devices.
+                static constexpr auto all_master_devices = 1; // Virtual generic master devices (keybd/mouse).
+            }
+            struct select_events // Minor opcode 46.
+            {
+                struct payload // device_mask
+                {
+                    ui16 deviceid;     // xi_device_id (e.g., all_master_devices).
+                    ui16 mask_len = 2; // Mask length in 32-bit words.
+                    ui32 mask1 = 0;    // 1..31 Mask of required events (event_type).
+                    ui32 mask2 = 0;    // 32...
+                };
+                byte major_opcode;      // xi2_major_opcode
+                byte minor_opcode = 46; // 46: XISelectEvents
+                ui16 length;
+                ui32 window_id;
+                ui16 num_masks = 1;     // Number of device_mask in payload.
+                ui16 pad = 0;
+
+                auto serialize(text& yield, payload mask_data)
+                {
+                    length = (ui16)(sizeof(*this) / 4 + sizeof(mask_data) / 4);
+                    yield += view{ (char*)this, sizeof(*this) };
+                    yield += view{ (char*)&mask_data, sizeof(mask_data) };
+                    yield.append(-yield.size() & 3, '\0');
+                }
             };
         }
         struct noop // Opcode 127 (NoOperation).
@@ -493,66 +757,66 @@ namespace netxs::x11
             byte major_opcode; // Request's major opcode.
             byte pad[21];
         };
-        struct mouse_click // Type 4 (button press) and 5 (button release).
-        {
-            byte type;
-            byte button; // 1: Left, 2: Middle, 3: Right, 4: WheelUp, 5: WheelDown, 6: WheelLeft, 7: WheelRight
-            ui16 sequence;
-            ui32 time;
-            ui32 root_window;
-            ui32 event_window;
-            ui32 child_window;
-            si16 root_x;
-            si16 root_y;
-            si16 event_x; // Relative X
-            si16 event_y; // Relative Y
-            ui16 state;   // Keybd modifiers (Shift, Ctrl, Alt...)
-            byte same_screen;
-            byte pad;
-        };
-        struct motion // Type 6 (motion notify).
-        {
-            byte type;
-            byte detail; // 0: Normal, 1: Hint
-            ui16 sequence;
-            ui32 time;
-            ui32 root_window;
-            ui32 event_window;
-            ui32 child_window;
-            si16 root_x;
-            si16 root_y;
-            si16 event_x; // Relative (to window) mouse Х.
-            si16 event_y; // Relative (to window) mouse Y.
-            ui16 state;   // Mouse buttons bitfield + keybd mods (Ctrl, Shift, etc.)
-            byte same_screen;
-            byte pad;
-        };
-        struct crossing // Type 7 (enter notify) and 8 (leave notify), a-la TrackMouseEvent/WM_MOUSELEAVE.
-        {
-            byte type;
-            byte detail;
-            ui16 sequence;
-            ui32 time;
-            ui32 root_window;
-            ui32 event_window;
-            ui32 child_window;
-            si16 root_x;
-            si16 root_y;
-            si16 event_x;
-            si16 event_y;
-            ui16 state;
-            byte mode;
-            byte flags; // Bits: same_screen, focus
-        };
-        struct focus // Type 9 (focus on) and 10 (focus off).
-        {
-            byte type;
-            byte mode; // 0: Normal, 1: Grab, 2: Ungrab
-            ui16 sequence;
-            ui32 window;
-            byte detail;
-            byte pad[23];
-        };
+        //struct mouse_click // Type 4 (button press) and 5 (button release).
+        //{
+        //    byte type;
+        //    byte button; // 1: Left, 2: Middle, 3: Right, 4: WheelUp, 5: WheelDown, 6: WheelLeft, 7: WheelRight
+        //    ui16 sequence;
+        //    ui32 time;
+        //    ui32 root_window;
+        //    ui32 event_window;
+        //    ui32 child_window;
+        //    si16 root_x;
+        //    si16 root_y;
+        //    si16 event_x; // Relative X
+        //    si16 event_y; // Relative Y
+        //    ui16 state;   // Keybd modifiers (Shift, Ctrl, Alt...)
+        //    byte same_screen;
+        //    byte pad;
+        //};
+        //struct motion // Type 6 (motion notify).
+        //{
+        //    byte type;
+        //    byte detail; // 0: Normal, 1: Hint
+        //    ui16 sequence;
+        //    ui32 time;
+        //    ui32 root_window;
+        //    ui32 event_window;
+        //    ui32 child_window;
+        //    si16 root_x;
+        //    si16 root_y;
+        //    si16 event_x; // Relative (to window) mouse Х.
+        //    si16 event_y; // Relative (to window) mouse Y.
+        //    ui16 state;   // Mouse buttons bitfield + keybd mods (Ctrl, Shift, etc.)
+        //    byte same_screen;
+        //    byte pad;
+        //};
+        //struct crossing // Type 7 (enter notify) and 8 (leave notify), a-la TrackMouseEvent/WM_MOUSELEAVE.
+        //{
+        //    byte type;
+        //    byte detail;
+        //    ui16 sequence;
+        //    ui32 time;
+        //    ui32 root_window;
+        //    ui32 event_window;
+        //    ui32 child_window;
+        //    si16 root_x;
+        //    si16 root_y;
+        //    si16 event_x;
+        //    si16 event_y;
+        //    ui16 state;
+        //    byte mode;
+        //    byte flags; // Bits: same_screen, focus
+        //};
+        //struct focus // Type 9 (focus on) and 10 (focus off).
+        //{
+        //    byte type;
+        //    byte mode; // 0: Normal, 1: Grab, 2: Ungrab
+        //    ui16 sequence;
+        //    ui32 window;
+        //    byte detail;
+        //    byte pad[23];
+        //};
         struct configure // Type 22 (configure notify) a-la WM_SIZE/WM_MOVE.
         {
             byte type;
@@ -734,6 +998,8 @@ namespace netxs::x11
         ui32                                  shm_segment_xid = {};
         size_t                                shm_buffer_offset = {};
 
+        byte                                  xi2_major_opcode = 0;
+
         size_t                                current_frame_index = {};
         bool shm_ready_flag[2]   = { true, true }; // Buffer ready flags.
 
@@ -840,14 +1106,9 @@ namespace netxs::x11
                 case 16: err_str = "Bad Length";         break;
                 case 17: err_str = "Bad Implementation"; break;
             }
-            if (err.major_opcode == shm_major_opcode) // MIT-SHM related error.
-            {
-                err_str += " (MIT-SHM Extension Error)";
-            }
-            else if (err.major_opcode == xfixes_major_opcode) // XFIXES related error.
-            {
-                err_str += " (XFIXES Extension Error)";
-            }
+                 if (err.major_opcode == shm_major_opcode   ) err_str += " (MIT-SHM Extension Error)";
+            else if (err.major_opcode == xfixes_major_opcode) err_str += " (XFIXES Extension Error)";
+            else if (err.major_opcode == xi2_major_opcode   ) err_str += " (XInput2 Extension Error)";
             return utf::fprint("%%Error: code=%%, seq=%%, bad_resource_id=0x%%, major=%%, minor=%% desc: %%", prompt::x11,
                             (ui32)err.error_code, (ui32)err.sequence, utf::to_hex(err.bad_value),
                             (ui32)err.major_opcode, (ui32)err.minor_opcode, err_str);
@@ -980,7 +1241,7 @@ namespace netxs::x11
             return faux;
         }
         template<class ExtensionQueryVersion>
-        auto detect_extension(qiew extension_name, byte& major_opcode, byte& first_event, ui16 required_major_version, ui16 required_minor_version)
+        auto detect_extension(qiew extension_name, byte& major_opcode, auto&& first_event, ui16 required_major_version, ui16 required_minor_version)
         {
             auto errdetails = text{};
             sendrq<x11::req::query_extension>({}, extension_name);
@@ -990,7 +1251,16 @@ namespace netxs::x11
             {
                 major_opcode = reply.major_opcode;
                 first_event  = reply.first_event;
-                sendrq<ExtensionQueryVersion>({ .major_opcode = reply.major_opcode });
+                if constexpr (requires{ ExtensionQueryVersion::client_major_version; })
+                {
+                    sendrq<ExtensionQueryVersion>({ .major_opcode         = reply.major_opcode,
+                                                    .client_major_version = required_major_version,
+                                                    .client_minor_version = required_minor_version, });
+                }
+                else
+                {
+                    sendrq<ExtensionQueryVersion>({ .major_opcode = reply.major_opcode });
+                }
                 auto v_reply = typename ExtensionQueryVersion::reply{};
                 if (x11connection->recv((char*)&v_reply, sizeof(v_reply)).size() == sizeof(v_reply))
                 if (v_reply.status == 1)
@@ -1005,7 +1275,8 @@ namespace netxs::x11
                 }
                 else
                 {
-                    errdetails = utf::fprint("\n\tFailed to receive %% version details", extension_name);
+                    auto& err = reinterpret_cast<x11::event::error&>(v_reply);
+                    errdetails = utf::fprint("\n\tFailed to receive %% version details (ext_major_opcode=%% ext_completion_event=%%)\n\t%%", extension_name, (si32)major_opcode, (si32)first_event, get_error(err));
                 }
             }
             auto errmsg = utf::fprint("%%The required %% extension (or required min version %%.%%) is missing", prompt::x11, extension_name, required_major_version, required_minor_version);
@@ -1061,12 +1332,13 @@ namespace netxs::x11
                                               .visual_id = argb_visual32_id },
                                             x11::req::create_window::payload{ .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
                                                                               .override_redirect = 0,       // 1: On.
-                                                                              .event_mask        = x11::event::mask::KeymapState | x11::event::mask::KeyPress | x11::event::mask::KeyRelease
-                                                                                                 | x11::event::mask::ButtonPress | x11::event::mask::ButtonRelease
-                                                                                                 | x11::event::mask::EnterWindow | x11::event::mask::LeaveWindow
-                                                                                                 | x11::event::mask::PointerMotion
+                                                                              .event_mask        = 0u
+                                                                                                 //| x11::event::mask::KeymapState | x11::event::mask::KeyPress | x11::event::mask::KeyRelease
+                                                                                                 //| x11::event::mask::ButtonPress | x11::event::mask::ButtonRelease
+                                                                                                 //| x11::event::mask::EnterWindow | x11::event::mask::LeaveWindow
+                                                                                                 //| x11::event::mask::PointerMotion
                                                                                                  | x11::event::mask::Exposure
-                                                                                                 | x11::event::mask::FocusChange
+                                                                                                 //| x11::event::mask::FocusChange
                                                                                                  | x11::event::mask::StructureNotify,
                                                                               .colormap_id       = argb_colormap_id });
             // Disable decorations.
@@ -1222,6 +1494,27 @@ namespace netxs::x11
             sendrq<x11::req::configure_window>({ .window_id = (ui32)window_id, },
                                             x11::req::configure_window::payload{ .x = (ui16)coor.x,
                                                                                  .y = (ui16)coor.y });
+        }
+        void activate_xinput2(arch master_window_id)
+        {
+            auto event_mask_bits = 0u;
+            event_mask_bits |= 1u << x11::req::xi2::event::KeyPress;
+            event_mask_bits |= 1u << x11::req::xi2::event::KeyRelease;
+            event_mask_bits |= 1u << x11::req::xi2::event::ButtonPress;
+            event_mask_bits |= 1u << x11::req::xi2::event::ButtonRelease;
+            event_mask_bits |= 1u << x11::req::xi2::event::Motion;
+            event_mask_bits |= 1u << x11::req::xi2::event::Enter;
+            event_mask_bits |= 1u << x11::req::xi2::event::Leave;
+            event_mask_bits |= 1u << x11::req::xi2::event::FocusIn;
+            event_mask_bits |= 1u << x11::req::xi2::event::FocusOut;
+            sendrq(x11::req::xi2::select_events{ .major_opcode = xi2_major_opcode,
+                                                 .window_id    = (ui32)master_window_id, },
+                                            x11::req::xi2::select_events::payload
+                                            {
+                                                .deviceid = x11::req::xi2::dev_type::all_devices,
+                                                .mask_len = 2,
+                                                .mask1    = event_mask_bits,
+                                            });
         }
     };
     #pragma pack(pop)
@@ -1385,6 +1678,7 @@ namespace netxs::x11
                 if (session.detect_argb_32bit())
                 if (session.detect_extension<x11::req::shm::query_version>("MIT-SHM", session.shm_major_opcode, session.shm_completion_event, 1, 2)) // MIT-SHM ver >= 1.2
                 if (session.detect_extension<x11::req::xfixes::query_version>("XFIXES", session.xfixes_major_opcode, session.xfixes_first_event, 2, 0)) // XFIXES ver >= 2.0
+                if (session.detect_extension<x11::req::xi2::query_version>("XInputExtension", session.xi2_major_opcode, byte{}, 2, 4)) // XInputExtension (XInput2) ver >= 2.4
                 if (session.get_atoms())
                 if (session.listen_root_events())
                 {

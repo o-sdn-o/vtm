@@ -6561,11 +6561,7 @@ namespace netxs::gui
             if (batch_buffer.size())
             {
                 x11session.x11connection->send(batch_buffer);
-                if constexpr (debugmode)
-                {
-                    log("%% layer_move_all: Batched layout update sent to X-server (size=%% bytes)", 
-                        prompt::x11, batch_buffer.size());
-                }
+                if constexpr (debugmode) log("%% layer_move_all: Batched layout update sent to X-server (size=%% bytes)", prompt::x11, batch_buffer.size());
                 batch_buffer.clear();
             }
         }
@@ -6722,9 +6718,11 @@ namespace netxs::gui
             auto& x11session = *x11::session_ptr;
             auto& x11connection = *x11session.x11connection;
             auto atom_wm_delete_window = ui32{};
-            auto ev = x11::event::any{};
-            while (x11connection.recv((char*)&ev, 32).size() == 32)
+            auto read_buffer = text(32, '\0');
+            while (x11connection.recv(read_buffer.data(), read_buffer.size()).size() == read_buffer.size()) // size always =32.
             {
+                assert(read_buffer.size() == 32);
+                auto& ev = *reinterpret_cast<x11::event::any*>(read_buffer.data());
                 auto type = ev.type & 0x7F;
                 if constexpr (debugmode) log("%%seq=%% event=%% (%%)", prompt::x11, ev.sequence, x11session.event_str(type), type);
                 switch (type)
@@ -6738,46 +6736,46 @@ namespace netxs::gui
                     case x11::event::CreateNotify:
                         if constexpr (debugmode) log("Window created");
                         break;
-                    case x11::event::KeyPress:
-                        //todo debug - Exit on keypress.
-                        //auto& key = reinterpret_cast<x11::event::key_press&>(ev);
-                        goto break_break;
-                    case x11::event::MotionNotify: // WM_MOUSEMOVE
-                    {
-                        auto& m = reinterpret_cast<x11::event::motion&>(ev);
-                        current_mouse_pos = { m.root_x, m.root_y };
-                        mouse_moved();
-                        break;
-                    }
-                    case x11::event::EnterNotify:
-                    case x11::event::LeaveNotify: // WM_MOUSELEAVE
-                    {
-                        auto& c = reinterpret_cast<x11::event::crossing&>(ev);
-                        auto t = type == x11::event::EnterNotify ? "enter" : "leave";
-                        if constexpr (debugmode) log("mouse %%: event_window=%% child_window=%% root_x=%% root_y=%% event_x=%% event_y=%% state=%% mode=%% flags=%%", t, utf::to_hex(c.event_window), utf::to_hex(c.child_window),
-                        c.root_x, c.root_y, c.event_x, c.event_y, c.state, (si32)c.mode, (si32)c.flags);
-                        mouse_leave();
-                        break;
-                    }
-                    case x11::event::ButtonPress:
-                    case x11::event::ButtonRelease:
-                    {
-                        auto& b = reinterpret_cast<x11::event::mouse_click&>(ev);
-                        auto pressed = type == 4;
-                             if (b.button == 1) mouse_press(bttn::left, pressed);
-                        else if (b.button == 2) mouse_press(bttn::middle, pressed);
-                        else if (b.button == 3) mouse_press(bttn::right, pressed);
-                        //todo use XInput2
-                        else if (b.button == 4 && pressed) mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
-                        else if (b.button == 5 && pressed) mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
-                        else if (b.button == 6 && pressed) mouse_wheel(-120, 1); // WheelLeft
-                        else if (b.button == 7 && pressed) mouse_wheel(120, 1);  // WheelRight
-                        break;
-                    }
-                    case x11::event::FocusIn: // WM_SETFOCUS
-                    case x11::event::FocusOut: // WM_KILLFOCUS
-                        focus_event(type == 9);
-                        break;
+                    ////case x11::event::KeyPress:
+                    ////    //todo debug - Exit on keypress.
+                    ////    //auto& key = reinterpret_cast<x11::event::key_press&>(ev);
+                    ////    goto break_break;
+                    //case x11::event::MotionNotify: // WM_MOUSEMOVE
+                    //{
+                    //    auto& m = reinterpret_cast<x11::event::motion&>(ev);
+                    //    current_mouse_pos = { m.root_x, m.root_y };
+                    //    mouse_moved();
+                    //    break;
+                    //}
+                    //case x11::event::EnterNotify:
+                    //case x11::event::LeaveNotify: // WM_MOUSELEAVE
+                    //{
+                    //    auto& c = reinterpret_cast<x11::event::crossing&>(ev);
+                    //    auto t = type == x11::event::EnterNotify ? "enter" : "leave";
+                    //    if constexpr (debugmode) log("mouse %%: event_window=%% child_window=%% root_x=%% root_y=%% event_x=%% event_y=%% state=%% mode=%% flags=%%", t, utf::to_hex(c.event_window), utf::to_hex(c.child_window),
+                    //    c.root_x, c.root_y, c.event_x, c.event_y, c.state, (si32)c.mode, (si32)c.flags);
+                    //    mouse_leave();
+                    //    break;
+                    //}
+                    //case x11::event::ButtonPress:
+                    //case x11::event::ButtonRelease:
+                    //{
+                    //    auto& b = reinterpret_cast<x11::event::mouse_click&>(ev);
+                    //    auto pressed = type == 4;
+                    //         if (b.button == 1) mouse_press(bttn::left, pressed);
+                    //    else if (b.button == 2) goto break_break;//todo mouse_press(bttn::middle, pressed);
+                    //    else if (b.button == 3) mouse_press(bttn::right, pressed);
+                    //    //todo use XInput2
+                    //    else if (b.button == 4 && pressed) mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
+                    //    else if (b.button == 5 && pressed) mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
+                    //    else if (b.button == 6 && pressed) mouse_wheel(-120, 1); // WheelLeft
+                    //    else if (b.button == 7 && pressed) mouse_wheel(120, 1);  // WheelRight
+                    //    break;
+                    //}
+                    //case x11::event::FocusIn: // WM_SETFOCUS
+                    //case x11::event::FocusOut: // WM_KILLFOCUS
+                    //    focus_event(type == 9);
+                    //    break;
                     case x11::event::ConfigureNotify: // WM_WINDOWPOSCHANGED
                     {
                         //auto& cfg = reinterpret_cast<x11::event::configure&>(ev);
@@ -6829,16 +6827,30 @@ namespace netxs::gui
                         }
                         continue; // Skip sys_command(syscmd::update).
                     }
+                    case x11::event::GenericEvent:
+                        if constexpr (debugmode) log("GenericEvent");
+                        if (ev.detail == x11session.xi2_major_opcode) // XInput2.
+                        {
+                            auto tail_size = ev.length * 4;
+                            read_buffer.resize(32 + tail_size); // Read a whole XI2 packet.
+                            if (x11connection.recv(read_buffer.data() + 32, tail_size).size() == tail_size)
+                            {
+                                input_read(read_buffer);
+                            }
+                            read_buffer.resize(32); // Restore classic read_buffer size.
+                        }
+                        break;
                 }
                 sys_command(syscmd::update);
             }
-            break_break:
+            //break_break:
             window_cleanup();
             if constexpr (debugmode) log("window_message_pump ended");
         }
         void window_initilize()
         {
             auto& x11session = *x11::session_ptr;
+            x11session.activate_xinput2(master.hWnd);
             auto lock = std::lock_guard{ x11session.mutex };
             for (auto& l : layers)
             {
@@ -6864,6 +6876,108 @@ namespace netxs::gui
         void mouse_capture(si32 /*captured_by*/) {}
         void mouse_release(si32 /*released_by*/) {}
         void mouse_catch_outside() {}
+        void input_read(view packet)
+        {
+            //auto& x11session = *x11::session_ptr;
+            auto& d = *reinterpret_cast<x11::req::xi2::event::base const*>(packet.data());
+            if constexpr (debugmode) log("XInput2 event: %% (evtype=%%)", x11::req::xi2::event::names[d.evtype], d.evtype);
+            if (d.evtype == x11::req::xi2::event::DeviceChanged) // Layout changed? Mouse DPI changed?
+            {
+                auto& dc = *reinterpret_cast<x11::req::xi2::event::device_changed const*>(packet.data());
+                if constexpr (debugmode) log("  XI_DeviceChanged: device=%% reason=%% classes=%%", dc.header.deviceid, dc.reason, dc.num_classes);
+
+                auto current_class_ptr = dc.classes_ptr();
+                auto buffer_end_ptr = packet.data() + packet.size();
+                for (auto i = 0u; i < dc.num_classes; ++i)
+                {
+                    if (reinterpret_cast<char const*>(current_class_ptr) >= buffer_end_ptr) break;
+                    switch (current_class_ptr->type)
+                    {
+                        case x11::req::xi2::event::device_changed::KeyClass: // Keybd props.
+                        {
+                            auto& kc = *reinterpret_cast<x11::req::xi2::event::device_changed::key_class const*>(current_class_ptr);
+                            if constexpr (debugmode) log("\t KeyClass: source=%% total_keys=%%", kc.sourceid, kc.num_keys);
+                            break;
+                        }
+                        case x11::req::xi2::event::device_changed::ButtonClass: // Mouse button count with names.
+                        {
+                            auto const& bc = *reinterpret_cast<x11::req::xi2::event::device_changed::button_class const*>(current_class_ptr);
+                            if constexpr (debugmode)
+                            {
+                                log("\t ButtonClass: source=%% total_buttons=%%", bc.sourceid, bc.num_buttons);
+                                auto labels = bc.labels_ptr();
+                                for(auto b = 0u; b < bc.num_buttons; ++b)
+                                {
+                                    log("\t\t Button %% Atom ID: %%", b + 1, labels[b]);
+                                }
+                            }
+                            break;
+                        }
+                        case x11::req::xi2::event::device_changed::ValuatorClass: // axis props.
+                        {
+                            auto const& vc = *reinterpret_cast<x11::req::xi2::event::device_changed::valuator_class const*>(current_class_ptr);
+                            if constexpr (debugmode) log("\t ValuatorClass: axis=%% label=%% mode=%%", vc.number, vc.label, (ui32)vc.mode);
+                            //todo... vc.resolution
+                            break;
+                        }
+                        case x11::req::xi2::event::device_changed::ScrollClass: // mouse wheel axis step.
+                        {
+                            auto const& sc = *reinterpret_cast<x11::req::xi2::event::device_changed::scroll_class const*>(current_class_ptr);
+                            auto is_vertical = sc.scroll_type == 1;
+                            if constexpr (debugmode) log("\t ScrollClass: axis=%% type=%%(%%) increment=%%", sc.number, is_vertical ? "Vertical"sv : "Horizontal"sv, sc.scroll_type, sc.increment);
+                            //todo update scrool step (sc.number)
+                            // x11session.register_scroll_axis(sc.sourceid, sc.number, sc.scroll_type, sc.increment);
+                            break;
+                        }
+                        case x11::req::xi2::event::device_changed::TouchClass: // Touchpad properties.
+                        {
+                            auto const& tc = *reinterpret_cast<x11::req::xi2::event::device_changed::touch_class const*>(current_class_ptr);
+                            if constexpr (debugmode) log("\t TouchClass: source=%% mode=%% (%%) max_simultaneous_touches=%%",
+                                    tc.sourceid,
+                                    tc.mode == 0 ? "Direct (TouchScreen)"sv : "Dependent (TouchPad)"sv,
+                                    (ui32)tc.mode,
+                                    tc.num_touches);
+                            break;
+                        }
+                    }
+                    current_class_ptr = reinterpret_cast<x11::req::xi2::event::device_changed::any_class const*>(reinterpret_cast<char const*>(current_class_ptr) + current_class_ptr->length);
+                }
+            }
+            else if (d.evtype == x11::req::xi2::event::KeyPress || d.evtype == x11::req::xi2::event::KeyRelease)
+            {
+                auto& k = *reinterpret_cast<x11::req::xi2::event::keybd const*>(packet.data());
+                auto is_pressed = k.evtype == x11::req::xi2::event::KeyPress;
+                auto s_keycode  = k.detail; // Native keycode.
+                auto repeated   = !!(k.flags & (1 << 16));
+                auto xi_mods    = k.mods.effective; // All modifiers.
+                auto layout_idx = k.group.effective; // Keybd layout.
+                auto keymods = 0;
+                if (xi_mods & x11::req::xi2::mods::Shift   ) keymods |= mods::LShift;
+                if (xi_mods & x11::req::xi2::mods::CapsLock) keymods |= mods::CapsLock;
+                if (xi_mods & x11::req::xi2::mods::Ctrl    ) keymods |= mods::LCtrl;
+                if (xi_mods & x11::req::xi2::mods::mod1    ) keymods |= mods::LAlt;
+                if (xi_mods & x11::req::xi2::mods::mod2    ) keymods |= mods::NumLock;
+                if (xi_mods & x11::req::xi2::mods::mod3    ) keymods |= mods::LMeta;//todo remove it (AltGr)
+                if (xi_mods & x11::req::xi2::mods::mod4    ) keymods |= mods::LSuper;
+                if (xi_mods & x11::req::xi2::mods::mod5    ) keymods |= mods::ScrollLock;
+                if constexpr (debugmode)
+                {
+                    log("%%XI2 Key%%: keycode=%% repeated=%% mods=0x%% layout_idx=%% (Super:%% Shift:%%, Ctrl:%%, Alt:%% AltGr:%% Caps:%% Num:%% Scrl:%%)",
+                        prompt::x11, is_pressed ? "Press" : "Release", s_keycode, (si32)repeated,
+                        utf::to_hex(xi_mods),
+                        (si32)layout_idx,
+                        (si32)(bool)(keymods & mods::LSuper),
+                        (si32)(bool)(keymods & mods::LShift),
+                        (si32)(bool)(keymods & mods::LCtrl),
+                        (si32)(bool)(keymods & mods::LAlt),
+                        (si32)(bool)(keymods & mods::LMeta),
+                        (si32)(bool)(keymods & mods::CapsLock),
+                        (si32)(bool)(keymods & mods::NumLock),
+                        (si32)(bool)(keymods & mods::ScrollLock));
+                }
+                //todo get utf8 cluster
+            }
+        }
         void sync_os_settings()
         {
             wdelta = 1.f;
