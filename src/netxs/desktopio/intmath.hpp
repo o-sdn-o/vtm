@@ -100,6 +100,27 @@ namespace netxs
         ui32 u32;
         auto operator <=> (ui96 const&) const = default;
     };
+    struct fx32
+    {
+        si32 i; // integral
+        ui32 f; // fractional
+
+        auto to_fp64() const
+        {
+            auto v = (fp64)i + f / 4294967296.0;
+            return v;
+        }
+    };
+    struct fx16
+    {
+        si32 i; // integral & fractional
+
+        auto to_fp32() const
+        {
+            auto v = i / 65536.0f;
+            return v;
+        }
+    };
 
     constexpr size_t operator ""_sz (unsigned long long i) { return static_cast<size_t>(i); }
     static constexpr auto pi = 3.14159265358979323846;

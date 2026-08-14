@@ -925,7 +925,7 @@ Notes
         <repeat_delay  = 500ms/>  <!-- Key/button repeat delay. -->
         <repeat_rate   = 30ms />  <!-- Key/button repeat rate. -->
         <dblclick      = 500ms/>  <!-- Double-click speed threshold. -->
-        <wheelrate     = 3    />  <!-- Lines per mouse wheel step (Unix-like platforms only). -->
+        <wheelrate     = 3    />  <!-- Lines per mouse wheel step (only in non-GUI mode on Unix-like platforms). -->
     </timings>
     <desktop>  <!-- Desktop client settings. -->
         <viewport coor=0,0/>  <!-- Initial viewport position for the first connected user. During runtime, this value is temporarily updated with the last disconnected user's coordinates to restore their session view on reconnection. -->

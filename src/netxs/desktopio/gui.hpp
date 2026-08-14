@@ -4342,10 +4342,9 @@ namespace netxs::gui
                 resize_window(size_delta);
             }
         }
-        void mouse_wheel(si32 delta, bool hz)
+        void mouse_wheel(fp32 delta, bool hz)
         {
             if (delta == 0) return;
-            if (hz) delta = -delta;
             auto wheelfp = delta / wdelta; // Same code in system.hpp.
             if (whlacc * wheelfp < 0) whlacc = {}; // Reset accum if direction has changed.
             whlacc += wheelfp;
@@ -6349,8 +6348,8 @@ namespace netxs::gui
                     case WM_MBUTTONUP:        w->mouse_press(bttn::middle,  faux);               break;
                     case WM_XBUTTONDOWN:      w->mouse_press(xbttn(wParam), true);               break;
                     case WM_XBUTTONUP:        w->mouse_press(xbttn(wParam), faux);               break;
-                    case WM_MOUSEWHEEL:       w->mouse_wheel(hi(wParam), 0);                     break;
-                    case WM_MOUSEHWHEEL:      w->mouse_wheel(hi(wParam), 1);                     break;
+                    case WM_MOUSEWHEEL:       w->mouse_wheel((fp32)hi(wParam), 0);               break;
+                    case WM_MOUSEHWHEEL:      w->mouse_wheel(-(fp32)hi(wParam), 1);              break;
                     case WM_CAPTURECHANGED:   w->mouse_catch_outside();                          break; // Catch outside clicks.
                     case WM_ACTIVATEAPP:      if (wParam == TRUE) w->window_make_focused();      break; // Do focus explicitly: Sometimes WM_SETFOCUS follows WM_ACTIVATEAPP, sometime not. explorer.exe gives us focus (w/o WM_SETFOCUS) when other window minimizing.
                     case WM_SETFOCUS:         if (wParam != (arch)hWnd) w->focus_event(true);    break; // Don't refocus. ::SetFocus calls twice wnd_proc(WM_KILLFOCUS+WM_SETFOCUS).
@@ -6481,15 +6480,15 @@ namespace netxs::gui
     struct window : winbase
     {
         text batch_buffer;
-        twod current_mouse_pos;
+        fp2d current_mouse_pos;
 
         window(auto&& ...Args)
             : winbase{ Args... }
         { }
         bool keybd_test_pressed(si32 /*virtcod*/, si32 /*keycode*/ = 0) { return true; /*!!(vkstat[virtcod] & 0x80);*/ }
-        bool keybd_test_toggled(si32 /*virtcod*/) { return true; /*!!(vkstat[virtcod] & 0x01);*/ }
-        bool keybd_read_pressed(si32 /*virtcod*/) { return true; /*!!(::GetAsyncKeyState(virtcod) & 0x8000);*/ }
-        bool keybd_read_toggled(si32 /*virtcod*/) { return true; /*!!(::GetAsyncKeyState(virtcod) & 0x0001);*/ }
+        bool keybd_test_toggled(si32 /*virtcod*/) { return faux; /*!!(vkstat[virtcod] & 0x01);*/ }
+        bool keybd_read_pressed(si32 /*virtcod*/) { return faux; /*!!(::GetAsyncKeyState(virtcod) & 0x8000);*/ }
+        bool keybd_read_toggled(si32 /*virtcod*/) { return faux; /*!!(::GetAsyncKeyState(virtcod) & 0x0001);*/ }
         bool keybd_read_input() { return true; }
         void keybd_sync_shift(bool /*async*/) {}
         si32 keybd_conv_keyid2media(si32 /*keyid*/) { return 0; }
@@ -6724,10 +6723,10 @@ namespace netxs::gui
                 assert(read_buffer.size() == 32);
                 auto& ev = *reinterpret_cast<x11::event::any*>(read_buffer.data());
                 auto type = ev.type & 0x7F;
-                if constexpr (debugmode) log("%%seq=%% event=%% (%%)", prompt::x11, ev.sequence, x11session.event_str(type), type);
+                if constexpr (debugmode) if (type != x11::event::GenericEvent) log("%%seq=%% event=%% (%%)", prompt::x11, ev.sequence, x11session.event_str(type), type);
                 switch (type)
                 {
-                    case x11::event::Error: // X11 Core / Extension Error Packet
+                    case x11::event::Error:
                         x11session.parse_error(ev);
                         continue;
                     case x11::event::Reply:
@@ -6736,46 +6735,6 @@ namespace netxs::gui
                     case x11::event::CreateNotify:
                         if constexpr (debugmode) log("Window created");
                         break;
-                    ////case x11::event::KeyPress:
-                    ////    //todo debug - Exit on keypress.
-                    ////    //auto& key = reinterpret_cast<x11::event::key_press&>(ev);
-                    ////    goto break_break;
-                    //case x11::event::MotionNotify: // WM_MOUSEMOVE
-                    //{
-                    //    auto& m = reinterpret_cast<x11::event::motion&>(ev);
-                    //    current_mouse_pos = { m.root_x, m.root_y };
-                    //    mouse_moved();
-                    //    break;
-                    //}
-                    //case x11::event::EnterNotify:
-                    //case x11::event::LeaveNotify: // WM_MOUSELEAVE
-                    //{
-                    //    auto& c = reinterpret_cast<x11::event::crossing&>(ev);
-                    //    auto t = type == x11::event::EnterNotify ? "enter" : "leave";
-                    //    if constexpr (debugmode) log("mouse %%: event_window=%% child_window=%% root_x=%% root_y=%% event_x=%% event_y=%% state=%% mode=%% flags=%%", t, utf::to_hex(c.event_window), utf::to_hex(c.child_window),
-                    //    c.root_x, c.root_y, c.event_x, c.event_y, c.state, (si32)c.mode, (si32)c.flags);
-                    //    mouse_leave();
-                    //    break;
-                    //}
-                    //case x11::event::ButtonPress:
-                    //case x11::event::ButtonRelease:
-                    //{
-                    //    auto& b = reinterpret_cast<x11::event::mouse_click&>(ev);
-                    //    auto pressed = type == 4;
-                    //         if (b.button == 1) mouse_press(bttn::left, pressed);
-                    //    else if (b.button == 2) goto break_break;//todo mouse_press(bttn::middle, pressed);
-                    //    else if (b.button == 3) mouse_press(bttn::right, pressed);
-                    //    //todo use XInput2
-                    //    else if (b.button == 4 && pressed) mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
-                    //    else if (b.button == 5 && pressed) mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
-                    //    else if (b.button == 6 && pressed) mouse_wheel(-120, 1); // WheelLeft
-                    //    else if (b.button == 7 && pressed) mouse_wheel(120, 1);  // WheelRight
-                    //    break;
-                    //}
-                    //case x11::event::FocusIn: // WM_SETFOCUS
-                    //case x11::event::FocusOut: // WM_KILLFOCUS
-                    //    focus_event(type == 9);
-                    //    break;
                     case x11::event::ConfigureNotify: // WM_WINDOWPOSCHANGED
                     {
                         //auto& cfg = reinterpret_cast<x11::event::configure&>(ev);
@@ -6791,7 +6750,7 @@ namespace netxs::gui
                         }
                         break;
                     }
-                    case x11::event::PropertyNotify:
+                    case x11::event::PropertyNotify: // Tracking refocus.
                     {
                         auto& e = reinterpret_cast<x11::event::property_notify&>(ev);
                         if constexpr (debugmode) log("%%PropertyNotify atom=%%", prompt::x11, e.atom);
@@ -6828,14 +6787,17 @@ namespace netxs::gui
                         continue; // Skip sys_command(syscmd::update).
                     }
                     case x11::event::GenericEvent:
-                        if constexpr (debugmode) log("GenericEvent");
                         if (ev.detail == x11session.xi2_major_opcode) // XInput2.
                         {
                             auto tail_size = ev.length * 4;
                             read_buffer.resize(32 + tail_size); // Read a whole XI2 packet.
                             if (x11connection.recv(read_buffer.data() + 32, tail_size).size() == tail_size)
                             {
-                                input_read(read_buffer);
+                                if (!input_read(read_buffer))
+                                {
+                                    //todo exit debug
+                                    goto break_break;
+                                }
                             }
                             read_buffer.resize(32); // Restore classic read_buffer size.
                         }
@@ -6843,7 +6805,7 @@ namespace netxs::gui
                 }
                 sys_command(syscmd::update);
             }
-            //break_break:
+            break_break:
             window_cleanup();
             if constexpr (debugmode) log("window_message_pump ended");
         }
@@ -6869,23 +6831,31 @@ namespace netxs::gui
         {
             x11::session_ptr->window_set_title(master.hWnd, utf8);
         }
+        auto mouse_set_pos(fp2d new_coor)
+        {
+            return current_mouse_pos(new_coor);
+        }
         twod mouse_get_pos()
         {
-            return current_mouse_pos;
+            return twod{ current_mouse_pos };
         }
         void mouse_capture(si32 /*captured_by*/) {}
         void mouse_release(si32 /*released_by*/) {}
         void mouse_catch_outside() {}
-        void input_read(view packet)
+        bool input_read(view packet)
         {
-            //auto& x11session = *x11::session_ptr;
+            auto& session = *x11::session_ptr;
+            if constexpr (debugmode) log("Beg ----------------------------------------");//, "Packet in hex:\n", utf::buffer_to_hex(packet, true));
             auto& d = *reinterpret_cast<x11::req::xi2::event::base const*>(packet.data());
-            if constexpr (debugmode) log("XInput2 event: %% (evtype=%%)", x11::req::xi2::event::names[d.evtype], d.evtype);
+            auto is_master = session.input_devices[d.deviceid].is_master;
+            if constexpr (debugmode) log("XInput2: %% evtype=%% deviceid=%% is_master=%%", x11::req::xi2::event::names[d.evtype], d.evtype, d.deviceid, is_master);
+
             if (d.evtype == x11::req::xi2::event::DeviceChanged) // Layout changed? Mouse DPI changed?
             {
                 auto& dc = *reinterpret_cast<x11::req::xi2::event::device_changed const*>(packet.data());
                 if constexpr (debugmode) log("  XI_DeviceChanged: device=%% reason=%% classes=%%", dc.header.deviceid, dc.reason, dc.num_classes);
 
+                auto& dev = session.input_devices[dc.header.deviceid];
                 auto current_class_ptr = dc.classes_ptr();
                 auto buffer_end_ptr = packet.data() + packet.size();
                 for (auto i = 0u; i < dc.num_classes; ++i)
@@ -6901,7 +6871,7 @@ namespace netxs::gui
                         }
                         case x11::req::xi2::event::device_changed::ButtonClass: // Mouse button count with names.
                         {
-                            auto const& bc = *reinterpret_cast<x11::req::xi2::event::device_changed::button_class const*>(current_class_ptr);
+                            auto& bc = *reinterpret_cast<x11::req::xi2::event::device_changed::button_class const*>(current_class_ptr);
                             if constexpr (debugmode)
                             {
                                 log("\t ButtonClass: source=%% total_buttons=%%", bc.sourceid, bc.num_buttons);
@@ -6915,38 +6885,48 @@ namespace netxs::gui
                         }
                         case x11::req::xi2::event::device_changed::ValuatorClass: // axis props.
                         {
-                            auto const& vc = *reinterpret_cast<x11::req::xi2::event::device_changed::valuator_class const*>(current_class_ptr);
-                            if constexpr (debugmode) log("\t ValuatorClass: axis=%% label=%% mode=%%", vc.number, vc.label, (ui32)vc.mode);
-                            //todo... vc.resolution
+                            auto& vc = *reinterpret_cast<x11::req::xi2::event::device_changed::valuator_class const*>(current_class_ptr);
+                            auto axis = vc.number;
+                            auto mode = (ui32)vc.mode;
+                            if ((si32)dev.axes.size() < axis + 1) dev.axes.resize(axis + 1);
+                            auto& axis_info = dev.axes[axis];
+                            axis_info.is_scroll = faux; // Reset scroll axis properties.
+                            axis_info.last_val = vc.value.to_fp64();
+                            if constexpr (debugmode) log("\t ValuatorClass: axis=%% label=%% mode=%% last_val=%%", axis, vc.label, mode, axis_info.last_val);
                             break;
                         }
                         case x11::req::xi2::event::device_changed::ScrollClass: // mouse wheel axis step.
                         {
-                            auto const& sc = *reinterpret_cast<x11::req::xi2::event::device_changed::scroll_class const*>(current_class_ptr);
+                            auto& sc = *reinterpret_cast<x11::req::xi2::event::device_changed::scroll_class const*>(current_class_ptr);
                             auto is_vertical = sc.scroll_type == 1;
-                            if constexpr (debugmode) log("\t ScrollClass: axis=%% type=%%(%%) increment=%%", sc.number, is_vertical ? "Vertical"sv : "Horizontal"sv, sc.scroll_type, sc.increment);
-                            //todo update scrool step (sc.number)
-                            // x11session.register_scroll_axis(sc.sourceid, sc.number, sc.scroll_type, sc.increment);
+                            auto axis = sc.number;
+                            if constexpr (debugmode) log("\t ScrollClass: axis=%% type=%%(%%) inc_step=%% flags=%%(%%)",
+                                axis, is_vertical ? "Vertical"sv : "Horizontal"sv, sc.scroll_type, sc.inc_step.to_fp64(),
+                                utf::to_hex(sc.flags), sc.flags == 1 ? "NoEmulation" : "Preferred");
+                            if ((si32)dev.axes.size() < axis + 1) dev.axes.resize(axis + 1);
+                            auto& axis_info = dev.axes[axis]; // Update scroll properties.
+                            axis_info.is_scroll = true;
+                            axis_info.inc_step  = sc.inc_step.to_fp64();
+                            axis_info.vertical  = sc.scroll_type == x11::req::xi2::event::device_changed::scroll_class::Vertical;
+                            axis_info.last_val  = {};
                             break;
                         }
                         case x11::req::xi2::event::device_changed::TouchClass: // Touchpad properties.
                         {
-                            auto const& tc = *reinterpret_cast<x11::req::xi2::event::device_changed::touch_class const*>(current_class_ptr);
+                            auto& tc = *reinterpret_cast<x11::req::xi2::event::device_changed::touch_class const*>(current_class_ptr);
                             if constexpr (debugmode) log("\t TouchClass: source=%% mode=%% (%%) max_simultaneous_touches=%%",
-                                    tc.sourceid,
-                                    tc.mode == 0 ? "Direct (TouchScreen)"sv : "Dependent (TouchPad)"sv,
-                                    (ui32)tc.mode,
-                                    tc.num_touches);
+                                    tc.sourceid, tc.mode == 0 ? "Direct (TouchScreen)"sv : "Dependent (TouchPad)"sv, (ui32)tc.mode, tc.num_touches);
                             break;
                         }
                     }
-                    current_class_ptr = reinterpret_cast<x11::req::xi2::event::device_changed::any_class const*>(reinterpret_cast<char const*>(current_class_ptr) + current_class_ptr->length);
+                    current_class_ptr = reinterpret_cast<x11::req::xi2::event::device_changed::any_class const*>(reinterpret_cast<char const*>(current_class_ptr) + current_class_ptr->length * 4);
                 }
             }
-            else if (d.evtype == x11::req::xi2::event::KeyPress || d.evtype == x11::req::xi2::event::KeyRelease)
+            else if (d.evtype == x11::req::xi2::event::KeyPress
+                  || d.evtype == x11::req::xi2::event::KeyRelease)
             {
-                auto& k = *reinterpret_cast<x11::req::xi2::event::keybd const*>(packet.data());
-                auto is_pressed = k.evtype == x11::req::xi2::event::KeyPress;
+                auto& k = *reinterpret_cast<x11::req::xi2::event::km const*>(packet.data());
+                auto is_pressed = d.evtype == x11::req::xi2::event::KeyPress;
                 auto s_keycode  = k.detail; // Native keycode.
                 auto repeated   = !!(k.flags & (1 << 16));
                 auto xi_mods    = k.mods.effective; // All modifiers.
@@ -6962,8 +6942,9 @@ namespace netxs::gui
                 if (xi_mods & x11::req::xi2::mods::mod5    ) keymods |= mods::ScrollLock;
                 if constexpr (debugmode)
                 {
-                    log("%%XI2 Key%%: keycode=%% repeated=%% mods=0x%% layout_idx=%% (Super:%% Shift:%%, Ctrl:%%, Alt:%% AltGr:%% Caps:%% Num:%% Scrl:%%)",
-                        prompt::x11, is_pressed ? "Press" : "Release", s_keycode, (si32)repeated,
+                    log("%%sourceid=%% Key%%: keycode=%% mods=0x%% layout_idx=%% (Super:%% Shift:%%, Ctrl:%%, Alt:%% AltGr:%% Caps:%% Num:%% Scrl:%%)",
+                        k.sourceid,
+                        prompt::x11, is_pressed ? (repeated ? "Repeat" : "Press") : "Release", s_keycode,
                         utf::to_hex(xi_mods),
                         (si32)layout_idx,
                         (si32)(bool)(keymods & mods::LSuper),
@@ -6976,7 +6957,86 @@ namespace netxs::gui
                         (si32)(bool)(keymods & mods::ScrollLock));
                 }
                 //todo get utf8 cluster
+
+                //todo exit on esc
+                if (s_keycode == 9) return faux;
             }
+            else if (d.evtype == x11::req::xi2::event::ButtonPress
+                  || d.evtype == x11::req::xi2::event::ButtonRelease
+                  || d.evtype == x11::req::xi2::event::Motion)
+            {
+                if (is_master) return true; // Ignore master devices.
+                auto& m = *reinterpret_cast<x11::req::xi2::event::km const*>(packet.data());
+                auto& dev = session.input_devices[m.sourceid];
+                auto mouse_coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
+                //auto xi_mods = m.mods.effective;
+                auto emulated = !!(m.flags & (1 << 4));
+                if constexpr (debugmode) log("%%Mouse: sourceid=%% coor=%% mods=0x%% flags=0x%% emulated=%%", prompt::x11, m.sourceid, mouse_coor, utf::to_hex(m.mods.effective), utf::to_hex(m.flags), (si32)emulated);
+                if (mouse_set_pos(mouse_coor))
+                {
+                    if constexpr (debugmode) log("  Mouse Motion");
+                    mouse_moved();
+                }
+                if (d.evtype != x11::req::xi2::event::Motion && !emulated) // ButtonPress or ButtonRelease.
+                {
+                    auto is_pressed = d.evtype == x11::req::xi2::event::ButtonPress;
+                    auto button_id  = m.detail;
+                    if constexpr (debugmode) log("  Mouse Button%%: bttn_id=%%", is_pressed ? "Press" : "Release", button_id);
+                         if (button_id == 1) mouse_press(bttn::left,   is_pressed);
+                    else if (button_id == 2) mouse_press(bttn::middle, is_pressed);
+                    else if (button_id == 3) mouse_press(bttn::right,  is_pressed);
+                    //else if (button_id == 4 && is_pressed) mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
+                    //else if (button_id == 5 && is_pressed) mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
+                    //else if (button_id == 6 && is_pressed) mouse_wheel(120, 1); // WheelLeft
+                    //else if (button_id == 7 && is_pressed) mouse_wheel(-120, 1);  // WheelRight
+                    else if (button_id == 8) mouse_press(bttn::xbutton1, is_pressed);
+                    else if (button_id == 9) mouse_press(bttn::xbutton2, is_pressed);
+                }
+                //else if (d.evtype == x11::req::xi2::event::Motion)
+                //{
+                //}
+                if (m.valuators_len > 0)
+                {
+                    auto mask_ptr = m.valuators_mask_ptr();
+                    auto data_ptr = m.valuators_data_ptr();
+                    auto data_index = 0u;
+                    auto mask = mask_ptr[0];
+                    while (mask)
+                    {
+                        auto axis = std::countr_zero(mask);
+                        auto axis_value = data_ptr[data_index++];
+                        auto current_value = axis_value.to_fp64();
+                        if constexpr (debugmode) log("\t Axis %% changed to fx32=%%.%% fp64=%%", axis, axis_value.i, axis_value.f, current_value);
+                        auto& axis_info = dev.axes[axis];
+                        if (axis_info.is_scroll) // Update scroll properties.
+                        {
+                            auto delta = axis_info.last_val - current_value;
+                            wdelta = axis_info.inc_step;
+                            axis_info.last_val = current_value;
+                            axis_info.vertical ? mouse_wheel(delta, faux)
+                                               : mouse_wheel(delta, true);
+                            if constexpr (debugmode) log("\t delta=%% cur_val=%%", delta, current_value);
+                        }
+                        mask &= mask - 1;
+                    }
+                }
+            }
+            else if (d.evtype == x11::req::xi2::event::Enter || d.evtype == x11::req::xi2::event::Leave)
+            {
+                if (!is_master) return true; // Ignore slave devices.
+                auto& f = *reinterpret_cast<x11::req::xi2::event::focus const*>(packet.data());
+                auto hover = d.evtype == x11::req::xi2::event::Enter;
+                if constexpr (debugmode) log("%%Hover: sourceid=%% mods=0x%% hover=%%", prompt::x11, f.sourceid, utf::to_hex(f.mods.effective), hover);
+                if (!hover) mouse_leave();
+            }
+            else if (d.evtype == x11::req::xi2::event::FocusIn || d.evtype == x11::req::xi2::event::FocusOut)
+            {
+                auto& f = *reinterpret_cast<x11::req::xi2::event::focus const*>(packet.data());
+                if constexpr (debugmode) log("%%Focus: sourceid=%% mods=0x%% focus=%%", prompt::x11, f.sourceid, utf::to_hex(f.mods.effective), (si32)f.focus);
+                focus_event(!!f.focus);
+            }
+            if constexpr (debugmode) log("End ----------------------------------------");
+            return true;
         }
         void sync_os_settings()
         {

@@ -380,6 +380,12 @@ namespace netxs::x11
         }
         namespace xi2
         {
+            static constexpr auto MasterPointer  = 1;
+            static constexpr auto MasterKeyboard = 2;
+            static constexpr auto SlavePointer   = 3;
+            static constexpr auto SlaveKeyboard  = 4;
+            static constexpr auto FloatingSlave  = 5;
+
             struct query_version
             {
                 struct reply
@@ -393,7 +399,7 @@ namespace netxs::x11
                     ui32 pad[5];
                 };
                 byte major_opcode;       // xi2_major_opcode.
-                byte minor_opcode = 47;  // 47: XI2QueryVersion.
+                byte minor_opcode = 47;  // 47: QueryVersion.
                 ui16 length = 2;
                 ui16 client_major_version = 2; // Required version 2.2 of the input stack for smooth scroll and touchpad.
                 ui16 client_minor_version = 2; //
@@ -456,30 +462,29 @@ namespace netxs::x11
 
                 struct base
                 {
-                    byte type;           // Always 35 (GenericEvent).
-                    byte extension;      // xi_major_opcode.
+                    byte type;      // Always 35 (GenericEvent).
+                    byte extension; // xi_major_opcode.
                     ui16 sequence;
-                    ui32 length;         // Payload length in 32-bit words.
-                    ui16 evtype;         // Event type (e.g., 2: KeyPress, 3: KeyRelease).
-                    ui16 deviceid;       // Physical or virtual device id.
-                    ui32 time;           // Time stamp.
-                    //// Arbitrary payload:
-                    //// - buttons_mask:   Mouse button mask array (buttons_len * 4 bytes).
-                    //// - valuators_mask: Valuators axis mask array. (valuators_len * 4 bytes).
-                    //// - valuators_data: Valuators axis values (fp64).
-                    //auto buttons_mask_ptr() const
-                    //{
-                    //    return reinterpret_cast<ui32 const*>(reinterpret_cast<char const*>(this) + 80);
-                    //}
-                    //auto valuators_mask_ptr() const
-                    //{
-                    //    return buttons_mask_ptr() + buttons_len;
-                    //}
-                    //auto valuators_data_ptr() const
-                    //{
-                    //    return reinterpret_cast<double const*>(valuators_mask_ptr() + valuators_len);
-                    //}
+                    ui32 length;    // Payload length in 32-bit words.
+                    ui16 evtype;    // Event type (e.g., 2: KeyPress, 3: KeyRelease).
+                    ui16 deviceid;  // Physical or virtual device id.
+                    ui32 time;      // Time stamp.
                 };
+                struct kbmods // Keybd modifiers (bitfields).
+                {
+                    ui32 pressed;   // Pressed modifiers (Shift, Ctrl, ...).
+                    ui32 latched;   // Sticky keys.
+                    ui32 locked;    // Locks (CapsLock, NumLock).
+                    ui32 effective; // All mods.
+                };
+                struct kblayout // Keybd layout state (XKB Groups).
+                {
+                    byte base_group;
+                    byte latched;
+                    byte locked;
+                    byte effective; // 0: EN, 1: RU etc.
+                };
+
                 struct device_changed // 1.
                 {
                     static constexpr auto KeyClass      = 0;
@@ -489,7 +494,7 @@ namespace netxs::x11
                     static constexpr auto TouchClass    = 4;
 
                     base header;
-                    ui16 reason;  // 1: XI_MasterDeviceChanged, 2: XI_DeviceSlaveChanged
+                    ui16 reason;      // 1: MasterDeviceChanged, 2: DeviceSlaveChanged.
                     ui16 num_classes; // any_class count in payload.
 
                     struct any_class // Header of device properties.
@@ -535,23 +540,26 @@ namespace netxs::x11
                         ui16 sourceid;
                         ui16 number;        // Axis number (e.g., 0: X, 1: Y).
                         ui32 label;         // Atom: axis name (e.g., "Rel X").
-                        fp64 min;           // Min value.
-                        fp64 max;           // Max value.
-                        fp64 value;         // Current value.
+                        fx32 min;           // Min value.
+                        fx32 max;           // Max value.
+                        fx32 value;         // Current value.
                         ui32 resolution;    // Resolution in unit/meter.
                         byte mode;          // 0: Absolute, 1: Relative
                         byte pad[3];
                     };
                     struct scroll_class // 3. Scroll direction + step length.
                     {
+                        static constexpr auto Vertical   = 1;
+                        static constexpr auto Horizontal = 2;
+
                         ui16 type;          // 3: ScrollClass.
                         ui16 length = 24;
                         ui16 sourceid;      // Device ID.
                         ui16 number;        // Wheel axis (valuator number).
                         ui16 scroll_type;   // 1: Vertical, 2: Horizontal.
                         ui16 pad;
-                        ui32 flags;         // 1: DontIncrement (emulation), 2: Preferred.
-                        fp64 increment;     // Scroll step.
+                        ui32 flags;         // 1: NoEmulation, 2: Preferred.
+                        fx32 inc_step;      // Scroll step.
                     };
                     struct touch_class // 4. TouchClass (multitouch panel).
                     {
@@ -568,48 +576,78 @@ namespace netxs::x11
                         return reinterpret_cast<any_class const*>(reinterpret_cast<char const*>(this) + sizeof(device_changed));
                     }
                 };
-                struct keybd
+                struct km // Keybd/Mouse
                 {
-                    // GenericEvent
-                    byte type;           // Always 35 (GenericEvent).
-                    byte extension;      // xi2_major_opcode.
-                    ui16 sequence;
-                    ui32 length;         // Payload length in 32-bit words.
-                    // XInput2 Metadata
-                    ui16 evtype;         // Event type (e.g., 2: KeyPress, 3: KeyRelease).
-                    ui16 deviceid;       // Physical or virtual device id.
-                    ui32 time;           // Time stamp.
-                    // Event payload
-                    ui32 detail;         // Keybd: Keycode. Mouse: Button: 1: Left, 2: Middle, 3: Right, 4/5: Scroll.
+                    base header;
+                    ui32 detail;         // Keybd: Keycode. Mouse: 0: Motion, 1: Left, 2: Middle, 3: Right, 4/5: Scroll.
                     ui32 root;           // Root window id.
                     ui32 event;          // Event window id.
                     ui32 child;          // Event child window id.
-                    // Event Coords
-                    si32 root_x;         // Global fixed 16.16 coords.
-                    si32 root_y;         //
-                    si32 event_x;        // Relative fixed 16.16 coords.
-                    si32 event_y;        //
-                    // Axes metadata + flags.
+                    fx16 root_x;         // Global fixed point 16.16 coords.
+                    fx16 root_y;         //
+                    fx16 event_x;        // Relative fixed point 16.16 coords.
+                    fx16 event_y;        //
                     ui16 buttons_len;    // Button mask array length in 32-bit words.
                     ui16 valuators_len;  // Valuators axis mask array length in 32-bit words.
                     ui16 sourceid;       // Event source device id.
-                    ui16 pad;
-                    ui32 flags;          // 1 << 16 means XIKeyRepeat.
 
-                    struct // Keybd modifiers (bitfields).
+                    ui16 pad;
+                    ui32 flags;          // 1 << 16 means KeyRepeat for keybd. 1 << 4 means PointerEmulated for mouse scroll.
+
+                    kbmods   mods;
+                    kblayout group;
+
+                    auto buttons_mask_ptr() const
                     {
-                        ui32 base;      // Pressed modifiers (Shift, Ctrl, ...).
-                        ui32 latched;   // Sticky keys.
-                        ui32 locked;    // Locks (CapsLock, NumLock).
-                        ui32 effective; // All mods.
-                    } mods;
-                    struct //  // Keybd layout state (XKB Groups).
+                        return reinterpret_cast<ui32 const*>(reinterpret_cast<char const*>(this) + sizeof(*this));
+                    }
+                    auto valuators_mask_ptr() const
                     {
-                        byte base;
-                        byte latched;
-                        byte locked;
-                        byte effective; // 0: EN, 1: RU etc.
-                    } group;
+                        return buttons_mask_ptr() + buttons_len;
+                    }
+                    auto valuators_data_ptr() const
+                    {
+                        return reinterpret_cast<fx32 const*>(valuators_mask_ptr() + valuators_len);
+                    }
+                };
+                struct focus
+                {
+                    base header;
+                    ui16 sourceid;
+                    byte mode;   // Normal, Grab, Ungrab.
+                    byte detail; // Ancestor, Virtual, Inferior, Nonlinear, NonlinearVirtual, Pointer, PointerRoot, None.
+                    ui32 root;
+                    ui32 event;
+                    ui32 child;
+                    fx16 root_x;
+                    fx16 root_y;
+                    fx16 event_x;
+                    fx16 event_y;
+                    byte same_screen;
+                    byte focus;
+                    ui16 buttons_len; // Length of button mask in payload (in quads).
+
+                    kbmods   mods;
+                    kblayout group;
+                };
+                struct hierarchy
+                {
+                    base header;
+                    ui32 flags; // MasterAdded, MasterDeleted, SlaveAttached, SlaveDetached, SlaveAdded, SlaveRemoved, DeviceEnabled, DeviceDisabled.
+                    ui16 num_info;
+                    ui16 pad0;
+                    ui32 pad1;
+                    ui32 pad2;
+
+                    struct info
+                    {
+                        ui16 deviceid;
+                        ui16 attachment; // Paired or master device id.
+                        byte use;        // MasterKeyboard, MasterPointer, ...
+                        byte enabled;
+                        ui16 pad;
+                        ui32 flags;      // MasterAdded, MasterRemoved, SlaveAttached, SlaveDetached, SlaveAdded, SlaveRemoved, DeviceEnabled, DeviceDisabled.
+                    };
                 };
             }
             namespace dev_type
@@ -627,7 +665,7 @@ namespace netxs::x11
                     ui32 mask2 = 0;    // 32...
                 };
                 byte major_opcode;      // xi2_major_opcode
-                byte minor_opcode = 46; // 46: XISelectEvents
+                byte minor_opcode = 46; // 46: SelectEvents
                 ui16 length;
                 ui32 window_id;
                 ui16 num_masks = 1;     // Number of device_mask in payload.
@@ -640,6 +678,37 @@ namespace netxs::x11
                     yield += view{ (char*)&mask_data, sizeof(mask_data) };
                     yield.append(-yield.size() & 3, '\0');
                 }
+            };
+            struct query_device // Minor opcode 48.
+            {
+                struct reply
+                {
+                    byte type;        // Always 1 (Reply).
+                    byte pad0;
+                    ui16 sequence;
+                    ui32 length;      // Payload length in quads.
+                    ui16 num_devices; // Device count.
+                    ui16 pad[11];
+
+                    struct device_info
+                    {
+                        ui16 deviceid;
+                        ui16 use;         // 1: MasterPointer, 2: MasterKeyboard, 3: SlavePointer, 4: SlaveKeyboard, 5: FloatingSlave.
+                        ui16 attachment;  // Attached (paired) to device id.
+                        ui16 num_classes; // Number of classes in payload.
+                        ui16 name_len;    // Name length in bytes.
+                        byte enabled;     // Device is enabled.
+                        byte pad;
+                        // payload:
+                        //    - name (utf8)
+                        //    - class list
+                    };
+                };
+                byte major_opcode;      // xi2_major_opcode
+                byte minor_opcode = 48; // 48: QueryDevice
+                ui16 length = 2;
+                ui16 device_id;         // 0: all_devices, 1: all_master_devices, or device_id.
+                ui16 pad = 0;
             };
         }
         struct noop // Opcode 127 (NoOperation).
@@ -757,66 +826,6 @@ namespace netxs::x11
             byte major_opcode; // Request's major opcode.
             byte pad[21];
         };
-        //struct mouse_click // Type 4 (button press) and 5 (button release).
-        //{
-        //    byte type;
-        //    byte button; // 1: Left, 2: Middle, 3: Right, 4: WheelUp, 5: WheelDown, 6: WheelLeft, 7: WheelRight
-        //    ui16 sequence;
-        //    ui32 time;
-        //    ui32 root_window;
-        //    ui32 event_window;
-        //    ui32 child_window;
-        //    si16 root_x;
-        //    si16 root_y;
-        //    si16 event_x; // Relative X
-        //    si16 event_y; // Relative Y
-        //    ui16 state;   // Keybd modifiers (Shift, Ctrl, Alt...)
-        //    byte same_screen;
-        //    byte pad;
-        //};
-        //struct motion // Type 6 (motion notify).
-        //{
-        //    byte type;
-        //    byte detail; // 0: Normal, 1: Hint
-        //    ui16 sequence;
-        //    ui32 time;
-        //    ui32 root_window;
-        //    ui32 event_window;
-        //    ui32 child_window;
-        //    si16 root_x;
-        //    si16 root_y;
-        //    si16 event_x; // Relative (to window) mouse Х.
-        //    si16 event_y; // Relative (to window) mouse Y.
-        //    ui16 state;   // Mouse buttons bitfield + keybd mods (Ctrl, Shift, etc.)
-        //    byte same_screen;
-        //    byte pad;
-        //};
-        //struct crossing // Type 7 (enter notify) and 8 (leave notify), a-la TrackMouseEvent/WM_MOUSELEAVE.
-        //{
-        //    byte type;
-        //    byte detail;
-        //    ui16 sequence;
-        //    ui32 time;
-        //    ui32 root_window;
-        //    ui32 event_window;
-        //    ui32 child_window;
-        //    si16 root_x;
-        //    si16 root_y;
-        //    si16 event_x;
-        //    si16 event_y;
-        //    ui16 state;
-        //    byte mode;
-        //    byte flags; // Bits: same_screen, focus
-        //};
-        //struct focus // Type 9 (focus on) and 10 (focus off).
-        //{
-        //    byte type;
-        //    byte mode; // 0: Normal, 1: Grab, 2: Ungrab
-        //    ui16 sequence;
-        //    ui32 window;
-        //    byte detail;
-        //    byte pad[23];
-        //};
         struct configure // Type 22 (configure notify) a-la WM_SIZE/WM_MOVE.
         {
             byte type;
@@ -966,6 +975,23 @@ namespace netxs::x11
             byte max_keycode;                 // 1 byte buffer[27]     = max_keycode
             byte pad[4];                      // 4 ui32 buffer[28..31] = unused
         } s;
+    #pragma pack(pop)
+
+        struct device_t
+        {
+            struct axis_t
+            {
+                fp64 last_val{};
+                fp64 inc_step{};
+                bool vertical{};
+                //limits<fp64> min_max;
+                //fp64 dpi;
+                //bool is_abs;
+                bool is_scroll{};
+            };
+            std::vector<axis_t> axes;
+            bool is_master{};
+        };
 
         text                                  vendor_str;     // buffer[32..32+vendor_length] = vendor_str
         std::vector<format>                   pixmap_formats; // format * number_of_formats = pixmap_formats
@@ -1015,6 +1041,8 @@ namespace netxs::x11
         std::deque<seq_handler> reply_callbacks;
         std::mutex              mutex;
         ui16                    sequence_counter = 0; // Sent request counter.
+
+        std::unordered_map<ui16, device_t> input_devices;
 
         template<class R, class V = qiew, class P = noop>
         void accumrq(text& batch_buffer, R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
@@ -1083,7 +1111,7 @@ namespace netxs::x11
                 r.callback(ev, extra_data);
             }
         }
-        auto get_error(x11::event::error& err)
+        auto get_error(x11::event::error const& err)
         {
             auto err_str = text{};
             switch (err.error_code)
@@ -1263,13 +1291,13 @@ namespace netxs::x11
                 }
                 auto v_reply = typename ExtensionQueryVersion::reply{};
                 if (x11connection->recv((char*)&v_reply, sizeof(v_reply)).size() == sizeof(v_reply))
-                if (v_reply.status == 1)
+                if (v_reply.status == x11::event::Reply)
                 if (v_reply.major_version > required_major_version || (v_reply.major_version == required_major_version && v_reply.minor_version >= required_minor_version)) // Check min version major.minor.
                 {
                     if constexpr (debugmode) log("%%%% version %%.%% detected (ext_major_opcode=%% ext_completion_event=%%)", prompt::x11, extension_name, (si32)v_reply.major_version, (si32)v_reply.minor_version, (si32)major_opcode, (si32)first_event);
                     return true;
                 }
-                if (v_reply.status == 1)
+                if (v_reply.status == x11::event::Reply)
                 {
                     errdetails = utf::fprint("\n\t%% version %%.%% detected", extension_name, (si32)v_reply.major_version, (si32)v_reply.minor_version);
                 }
@@ -1333,12 +1361,7 @@ namespace netxs::x11
                                             x11::req::create_window::payload{ .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
                                                                               .override_redirect = 0,       // 1: On.
                                                                               .event_mask        = 0u
-                                                                                                 //| x11::event::mask::KeymapState | x11::event::mask::KeyPress | x11::event::mask::KeyRelease
-                                                                                                 //| x11::event::mask::ButtonPress | x11::event::mask::ButtonRelease
-                                                                                                 //| x11::event::mask::EnterWindow | x11::event::mask::LeaveWindow
-                                                                                                 //| x11::event::mask::PointerMotion
                                                                                                  | x11::event::mask::Exposure
-                                                                                                 //| x11::event::mask::FocusChange
                                                                                                  | x11::event::mask::StructureNotify,
                                                                               .colormap_id       = argb_colormap_id });
             // Disable decorations.
@@ -1454,7 +1477,7 @@ namespace netxs::x11
             {
                 sendrq<x11::req::intern_atom>({ .only_if_exists = !create }, name); // 0: Create if absent. 1: Don't create.
                 auto reply = x11::req::intern_atom::reply{};
-                if (x11connection->recv((char*)&reply, sizeof(reply)).size() == 32 && reply.type == 1)
+                if (x11connection->recv((char*)&reply, sizeof(reply)).size() == 32 && reply.type == x11::event::Reply)
                 {
                     if constexpr (debugmode) log("%%Received atom for '%%'=0x%%", prompt::x11, name, reply.atom_id);
                     return reply.atom_id;
@@ -1495,8 +1518,115 @@ namespace netxs::x11
                                             x11::req::configure_window::payload{ .x = (ui16)coor.x,
                                                                                  .y = (ui16)coor.y });
         }
+        auto query_devices()
+        {
+            sendrq(x11::req::xi2::query_device{ .major_opcode = xi2_major_opcode,
+                                                .device_id    = x11::req::xi2::dev_type::all_devices });
+            auto header = text(sizeof(x11::req::xi2::query_device::reply), '\0');
+            auto reply_buff = x11connection->recv(header.data(), header.size());
+            if constexpr (debugmode) log("%%reply_buff.size()=%% header.size()=%%", prompt::x11, reply_buff.size(), header.size());
+            if (reply_buff.size() == header.size())
+            {
+                auto& reply = *reinterpret_cast<x11::req::xi2::query_device::reply const*>(reply_buff.data());
+                if (reply.type == x11::event::Reply)
+                {
+                    if constexpr (debugmode) log("Connected input devices: %%", reply.num_devices);
+                    if (reply.num_devices == 0) return true;
+                    auto buffer = text(reply.length * 4, '\0');
+                    if (x11connection->recv(buffer.data(), buffer.size()).size() == buffer.size())
+                    {
+                        //if constexpr (debugmode) log("Buffer:\n%%", utf::buffer_to_hex(buffer, true));
+                        auto q = qiew{ buffer };
+                        while (q)
+                        {
+                            if (q.size() < sizeof(x11::req::xi2::query_device::reply::device_info))
+                            {
+                                log("%%Error: Broken device list", prompt::x11);
+                                break;
+                            }
+                            auto& dev = *reinterpret_cast<x11::req::xi2::query_device::reply::device_info const*>(q.data());
+                            auto name_padded_len = ((size_t)dev.name_len + 3) & ~3;
+                            auto total_dev_header_len = sizeof(x11::req::xi2::query_device::reply::device_info) + name_padded_len;
+                            if (q.size() < total_dev_header_len)
+                            {
+                                log("%%Error: Wrong device name length (buffer_size=%% name_length=%% padded_length=%%)", prompt::x11, q.size(), dev.name_len, name_padded_len);
+                                break;
+                            }
+                            q.remove_prefix(sizeof(x11::req::xi2::query_device::reply::device_info));
+                            auto name = q.substr(0, dev.name_len);
+                            q.remove_prefix(name_padded_len);
+                            auto& target_dev = input_devices[dev.deviceid];
+                            target_dev.is_master = dev.use == x11::req::xi2::MasterPointer
+                                                || dev.use == x11::req::xi2::MasterKeyboard;
+                            if constexpr (debugmode) log("\tDeviceID=%% Name='%%' Classes=%% is_master=%%", dev.deviceid, name, dev.num_classes, target_dev.is_master);
+                            target_dev.axes.clear();
+                            for (auto c = 0u; c < dev.num_classes; ++c)
+                            {
+                                if (q.size() >= sizeof(x11::req::xi2::event::device_changed::any_class))
+                                if (auto& any_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::any_class const*>(q.data()); q.size() >= any_cls.length * 4)
+                                {
+                                    if (any_cls.type == x11::req::xi2::event::device_changed::KeyClass)
+                                    {
+                                        auto& key_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::key_class const*>(q.data());
+                                        //todo ...
+                                        if constexpr (debugmode) log("\t  Key Class: num_keys=%%", key_cls.num_keys);
+                                    }
+                                    else if (any_cls.type == x11::req::xi2::event::device_changed::ButtonClass)
+                                    {
+                                        auto& btn_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::button_class const*>(q.data());
+                                        //todo ...
+                                        if constexpr (debugmode) log("\t  Button Class: num_buttons=%%", btn_cls.num_buttons);
+                                    }
+                                    else if (any_cls.type == x11::req::xi2::event::device_changed::ValuatorClass)
+                                    {
+                                        auto& val_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::valuator_class const*>(q.data());
+                                        if (target_dev.axes.size() <= val_cls.number) target_dev.axes.resize(val_cls.number + 1);
+                                        auto& axis = target_dev.axes[val_cls.number];
+                                        axis.last_val = val_cls.value.to_fp64();
+                                        if constexpr (debugmode) log("\t  Valuator Axis #%% cur_value=%%", val_cls.number, axis.last_val);
+                                    }
+                                    else if (any_cls.type == x11::req::xi2::event::device_changed::ScrollClass)
+                                    {
+                                        auto& scr_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::scroll_class const*>(q.data());
+                                        if (target_dev.axes.size() <= scr_cls.number) target_dev.axes.resize(scr_cls.number + 1);
+                                        auto& axis = target_dev.axes[scr_cls.number];
+                                        axis.is_scroll = true;
+                                        axis.vertical  = scr_cls.scroll_type == x11::req::xi2::event::device_changed::scroll_class::Vertical;
+                                        axis.inc_step  = scr_cls.inc_step.to_fp64();
+                                        axis.last_val  = {}; // Reset wheel accum.
+                                        if constexpr (debugmode) log("\t  Scroll Axis #%% type=%% step=%%", scr_cls.number, axis.vertical ? "Vertical" : "Horizontal", axis.inc_step);
+                                    }
+                                    else if (any_cls.type == x11::req::xi2::event::device_changed::TouchClass)
+                                    {
+                                        auto& tch_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::touch_class const*>(q.data());
+                                        //todo ...
+                                        if constexpr (debugmode) log("\t  Touch Class: mode='%%' num_touches=%%", tch_cls.mode ? "touchpad":"touchscreen", tch_cls.num_touches);
+                                    }
+                                    q.remove_prefix(any_cls.length * 4);
+                                    continue;
+                                }
+                                log("%%Error: Unexpected buffer end", prompt::x11);
+                                q = {};
+                                break;
+                            }
+                        }
+                        return true;
+                    }
+                }
+                else
+                {
+                    auto offset = header.size();
+                    header.resize(sizeof(x11::event::error));
+                    x11connection->recv(header.data() + offset, header.size() - offset);
+                    auto& err = *reinterpret_cast<x11::event::error const*>(header.data());
+                    log("%%Failed to query devices: %%", prompt::x11, get_error(err));
+                }
+            }
+            return faux;
+        }
         void activate_xinput2(arch master_window_id)
         {
+            query_devices();
             auto event_mask_bits = 0u;
             event_mask_bits |= 1u << x11::req::xi2::event::KeyPress;
             event_mask_bits |= 1u << x11::req::xi2::event::KeyRelease;
@@ -1507,6 +1637,7 @@ namespace netxs::x11
             event_mask_bits |= 1u << x11::req::xi2::event::Leave;
             event_mask_bits |= 1u << x11::req::xi2::event::FocusIn;
             event_mask_bits |= 1u << x11::req::xi2::event::FocusOut;
+            event_mask_bits |= 1u << x11::req::xi2::event::DeviceChanged;
             sendrq(x11::req::xi2::select_events{ .major_opcode = xi2_major_opcode,
                                                  .window_id    = (ui32)master_window_id, },
                                             x11::req::xi2::select_events::payload
@@ -1517,7 +1648,6 @@ namespace netxs::x11
                                             });
         }
     };
-    #pragma pack(pop)
 
     auto get_cookie(view target_display_num)
     {
@@ -1598,11 +1728,11 @@ namespace netxs::x11
         {
             auto remaining_bytes = (size_t)reply.additional_length * 4;
             auto buffer = text(remaining_bytes, '\0');
-            if (reply.status == 0) // Failed.
+            if (reply.status == x11::event::Error)
             {
                 log("%%Connection rejected: '%%'", prompt::x11, utf::debase<faux, faux>(x11connection->recv(buffer.data(), buffer.size())));
             }
-            else if (reply.status != 1)
+            else if (reply.status != x11::event::Reply)
             {
                 log("%%Unknown response status", prompt::x11);
             }
