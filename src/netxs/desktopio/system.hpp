@@ -6337,9 +6337,9 @@ namespace netxs::os
                                     mouse(m);
                                     std::swap(prev_buttons, m.buttons);
                                 }
-                                if (!(dtvt::vtmode & ui::console::vt_2D) && dtvt::wheelrate) // Don't accelerate the mouse wheel if we are already inside the vtm.
+                                if (!(dtvt::vtmode & ui::console::vt_2D) && os::dtvt::wheelrate) // Don't accelerate the mouse wheel if we are already inside the vtm.
                                 {
-                                    m.wheelfp *= dtvt::wheelrate;
+                                    m.wheelfp *= os::dtvt::wheelrate;
                                 }
                                 m.wheelsi = (si32)m.wheelfp;
                                 m.changed++;
@@ -6507,7 +6507,7 @@ namespace netxs::os
                             if (e.type == LIBINPUT_EVENT_POINTER_SCROLL_WHEEL)
                             {
                                 wheelfp = -e.libinput_event_pointer_get_scroll_value_v120() / 120.0;
-                                if (dtvt::wheelrate) wheelfp *= dtvt::wheelrate;
+                                if (os::dtvt::wheelrate) wheelfp *= os::dtvt::wheelrate;
                             }
                             else if (e.type == LIBINPUT_EVENT_POINTER_SCROLL_FINGER)
                             {

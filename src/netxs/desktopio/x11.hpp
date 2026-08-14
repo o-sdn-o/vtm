@@ -1583,7 +1583,7 @@ namespace netxs::x11
                                         if (target_dev.axes.size() <= val_cls.number) target_dev.axes.resize(val_cls.number + 1);
                                         auto& axis = target_dev.axes[val_cls.number];
                                         axis.last_val = val_cls.value.to_fp64();
-                                        if constexpr (debugmode) log("\t  Valuator Axis #%% cur_value=%%", val_cls.number, axis.last_val);
+                                        if constexpr (debugmode) log("\t  Valuator Axis #%% last_val=%%", val_cls.number, axis.last_val);
                                     }
                                     else if (any_cls.type == x11::req::xi2::event::device_changed::ScrollClass)
                                     {
@@ -1593,7 +1593,6 @@ namespace netxs::x11
                                         axis.is_scroll = true;
                                         axis.vertical  = scr_cls.scroll_type == x11::req::xi2::event::device_changed::scroll_class::Vertical;
                                         axis.inc_step  = scr_cls.inc_step.to_fp64();
-                                        axis.last_val  = {}; // Reset wheel accum.
                                         if constexpr (debugmode) log("\t  Scroll Axis #%% type=%% step=%%", scr_cls.number, axis.vertical ? "Vertical" : "Horizontal", axis.inc_step);
                                     }
                                     else if (any_cls.type == x11::req::xi2::event::device_changed::TouchClass)

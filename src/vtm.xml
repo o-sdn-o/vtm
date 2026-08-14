@@ -87,7 +87,7 @@ R"==(<include*/>  <!-- Ordered list of <include="/path/to/settings.xml"/>. Clear
         <repeat_delay  = 500ms/>  <!-- Key/button repeat delay. -->
         <repeat_rate   = 30ms />  <!-- Key/button repeat rate. -->
         <dblclick      = 500ms/>  <!-- Double-click speed threshold. -->
-        <wheelrate     = 3    />  <!-- Lines per mouse wheel step (only in non-GUI mode on Unix-like platforms). -->
+        <wheelrate     = 3    />  <!-- Lines per mouse wheel step (Unix-like platforms only). -->
     </timings>
 )=="
 R"==(

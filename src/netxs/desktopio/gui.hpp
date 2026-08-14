@@ -3466,7 +3466,7 @@ namespace netxs::gui
         shad  shadow; // winbase: Shadow generator.
         grip  szgrip; // winbase: Resizing grips UI-control.
         twod  waitsz; // winbase: Window is waiting resize acknowledge.
-        twod  mcoord; // winbase: Mouse cursor coord.
+        fp2d  mcoord; // winbase: Mouse cursor coord.
         bool  inside; // winbase: Mouse is inside the client area.
         bool  seized; // winbase: Mouse is locked inside the client area.
         bool  mhover; // winbase: Mouse hover.
@@ -3572,7 +3572,7 @@ namespace netxs::gui
         virtual void mouse_capture(si32 captured_by) = 0;
         virtual void mouse_release(si32 released_by) = 0;
         virtual void mouse_catch_outside() = 0;
-        virtual twod mouse_get_pos() = 0;
+        virtual fp2d mouse_get_pos() = 0;
 
         virtual void window_set_title(view utf8) = 0;
         virtual void window_sync_taskbar(si32 new_state) = 0;
@@ -4472,7 +4472,7 @@ namespace netxs::gui
             auto inner_rect = blinky.area;
             auto coord = mouse_get_pos();
             mcoord = coord;
-            stream.m.coordxy = fp2d{ mcoord - inner_rect.coor } / cellsz;
+            stream.m.coordxy = (mcoord - fp2d{ inner_rect.coor }) / cellsz;
             auto& mbttns = stream.m.buttons;
             if (std::exchange(mfocus.offer, faux)) // Ignore any first Ctrl+AnyClick inside the just focused window.
             {
@@ -6150,7 +6150,7 @@ namespace netxs::gui
         void window_make_foreground()    { ::SetForegroundWindow((HWND)master.hWnd); } //::AllowSetForegroundWindow(ASFW_ANY); } // Neither ::SetFocus() nor ::SetActiveWindow() can switch focus immediately.
         void window_shutdown()           { ::SendMessageW((HWND)master.hWnd, WM_CLOSE, NULL, NULL); }
         void window_cleanup()            { ::RemoveClipboardFormatListener((HWND)master.hWnd); ::PostQuitMessage(0); }
-        twod mouse_get_pos()             { return twod{ winmsg.pt.x, winmsg.pt.y }; }
+        fp2d mouse_get_pos()             { return fp2d{ winmsg.pt.x, winmsg.pt.y }; }
         void mouse_capture(si32 captured_by)
         {
             if (!std::exchange(heldby, heldby | captured_by))
@@ -6831,13 +6831,9 @@ namespace netxs::gui
         {
             x11::session_ptr->window_set_title(master.hWnd, utf8);
         }
-        auto mouse_set_pos(fp2d new_coor)
+        fp2d mouse_get_pos()
         {
-            return current_mouse_pos(new_coor);
-        }
-        twod mouse_get_pos()
-        {
-            return twod{ current_mouse_pos };
+            return current_mouse_pos;
         }
         void mouse_capture(si32 /*captured_by*/) {}
         void mouse_release(si32 /*released_by*/) {}
@@ -6908,7 +6904,6 @@ namespace netxs::gui
                             axis_info.is_scroll = true;
                             axis_info.inc_step  = sc.inc_step.to_fp64();
                             axis_info.vertical  = sc.scroll_type == x11::req::xi2::event::device_changed::scroll_class::Vertical;
-                            axis_info.last_val  = {};
                             break;
                         }
                         case x11::req::xi2::event::device_changed::TouchClass: // Touchpad properties.
@@ -6972,7 +6967,7 @@ namespace netxs::gui
                 //auto xi_mods = m.mods.effective;
                 auto emulated = !!(m.flags & (1 << 4));
                 if constexpr (debugmode) log("%%Mouse: sourceid=%% coor=%% mods=0x%% flags=0x%% emulated=%%", prompt::x11, m.sourceid, mouse_coor, utf::to_hex(m.mods.effective), utf::to_hex(m.flags), (si32)emulated);
-                if (mouse_set_pos(mouse_coor))
+                if (current_mouse_pos(mouse_coor))
                 {
                     if constexpr (debugmode) log("  Mouse Motion");
                     mouse_moved();
@@ -7012,6 +7007,7 @@ namespace netxs::gui
                         {
                             auto delta = axis_info.last_val - current_value;
                             wdelta = axis_info.inc_step;
+                            if (os::dtvt::wheelrate) delta *= os::dtvt::wheelrate;
                             axis_info.last_val = current_value;
                             axis_info.vertical ? mouse_wheel(delta, faux)
                                                : mouse_wheel(delta, true);
@@ -7092,7 +7088,7 @@ namespace netxs::gui
         void window_shutdown() {}
         void window_cleanup() {}
         void window_set_title(view /*utf8*/) {}
-        twod mouse_get_pos() { return twod{}; }
+        fp2d mouse_get_pos() { return fp2d{}; }
         void mouse_capture(si32 /*captured_by*/) {}
         void mouse_release(si32 /*released_by*/) {}
         void mouse_catch_outside() {}
