@@ -1044,6 +1044,12 @@ namespace netxs::x11
 
         std::unordered_map<ui16, device_t> input_devices;
 
+        session_t() = default;
+        ~session_t()
+        {
+            reset_shared_buffer();
+        }
+
         template<class R, class V = qiew, class P = noop>
         void accumrq(text& batch_buffer, R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
         {
@@ -1505,7 +1511,6 @@ namespace netxs::x11
         {
             sendrq<x11::req::change_window_attrs>({ .window_id = roots.front().s.root_window_id },
                 x11::req::change_window_attrs::payload{ .event_mask = x11::event::mask::PropertyChange });
-            return true;
         }
         auto get_root_window_prop(ui32 /*atom_id*/)
         {
@@ -1788,7 +1793,6 @@ namespace netxs::x11
         }
         return session_ptr;
     }
-    static auto session_ptr = sptr<x11::session_t>{}; // x11: Active X11 session.
     auto connect()
     {
         if (auto display_env = os::env::get("DISPLAY"); display_env.size())
@@ -1809,7 +1813,6 @@ namespace netxs::x11
                 if (session.detect_extension<x11::req::xfixes::query_version>("XFIXES", session.xfixes_major_opcode, session.xfixes_first_event, 2, 0)) // XFIXES ver >= 2.0
                 if (session.detect_extension<x11::req::xi2::query_version>("XInputExtension", session.xi2_major_opcode, byte{}, 2, 4)) // XInputExtension (XInput2) ver >= 2.4
                 if (session.get_atoms())
-                if (session.listen_root_events())
                 {
                     if constexpr (debugmode) log(session.str());
                     auto& x11screen = session.roots.front().s;

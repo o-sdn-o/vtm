@@ -6812,6 +6812,7 @@ namespace netxs::gui
         void window_initilize()
         {
             auto& x11session = *x11::session_ptr;
+            x11session.listen_root_events();
             x11session.activate_xinput2(master.hWnd);
             auto lock = std::lock_guard{ x11session.mutex };
             for (auto& l : layers)

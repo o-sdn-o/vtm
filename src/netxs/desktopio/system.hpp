@@ -73,6 +73,12 @@
         #endif
             #include <sys/mman.h> // X11 MIT-SHM ::memfd_create()
 
+        namespace netxs::x11
+        {
+            struct session_t;
+            static auto session_ptr = netxs::sptr<x11::session_t>{}; // x11: Active X11 session.
+        }
+
     #endif
 
     extern char **environ;
@@ -3005,6 +3011,9 @@ namespace netxs::os
                         os::close(os::stdin_fd ); // No stdio needed in daemon mode.
                         os::close(os::stdout_fd); //
                         os::close(os::stderr_fd); //
+                        #if !defined(__APPLE__)
+                            x11::session_ptr.reset();
+                        #endif
                         return std::pair{ success, true }; // Child branch.
                     }
                     else if (p_id > 0) os::process::exit<true>(0); // Success.
