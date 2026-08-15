@@ -6867,12 +6867,15 @@ namespace netxs::gui
                         case x11::req::xi2::event::device_changed::KeyClass: // Keybd props.
                         {
                             auto kc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::key_class>(current_class_ptr);
+                            //todo key range
                             if constexpr (debugmode) log("\t KeyClass: source=%% total_keys=%%", kc.sourceid, kc.num_keys);
                             break;
                         }
                         case x11::req::xi2::event::device_changed::ButtonClass: // Mouse button count with names.
                         {
                             auto bc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::button_class>(current_class_ptr);
+                            //todo pressed masks
+                            //todo atoms
                             if constexpr (debugmode)
                             {
                                 log("\t ButtonClass: source=%% total_buttons=%%", bc.sourceid, bc.num_buttons);
@@ -6914,6 +6917,8 @@ namespace netxs::gui
                         case x11::req::xi2::event::device_changed::TouchClass: // Touchpad properties.
                         {
                             auto tc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::touch_class>(current_class_ptr);
+                            dev.touch_mode  = tc.mode;
+                            dev.num_touches = tc.num_touches;
                             if constexpr (debugmode) log("\t TouchClass: source=%% mode=%% (%%) max_simultaneous_touches=%%",
                                     tc.sourceid, tc.mode == 0 ? "Direct (TouchScreen)" : "Dependent (TouchPad)", (ui32)tc.mode, tc.num_touches);
                             break;
