@@ -500,16 +500,25 @@ namespace netxs::x11
                     static constexpr auto ButtonClass   = 1;
                     static constexpr auto ValuatorClass = 2;
                     static constexpr auto ScrollClass   = 3;
-                    static constexpr auto TouchClass    = 4;
+                    static constexpr auto TouchClass    = 8;
+
+                    static constexpr auto SlaveSwitch  = 1;
+                    static constexpr auto DeviceChange = 2;
+
+                    static constexpr auto Absolute = 0;
+                    static constexpr auto Relative = 1;
 
                     base header;
-                    ui16 reason;      // 1: MasterDeviceChanged, 2: DeviceSlaveChanged.
                     ui16 num_classes; // any_class count in payload.
+                    ui16 sourceid;    // Source of the new prop classes.
+                    byte reason;      // 1: SlaveSwitch, 2: DeviceChange.
+                    byte pad[11];
+                    // payload...
 
                     struct any_class // Header of device properties.
                     {
-                        ui16 type;     // 0: Key, 1: Button, 2: Valuator (axis), 3: Scroll, 4: Touch.
-                        ui16 length;   // Length in bytes including this header.
+                        ui16 type;     // 0: Key, 1: Button, 2: Valuator (axis), 3: Scroll, 8: Touch.
+                        ui16 length;   // Length in quads including this header.
                         ui16 sourceid; // Device id.
                         ui16 pad;
                     };
@@ -532,14 +541,14 @@ namespace netxs::x11
                         ui16 sourceid;
                         ui16 num_buttons;   // Button count.
 
-                        auto state_mask_ptr() const // Button state array.
+                        static auto state_mask_ptr(char const* class_ptr) // Button state array.
                         {
-                            return (ui32 const*)(this + 1);
+                            return (ui32 const*)(class_ptr + sizeof(button_class));
                         }
-                        auto labels_ptr() const // Button name array (atom list).
+                        auto labels_ptr(char const* class_ptr) const // Button name array (atom list).
                         {
                             auto mask_words = (size_t)(num_buttons + 31) / 32;
-                            return state_mask_ptr() + mask_words;
+                            return state_mask_ptr(class_ptr) + mask_words;
                         }
                     };
                     struct valuator_class // 2. ValuatorClass (absolute/relative axis bounds for mouse/touchpad).
@@ -561,6 +570,9 @@ namespace netxs::x11
                         static constexpr auto Vertical   = 1;
                         static constexpr auto Horizontal = 2;
 
+                        static constexpr auto NoEmulation = 1;
+                        static constexpr auto Preferred   = 2;
+
                         ui16 type;          // 3: ScrollClass.
                         ui16 length;
                         ui16 sourceid;      // Device ID.
@@ -570,9 +582,9 @@ namespace netxs::x11
                         ui32 flags;         // 1: NoEmulation, 2: Preferred.
                         fx32 inc_step;      // Scroll step.
                     };
-                    struct touch_class // 4. TouchClass (multitouch panel).
+                    struct touch_class // 8. TouchClass (multitouch panel).
                     {
-                        ui16 type;          // 4: TouchClass.
+                        ui16 type;          // 8: TouchClass.
                         ui16 length;        // Pack length.
                         ui16 sourceid;
                         byte mode;          // 0: Direct (touch-screen), 1: Dependent (touchpad).
@@ -582,6 +594,9 @@ namespace netxs::x11
                 };
                 struct km // Keybd/Mouse
                 {
+                    static constexpr auto PointerEmulated = 1u << 4;
+                    static constexpr auto KeyRepeated     = 1u << 16;
+
                     base header;
                     ui32 detail;         // Keybd: Keycode. Mouse: 0: Motion, 1: Left, 2: Middle, 3: Right, 4/5: Scroll.
                     ui32 root;           // Root window id.
@@ -596,7 +611,7 @@ namespace netxs::x11
                     ui16 sourceid;       // Event source device id.
 
                     ui16 pad;
-                    ui32 flags;          // 1 << 16 means KeyRepeat for keybd. 1 << 4 means PointerEmulated for mouse scroll.
+                    ui32 flags;          // KeyRepeated for keybd. PointerEmulated for mouse scroll.
 
                     kbmods   mods;
                     kblayout group;

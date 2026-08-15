@@ -6851,7 +6851,10 @@ namespace netxs::gui
             if (d.evtype == x11::req::xi2::event::DeviceChanged) // Layout changed? Mouse DPI changed?
             {
                 auto dc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed>(packet.data());
-                if constexpr (debugmode) log("  XI_DeviceChanged: device=%% reason=%% classes=%%", dc.header.deviceid, dc.reason, dc.num_classes);
+                if constexpr (debugmode) log("  XI_DeviceChanged: device=%% reason=%%(%%) classes=%% sourceid=%%",//\n packet:\n%%",
+                    dc.header.deviceid,
+                    dc.reason == x11::req::xi2::event::device_changed::SlaveSwitch ? "SlaveSwitch" : (dc.reason == x11::req::xi2::event::device_changed::DeviceChange ? "DeviceChange" : "unknown"), (si32)dc.reason,
+                    dc.num_classes, dc.sourceid);//, utf::buffer_to_hex(packet, true));
 
                 auto& dev = session.input_devices[dc.header.deviceid];
                 auto current_class_ptr = (x11::req::xi2::event::device_changed::any_class const*)(packet.data() + sizeof(dc)); //dc.classes_ptr();
@@ -6873,10 +6876,10 @@ namespace netxs::gui
                             if constexpr (debugmode)
                             {
                                 log("\t ButtonClass: source=%% total_buttons=%%", bc.sourceid, bc.num_buttons);
-                                auto labels = bc.labels_ptr();
+                                auto labels_ptr = bc.labels_ptr((char const*)current_class_ptr);
                                 for(auto b = 0u; b < bc.num_buttons; ++b)
                                 {
-                                    log("\t\t Button %% Atom ID: %%", b + 1, labels[b]);
+                                    log("\t    Button %% Atom ID: %%", b + 1, labels_ptr[b]);
                                 }
                             }
                             break;
@@ -6890,7 +6893,7 @@ namespace netxs::gui
                             auto& axis_info = dev.axes[axis];
                             axis_info.is_scroll = faux; // Reset scroll axis properties.
                             axis_info.last_val = vc.value.to_fp64();
-                            if constexpr (debugmode) log("\t ValuatorClass: axis=%% label=%% mode=%% last_val=%%", axis, vc.label, mode, axis_info.last_val);
+                            if constexpr (debugmode) log("\t ValuatorClass: axis=%% label=%% mode=%% last_val=%%", axis, vc.label, mode == x11::req::xi2::event::device_changed::Absolute ? "Absolute" : "Relative", axis_info.last_val);
                             break;
                         }
                         case x11::req::xi2::event::device_changed::ScrollClass: // mouse wheel axis step.
@@ -6899,20 +6902,20 @@ namespace netxs::gui
                             auto is_vertical = sc.scroll_type == 1;
                             auto axis = sc.number;
                             if constexpr (debugmode) log("\t ScrollClass: axis=%% type=%%(%%) inc_step=%% flags=%%(%%)",
-                                axis, is_vertical ? "Vertical"sv : "Horizontal"sv, sc.scroll_type, sc.inc_step.to_fp64(),
-                                utf::to_hex(sc.flags), sc.flags == 1 ? "NoEmulation" : "Preferred");
+                                axis, is_vertical ? "Vertical" : "Horizontal", sc.scroll_type, sc.inc_step.to_fp64(),
+                                utf::to_hex(sc.flags), sc.flags == x11::req::xi2::event::device_changed::scroll_class::NoEmulation ? "ScrollNoEmulation" : (sc.flags == x11::req::xi2::event::device_changed::scroll_class::Preferred ? "ScrollPreferred" : "n/a"));
                             if ((si32)dev.axes.size() < axis + 1) dev.axes.resize(axis + 1);
                             auto& axis_info = dev.axes[axis]; // Update scroll properties.
                             axis_info.is_scroll = true;
                             axis_info.inc_step  = sc.inc_step.to_fp64();
-                            axis_info.vertical  = sc.scroll_type == x11::req::xi2::event::device_changed::scroll_class::Vertical;
+                            axis_info.vertical  = is_vertical;
                             break;
                         }
                         case x11::req::xi2::event::device_changed::TouchClass: // Touchpad properties.
                         {
                             auto tc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::touch_class>(current_class_ptr);
                             if constexpr (debugmode) log("\t TouchClass: source=%% mode=%% (%%) max_simultaneous_touches=%%",
-                                    tc.sourceid, tc.mode == 0 ? "Direct (TouchScreen)"sv : "Dependent (TouchPad)"sv, (ui32)tc.mode, tc.num_touches);
+                                    tc.sourceid, tc.mode == 0 ? "Direct (TouchScreen)" : "Dependent (TouchPad)", (ui32)tc.mode, tc.num_touches);
                             break;
                         }
                     }
@@ -6925,7 +6928,7 @@ namespace netxs::gui
                 auto k = netxs::start_lifetime_as<x11::req::xi2::event::km>(packet.data());
                 auto is_pressed = d.evtype == x11::req::xi2::event::KeyPress;
                 auto s_keycode  = k.detail; // Native keycode.
-                auto repeated   = !!(k.flags & (1 << 16));
+                auto repeated   = !!(k.flags & x11::req::xi2::event::km::KeyRepeated);
                 auto xi_mods    = k.mods.effective; // All modifiers.
                 auto layout_idx = k.group.effective; // Keybd layout.
                 auto keymods = 0;
@@ -6967,11 +6970,11 @@ namespace netxs::gui
                 auto& dev = session.input_devices[m.sourceid];
                 auto mouse_coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
                 //auto xi_mods = m.mods.effective;
-                auto emulated = !!(m.flags & (1 << 4));
-                if constexpr (debugmode) log("%%Mouse: sourceid=%% coor=%% mods=0x%% flags=0x%% emulated=%%", prompt::x11, m.sourceid, mouse_coor, utf::to_hex(m.mods.effective), utf::to_hex(m.flags), (si32)emulated);
-                if (current_mouse_pos(mouse_coor))
+                auto emulated = !!(m.flags & x11::req::xi2::event::km::PointerEmulated);
+                auto moved = current_mouse_pos(mouse_coor);
+                if constexpr (debugmode) log("%%Mouse: sourceid=%% coor=%% mods=0x%% flags=0x%% emulated=%%", prompt::x11, m.sourceid, moved ? ansi::clr(tint::greenlt, mouse_coor) : utf::concat(mouse_coor), utf::to_hex(m.mods.effective), utf::to_hex(m.flags), (si32)emulated);
+                if (moved)
                 {
-                    if constexpr (debugmode) log("  Mouse Motion");
                     mouse_moved();
                 }
                 if (d.evtype != x11::req::xi2::event::Motion && !emulated) // ButtonPress or ButtonRelease.

@@ -152,7 +152,7 @@ namespace netxs
         #if defined(DEBUG)
         = true;
         #else
-        = true;//faux; // SSH could crash if true.
+        = faux; // SSH could crash if true.
         #endif
 
     [[maybe_unused]] static auto _k0 = 0; // LCtrl+Wheel.
