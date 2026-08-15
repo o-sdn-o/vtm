@@ -12,21 +12,30 @@ namespace netxs::x11
         using field_t = std::optional<ui32>;
         auto vmask = 0u;
         auto count = sizeof(payload) / sizeof(field_t);
-        auto field = netxs::start_lifetime_as_array<field_t>(&payload, count);
-        auto start = yield.size();
-        yield += view{ (char*)&packet, sizeof(packet) };
+        auto ptr = (char const*)&payload;
         for (auto i = 0u; i < count; ++i)
         {
-            if (field[i].has_value())
+            auto field = netxs::start_lifetime_as<field_t>(ptr);
+            if (field.has_value())
             {
-                auto v = field[i].value();
-                yield += view{ (char*)&v, sizeof(v) };
                 vmask |= 1u << i;
             }
+            ptr += sizeof(field_t);
         }
-        auto& ref = *netxs::start_lifetime_as<std::decay_t<decltype(packet)>>(yield.data() + start);
-        ref.value_mask = vmask;
-        ref.length     = sizeof(packet) / 4 + std::popcount(vmask);
+        packet.value_mask = vmask;
+        packet.length     = sizeof(packet) / 4 + std::popcount(vmask);
+        yield += view{ (char*)&packet, sizeof(packet) };
+        ptr = (char const*)&payload;
+        for (auto i = 0u; i < count; ++i)
+        {
+            auto field = netxs::start_lifetime_as<field_t>(ptr);
+            if (field.has_value())
+            {
+                auto v = field.value();
+                yield += view{ (char*)&v, sizeof(v) };
+            }
+            ptr += sizeof(field_t);
+        }
     }
     auto serialize_str(text& yield, auto& packet, auto const& data)
     {
@@ -196,7 +205,7 @@ namespace netxs::x11
         {
             struct reply
             {
-                byte type = 1;    // Always 1 (Reply).
+                byte type;        // Always 1 (Reply).
                 byte format;      // Bits in word.
                 ui16 sequence;
                 ui32 length;      // Payload length in 32-bit words.
@@ -536,7 +545,7 @@ namespace netxs::x11
                     struct valuator_class // 2. ValuatorClass (absolute/relative axis bounds for mouse/touchpad).
                     {
                         ui16 type;          // 2: ValuatorClass.
-                        ui16 length = 40;
+                        ui16 length;
                         ui16 sourceid;
                         ui16 number;        // Axis number (e.g., 0: X, 1: Y).
                         ui32 label;         // Atom: axis name (e.g., "Rel X").
@@ -553,7 +562,7 @@ namespace netxs::x11
                         static constexpr auto Horizontal = 2;
 
                         ui16 type;          // 3: ScrollClass.
-                        ui16 length = 24;
+                        ui16 length;
                         ui16 sourceid;      // Device ID.
                         ui16 number;        // Wheel axis (valuator number).
                         ui16 scroll_type;   // 1: Vertical, 2: Horizontal.
@@ -570,11 +579,6 @@ namespace netxs::x11
                         byte pad;
                         ui16 num_touches;   // Max touches supported.
                     };
-
-                    auto classes_ptr() const
-                    {
-                        return (any_class const*)(this + 1);
-                    }
                 };
                 struct km // Keybd/Mouse
                 {
@@ -597,17 +601,17 @@ namespace netxs::x11
                     kbmods   mods;
                     kblayout group;
 
-                    auto buttons_mask_ptr() const
+                    static auto buttons_mask_ptr(char const* packet_ptr)
                     {
-                        return (ui32 const*)(this + 1);
+                        return (ui32 const*)(packet_ptr + sizeof(km));
                     }
-                    auto valuators_mask_ptr() const
+                    auto valuators_mask_ptr(char const* packet_ptr) const
                     {
-                        return buttons_mask_ptr() + buttons_len;
+                        return buttons_mask_ptr(packet_ptr) + buttons_len;
                     }
-                    auto valuators_data_ptr() const
+                    auto valuators_data_ptr(char const* packet_ptr) const
                     {
-                        return (fx32 const*)(valuators_mask_ptr() + valuators_len);
+                        return (fx32 const*)(valuators_mask_ptr(packet_ptr) + valuators_len);
                     }
                 };
                 struct focus
@@ -1064,9 +1068,9 @@ namespace netxs::x11
                 fp64 last_val{};
                 fp64 inc_step{};
                 bool vertical{};
-                //limits<fp64> min_max;
-                //fp64 dpi;
-                //bool is_abs;
+                limits<fp64> min_max{};
+                ui32 dpi{};
+                bool is_abs{};
                 bool is_scroll{};
             };
             std::vector<axis_t> axes;
@@ -1117,7 +1121,7 @@ namespace netxs::x11
 
         struct seq_handler
         {
-            using fx_t = std::function<void(x11::event::any const& ev, view payload)>;
+            using fx_t = std::function<void(x11::event::any const& ev, qiew payload)>;
             ui16 sequence;
             fx_t callback;
         };
@@ -1198,7 +1202,7 @@ namespace netxs::x11
             }
             else
             {
-                auto extra_data = text{};
+                auto extra_data = std::vector<char>{};
                 if (ev.type == x11::event::Reply && ev.length > 0)
                 {
                     extra_data.resize(ev.length * sizeof(ui32));
@@ -1240,7 +1244,7 @@ namespace netxs::x11
         }
         auto parse_error(x11::event::any& ev)
         {
-            auto& err = *netxs::start_lifetime_as<x11::event::error>(&ev);
+            auto err = netxs::start_lifetime_as<x11::event::error>(ev);
             log(get_error(err));
             auto is_reply = faux;
             {
@@ -1260,12 +1264,22 @@ namespace netxs::x11
         auto str() const
         {
             if (roots.empty()) return "no screen roots"s;
-            auto str = utf::fprint("%%Connected: id_base/mask=%%/%% root_window_id=0x%% screens=%% vendor='%%'\n", prompt::x11,
-                utf::to_hex(s.resource_id_base),
-                utf::to_hex(s.resource_id_mask),
-                utf::to_hex(roots.front().s.root_window_id),
-                (si32)s.number_of_screens,
-                utf::debase<faux, faux>(vendor_str));
+            auto str = utf::fprint(prompt::x11, "Connected:"
+                "\n                id_base/mask: ",   utf::to_hex(s.resource_id_base), '/', utf::to_hex(s.resource_id_mask),
+                "\n              root_window_id: 0x", utf::to_hex(roots.front().s.root_window_id),
+                "\n          motion_buffer_size: ",   s.motion_buffer_size,
+                "\n               vendor_length: ",   s.vendor_length,
+                "\n                      vendor: '",  utf::debase<faux, faux>(vendor_str), '\'',
+                "\n      maximum_request_length: ",   s.maximum_request_length,
+                "\n           number_of_screens: ",   (si32)s.number_of_screens,
+                "\n           number_of_formats: ",   (si32)s.number_of_formats,
+                "\n            image_byte_order: ",   (si32)s.image_byte_order,
+                "\n     bitmap_format_bit_order: ",   (si32)s.bitmap_format_bit_order,
+                "\n bitmap_format_scanline_unit: ",   (si32)s.bitmap_format_scanline_unit,
+                "\n  bitmap_format_scanline_pad: ",   (si32)s.bitmap_format_scanline_pad,
+                "\n                 min_keycode: ",   (si32)s.min_keycode,
+                "\n                 max_keycode: ",   (si32)s.max_keycode,
+                "\n");
             str += pixmap_formats.size() ? utf::fprint("    pixmap_formats(%%):\n", pixmap_formats.size()) : "    no pixmap_formats\n";
             for (auto& format : pixmap_formats)
             {
@@ -1276,23 +1290,23 @@ namespace netxs::x11
             for (auto& root : roots)
             {
                 auto& sc = root.s;
-                str += utf::fprint("     root_window_id=0x"      , utf::to_hex(sc.root_window_id),
-                                    "\n\t default_colormap="     , sc.default_colormap,
-                                    "\n\t white_pixel=0x"        , utf::to_hex(sc.white_pixel),
-                                    "\n\t black_pixel=0x"        , utf::to_hex(sc.black_pixel),
-                                    "\n\t current_input_masks=0x", utf::to_hex(sc.current_input_masks),
-                                    "\n\t width_in_pixels="      , sc.width_in_pixels,
-                                    "\n\t height_in_pixels="     , sc.height_in_pixels,
-                                    "\n\t width_in_millimeters=" , sc.width_in_millimeters,
-                                    "\n\t height_in_millimeters=", sc.height_in_millimeters,
-                                    "\n\t min_installed_maps="   , sc.min_installed_maps,
-                                    "\n\t max_installed_maps="   , sc.max_installed_maps,
-                                    "\n\t root_visual=0x"        , utf::to_hex(sc.root_visual),
-                                    "\n\t backing_stores="       , (si32)sc.backing_stores,
-                                    "\n\t save_unders="          , (si32)sc.save_unders,
-                                    "\n\t root_depth="           , (si32)sc.root_depth,
-                                    "\n\t number_of_depths="     , (si32)sc.number_of_depths,
-                                    "\n");
+                str += utf::fprint("            root_window_id: 0x", utf::to_hex(sc.root_window_id),
+                                 "\n          default_colormap: "  , sc.default_colormap,
+                                 "\n               white_pixel: 0x", utf::to_hex(sc.white_pixel),
+                                 "\n               black_pixel: 0x", utf::to_hex(sc.black_pixel),
+                                 "\n       current_input_masks: 0x", utf::to_hex(sc.current_input_masks),
+                                 "\n           width_in_pixels: "  , sc.width_in_pixels,
+                                 "\n          height_in_pixels: "  , sc.height_in_pixels,
+                                 "\n      width_in_millimeters: "  , sc.width_in_millimeters,
+                                 "\n     height_in_millimeters: "  , sc.height_in_millimeters,
+                                 "\n        min_installed_maps: "  , sc.min_installed_maps,
+                                 "\n        max_installed_maps: "  , sc.max_installed_maps,
+                                 "\n               root_visual: 0x", utf::to_hex(sc.root_visual),
+                                 "\n            backing_stores: "  , (si32)sc.backing_stores,
+                                 "\n               save_unders: "  , (si32)sc.save_unders,
+                                 "\n                root_depth: "  , (si32)sc.root_depth,
+                                 "\n          number_of_depths: "  , (si32)sc.number_of_depths,
+                                 "\n");
                 str += root.list_of_depths.size() ? utf::fprint("\t   depths(%%):\n", root.list_of_depths.size()) : "        no depths\n";
                 for (auto& depth : root.list_of_depths)
                 {
@@ -1400,7 +1414,7 @@ namespace netxs::x11
                 }
                 else
                 {
-                    auto& err = *netxs::start_lifetime_as<x11::event::error>(&v_reply);
+                    auto err = netxs::start_lifetime_as<x11::event::error>(&v_reply);
                     errdetails = utf::fprint("\n\tFailed to receive %% version details (ext_major_opcode=%% ext_completion_event=%%)\n\t%%", extension_name, (si32)major_opcode, (si32)first_event, get_error(err));
                 }
             }
@@ -1430,7 +1444,7 @@ namespace netxs::x11
             cmsg->cmsg_len   = CMSG_LEN(sizeof(int));
             cmsg->cmsg_level = SOL_SOCKET;
             cmsg->cmsg_type  = SCM_RIGHTS;
-            *netxs::start_lifetime_as<fd_t>(CMSG_DATA(cmsg)) = shm_buffer_fd;
+            std::memcpy(&(CMSG_DATA(cmsg)), &shm_buffer_fd, sizeof(shm_buffer_fd));
             auto lock = std::lock_guard{ mutex };
             sequence_counter++;
             auto bytes_sent = ::sendmsg(x11connection->handle.w, &msg, 0);
@@ -1623,7 +1637,7 @@ namespace netxs::x11
             if constexpr (debugmode) log("%%reply_buff.size()=%% header.size()=%%", prompt::x11, reply_buff.size(), header.size());
             if (reply_buff.size() == header.size())
             {
-                auto& reply = *netxs::start_lifetime_as<x11::req::xi2::query_device::reply>(reply_buff.data());
+                auto reply = netxs::start_lifetime_as<x11::req::xi2::query_device::reply>(reply_buff.data());
                 if (reply.type == x11::event::Reply)
                 {
                     if constexpr (debugmode) log("Connected input devices: %%", reply.num_devices);
@@ -1640,7 +1654,7 @@ namespace netxs::x11
                                 log("%%Error: Broken device list", prompt::x11);
                                 break;
                             }
-                            auto& dev = *netxs::start_lifetime_as<x11::req::xi2::query_device::reply::device_info>(q.data());
+                            auto dev = netxs::start_lifetime_as<x11::req::xi2::query_device::reply::device_info>(q.data());
                             auto name_padded_len = ((size_t)dev.name_len + 3) & ~3;
                             auto total_dev_header_len = sizeof(x11::req::xi2::query_device::reply::device_info) + name_padded_len;
                             if (q.size() < total_dev_header_len)
@@ -1659,31 +1673,34 @@ namespace netxs::x11
                             for (auto c = 0u; c < dev.num_classes; ++c)
                             {
                                 if (q.size() >= sizeof(x11::req::xi2::event::device_changed::any_class))
-                                if (auto& any_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::any_class>(q.data()); q.size() >= any_cls.length * 4)
+                                if (auto any_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::any_class>(q.data()); q.size() >= any_cls.length * 4)
                                 {
                                     if (any_cls.type == x11::req::xi2::event::device_changed::KeyClass)
                                     {
-                                        auto& key_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::key_class>(q.data());
+                                        auto key_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::key_class>(q.data());
                                         //todo ...
                                         if constexpr (debugmode) log("\t  Key Class: num_keys=%%", key_cls.num_keys);
                                     }
                                     else if (any_cls.type == x11::req::xi2::event::device_changed::ButtonClass)
                                     {
-                                        auto& btn_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::button_class>(q.data());
+                                        auto btn_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::button_class>(q.data());
                                         //todo ...
                                         if constexpr (debugmode) log("\t  Button Class: num_buttons=%%", btn_cls.num_buttons);
                                     }
                                     else if (any_cls.type == x11::req::xi2::event::device_changed::ValuatorClass)
                                     {
-                                        auto& val_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::valuator_class>(q.data());
+                                        auto val_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::valuator_class>(q.data());
                                         if (target_dev.axes.size() <= val_cls.number) target_dev.axes.resize(val_cls.number + 1);
                                         auto& axis = target_dev.axes[val_cls.number];
                                         axis.last_val = val_cls.value.to_fp64();
-                                        if constexpr (debugmode) log("\t  Valuator Axis #%% last_val=%%", val_cls.number, axis.last_val);
+                                        axis.min_max  = { val_cls.min.to_fp64(), val_cls.max.to_fp64() };
+                                        axis.is_abs   = !val_cls.mode;
+                                        axis.dpi      = val_cls.resolution;
+                                        if constexpr (debugmode) log("\t  Valuator Axis #%% min_max: %% last_val: %% dpi: %% mode: %%", val_cls.number, axis.min_max, axis.last_val, val_cls.resolution, val_cls.mode ? "Relative":"Absolute");
                                     }
                                     else if (any_cls.type == x11::req::xi2::event::device_changed::ScrollClass)
                                     {
-                                        auto& scr_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::scroll_class>(q.data());
+                                        auto scr_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::scroll_class>(q.data());
                                         if (target_dev.axes.size() <= scr_cls.number) target_dev.axes.resize(scr_cls.number + 1);
                                         auto& axis = target_dev.axes[scr_cls.number];
                                         axis.is_scroll = true;
@@ -1693,7 +1710,7 @@ namespace netxs::x11
                                     }
                                     else if (any_cls.type == x11::req::xi2::event::device_changed::TouchClass)
                                     {
-                                        auto& tch_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::touch_class>(q.data());
+                                        auto tch_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::touch_class>(q.data());
                                         //todo ...
                                         if constexpr (debugmode) log("\t  Touch Class: mode='%%' num_touches=%%", tch_cls.mode ? "touchpad":"touchscreen", tch_cls.num_touches);
                                     }
@@ -1713,7 +1730,7 @@ namespace netxs::x11
                     auto offset = header.size();
                     header.resize(sizeof(x11::event::error));
                     x11connection->recv(header.data() + offset, header.size() - offset);
-                    auto& err = *netxs::start_lifetime_as<x11::event::error>(header.data());
+                    auto err = netxs::start_lifetime_as<x11::event::error>(header.data());
                     log("%%Failed to query devices: %%", prompt::x11, get_error(err));
                 }
             }
@@ -1754,23 +1771,25 @@ namespace netxs::x11
                 auto buffer = text(payload_size, '\0');
                 if (x11connection->recv(buffer.data(), buffer.size()).size() != buffer.size()) return faux;
                 auto q = qiew{ buffer };
-                auto behaviors_ptr = netxs::start_lifetime_as_array<x11::req::xkb::get_map::reply::key_behavior_info>(q.data(), reply.num_keys);
-                q.remove_prefix(reply.num_keys * 4);
+                auto offset = reply.num_keys * 4;
+                auto ptr = q.data();
                 for (auto i = 0u; i < reply.num_keys; ++i)
                 {
                     auto keycode = (byte)(reply.first_key + i);
                     auto& map_entry = key_map[keycode];
-                    auto& info = behaviors_ptr[i];
+                    auto info = netxs::start_lifetime_as<x11::req::xkb::get_map::reply::key_behavior_info>(q.data());
                     map_entry.num_groups = info.num_groups;
                     map_entry.width      = info.width;
                     auto total_syms_for_key = info.num_groups * info.width;
                     if (total_syms_for_key)
                     {
+                        auto total_syms_for_key_bytes = total_syms_for_key * 4;
                         map_entry.syms.resize(total_syms_for_key);
-                        if (q.size() < (size_t)total_syms_for_key * 4) break;
-                        std::memcpy(map_entry.syms.data(), q.data(), total_syms_for_key * 4);
-                        q.remove_prefix(total_syms_for_key * 4);
+                        if (q.size() < (size_t)total_syms_for_key_bytes) break;
+                        std::memcpy(map_entry.syms.data(), ptr + offset, total_syms_for_key_bytes);
+                        offset += total_syms_for_key_bytes;
                     }
+                    q.remove_prefix(sizeof(info));
                 }
                 return true;
             }

@@ -6717,11 +6717,12 @@ namespace netxs::gui
             auto& x11session = *x11::session_ptr;
             auto& x11connection = *x11session.x11connection;
             auto atom_wm_delete_window = ui32{};
-            auto read_buffer = text(32, '\0');
+            auto read_buffer = text(256, '\0'); // 256: Avoid SSO.
+            read_buffer.resize(32); // Classic read_buffer size.
             while (x11connection.recv(read_buffer.data(), read_buffer.size()).size() == read_buffer.size()) // size always =32.
             {
                 assert(read_buffer.size() == 32);
-                auto& ev = *reinterpret_cast<x11::event::any*>(read_buffer.data());
+                auto ev = netxs::start_lifetime_as<x11::event::any>(read_buffer.data());
                 auto type = ev.type & 0x7F;
                 if constexpr (debugmode) if (type != x11::event::GenericEvent) log("%%seq=%% event=%% (%%)", prompt::x11, ev.sequence, x11session.event_str(type), type);
                 switch (type)
@@ -6737,13 +6738,13 @@ namespace netxs::gui
                         break;
                     case x11::event::ConfigureNotify: // WM_WINDOWPOSCHANGED
                     {
-                        //auto& cfg = reinterpret_cast<x11::event::configure&>(ev);
+                        //auto cfg = netxs::start_lifetime_as<x11::event::configure>(read_buffer.data());
                         //check_window(twod{ cfg.x, cfg.y }); // Window move/resize.
                         break;
                     }
                     case x11::event::ClientMessage: // ?WM_CLOSE
                     {
-                        auto& msg = reinterpret_cast<x11::event::client_message&>(ev);
+                        auto msg = netxs::start_lifetime_as<x11::event::client_message>(read_buffer.data());
                         if (msg.data32[0] == atom_wm_delete_window)
                         {
                             sys_command(syscmd::close);
@@ -6752,7 +6753,7 @@ namespace netxs::gui
                     }
                     case x11::event::PropertyNotify: // Tracking refocus.
                     {
-                        auto& e = reinterpret_cast<x11::event::property_notify&>(ev);
+                        auto e = netxs::start_lifetime_as<x11::event::property_notify>(read_buffer.data());
                         if constexpr (debugmode) log("%%PropertyNotify atom=%%", prompt::x11, e.atom);
                         if (e.window_id == x11session.roots.front().s.root_window_id && e.atom == x11session.atom_active_window && e.state == 0)
                         {
@@ -6767,10 +6768,10 @@ namespace netxs::gui
                                     if constexpr (debugmode) log("get_property error");
                                     return;
                                 }
-                                auto& reply = reinterpret_cast<x11::req::get_property::reply const&>(ev);
+                                auto reply = netxs::start_lifetime_as<x11::req::get_property::reply>(ev);
                                 if (reply.format == 32 && reply.prop_type == 33 && reply.value_len > 0 && payload.size() >= 4)
                                 {
-                                    auto active_window = *reinterpret_cast<ui32 const*>(payload.data());
+                                    auto active_window = *(ui32 const*)payload.data();
                                     if constexpr (debugmode) log("%%  Got reply: refocus: active_window=0x%% seq=%%", prompt::x11, utf::to_hex(active_window), reply.sequence);
                                     //auto focus = active_window == fg_w || active_window == bg_w;
                                     //if (focus)
@@ -6843,32 +6844,32 @@ namespace netxs::gui
         {
             auto& session = *x11::session_ptr;
             if constexpr (debugmode) log("Beg ----------------------------------------");//, "Packet in hex:\n", utf::buffer_to_hex(packet, true));
-            auto& d = *reinterpret_cast<x11::req::xi2::event::base const*>(packet.data());
+            auto d = netxs::start_lifetime_as<x11::req::xi2::event::base>(packet.data());
             auto is_master = session.input_devices[d.deviceid].is_master;
             if constexpr (debugmode) log("XInput2: %% evtype=%% deviceid=%% is_master=%%", x11::req::xi2::event::names[d.evtype], d.evtype, d.deviceid, is_master);
 
             if (d.evtype == x11::req::xi2::event::DeviceChanged) // Layout changed? Mouse DPI changed?
             {
-                auto& dc = *reinterpret_cast<x11::req::xi2::event::device_changed const*>(packet.data());
+                auto dc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed>(packet.data());
                 if constexpr (debugmode) log("  XI_DeviceChanged: device=%% reason=%% classes=%%", dc.header.deviceid, dc.reason, dc.num_classes);
 
                 auto& dev = session.input_devices[dc.header.deviceid];
-                auto current_class_ptr = dc.classes_ptr();
+                auto current_class_ptr = (x11::req::xi2::event::device_changed::any_class const*)(packet.data() + sizeof(dc)); //dc.classes_ptr();
                 auto buffer_end_ptr = packet.data() + packet.size();
                 for (auto i = 0u; i < dc.num_classes; ++i)
                 {
-                    if (reinterpret_cast<char const*>(current_class_ptr) >= buffer_end_ptr) break;
+                    if ((char const*)current_class_ptr >= buffer_end_ptr) break;
                     switch (current_class_ptr->type)
                     {
                         case x11::req::xi2::event::device_changed::KeyClass: // Keybd props.
                         {
-                            auto& kc = *reinterpret_cast<x11::req::xi2::event::device_changed::key_class const*>(current_class_ptr);
+                            auto kc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::key_class>(current_class_ptr);
                             if constexpr (debugmode) log("\t KeyClass: source=%% total_keys=%%", kc.sourceid, kc.num_keys);
                             break;
                         }
                         case x11::req::xi2::event::device_changed::ButtonClass: // Mouse button count with names.
                         {
-                            auto& bc = *reinterpret_cast<x11::req::xi2::event::device_changed::button_class const*>(current_class_ptr);
+                            auto bc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::button_class>(current_class_ptr);
                             if constexpr (debugmode)
                             {
                                 log("\t ButtonClass: source=%% total_buttons=%%", bc.sourceid, bc.num_buttons);
@@ -6882,7 +6883,7 @@ namespace netxs::gui
                         }
                         case x11::req::xi2::event::device_changed::ValuatorClass: // axis props.
                         {
-                            auto& vc = *reinterpret_cast<x11::req::xi2::event::device_changed::valuator_class const*>(current_class_ptr);
+                            auto vc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::valuator_class>(current_class_ptr);
                             auto axis = vc.number;
                             auto mode = (ui32)vc.mode;
                             if ((si32)dev.axes.size() < axis + 1) dev.axes.resize(axis + 1);
@@ -6894,7 +6895,7 @@ namespace netxs::gui
                         }
                         case x11::req::xi2::event::device_changed::ScrollClass: // mouse wheel axis step.
                         {
-                            auto& sc = *reinterpret_cast<x11::req::xi2::event::device_changed::scroll_class const*>(current_class_ptr);
+                            auto sc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::scroll_class>(current_class_ptr);
                             auto is_vertical = sc.scroll_type == 1;
                             auto axis = sc.number;
                             if constexpr (debugmode) log("\t ScrollClass: axis=%% type=%%(%%) inc_step=%% flags=%%(%%)",
@@ -6909,19 +6910,19 @@ namespace netxs::gui
                         }
                         case x11::req::xi2::event::device_changed::TouchClass: // Touchpad properties.
                         {
-                            auto& tc = *reinterpret_cast<x11::req::xi2::event::device_changed::touch_class const*>(current_class_ptr);
+                            auto tc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::touch_class>(current_class_ptr);
                             if constexpr (debugmode) log("\t TouchClass: source=%% mode=%% (%%) max_simultaneous_touches=%%",
                                     tc.sourceid, tc.mode == 0 ? "Direct (TouchScreen)"sv : "Dependent (TouchPad)"sv, (ui32)tc.mode, tc.num_touches);
                             break;
                         }
                     }
-                    current_class_ptr = reinterpret_cast<x11::req::xi2::event::device_changed::any_class const*>(reinterpret_cast<char const*>(current_class_ptr) + current_class_ptr->length * 4);
+                    current_class_ptr = (x11::req::xi2::event::device_changed::any_class const*)((char const*)current_class_ptr + current_class_ptr->length * 4);
                 }
             }
             else if (d.evtype == x11::req::xi2::event::KeyPress
                   || d.evtype == x11::req::xi2::event::KeyRelease)
             {
-                auto& k = *reinterpret_cast<x11::req::xi2::event::km const*>(packet.data());
+                auto k = netxs::start_lifetime_as<x11::req::xi2::event::km>(packet.data());
                 auto is_pressed = d.evtype == x11::req::xi2::event::KeyPress;
                 auto s_keycode  = k.detail; // Native keycode.
                 auto repeated   = !!(k.flags & (1 << 16));
@@ -6962,7 +6963,7 @@ namespace netxs::gui
                   || d.evtype == x11::req::xi2::event::Motion)
             {
                 if (is_master) return true; // Ignore master devices.
-                auto& m = *reinterpret_cast<x11::req::xi2::event::km const*>(packet.data());
+                auto m = netxs::start_lifetime_as<x11::req::xi2::event::km>(packet.data());
                 auto& dev = session.input_devices[m.sourceid];
                 auto mouse_coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
                 //auto xi_mods = m.mods.effective;
@@ -6993,8 +6994,8 @@ namespace netxs::gui
                 //}
                 if (m.valuators_len > 0)
                 {
-                    auto mask_ptr = m.valuators_mask_ptr();
-                    auto data_ptr = m.valuators_data_ptr();
+                    auto mask_ptr = m.valuators_mask_ptr(packet.data());
+                    auto data_ptr = m.valuators_data_ptr(packet.data());
                     auto data_index = 0u;
                     auto mask = mask_ptr[0];
                     while (mask)
@@ -7002,7 +7003,7 @@ namespace netxs::gui
                         auto axis = std::countr_zero(mask);
                         auto axis_value = data_ptr[data_index++];
                         auto current_value = axis_value.to_fp64();
-                        if constexpr (debugmode) log("\t Axis %% changed to fx32=%%.%% fp64=%%", axis, axis_value.i, axis_value.f, current_value);
+                        if constexpr (debugmode) log("\t Axis %% changed to fp64=%%", axis, current_value);
                         auto& axis_info = dev.axes[axis];
                         if (axis_info.is_scroll) // Update scroll properties.
                         {
@@ -7021,14 +7022,14 @@ namespace netxs::gui
             else if (d.evtype == x11::req::xi2::event::Enter || d.evtype == x11::req::xi2::event::Leave)
             {
                 if (!is_master) return true; // Ignore slave devices.
-                auto& f = *reinterpret_cast<x11::req::xi2::event::focus const*>(packet.data());
+                auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
                 auto hover = d.evtype == x11::req::xi2::event::Enter;
                 if constexpr (debugmode) log("%%Hover: sourceid=%% mods=0x%% hover=%%", prompt::x11, f.sourceid, utf::to_hex(f.mods.effective), hover);
                 if (!hover) mouse_leave();
             }
             else if (d.evtype == x11::req::xi2::event::FocusIn || d.evtype == x11::req::xi2::event::FocusOut)
             {
-                auto& f = *reinterpret_cast<x11::req::xi2::event::focus const*>(packet.data());
+                auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
                 if constexpr (debugmode) log("%%Focus: sourceid=%% mods=0x%% focus=%%", prompt::x11, f.sourceid, utf::to_hex(f.mods.effective), (si32)f.focus);
                 focus_event(!!f.focus);
             }
