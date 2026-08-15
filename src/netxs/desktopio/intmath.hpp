@@ -249,6 +249,26 @@ namespace netxs
     using to_signed_t = std::conditional_t<(si64)std::numeric_limits<std::remove_reference_t<T>>::max() <= netxs::si16max, si16,
                         std::conditional_t<(si64)std::numeric_limits<std::remove_reference_t<T>>::max() <= netxs::si32max, si32, si64>>;
 
+    template<class T, class VoidPtr>
+    using match_const_t = std::conditional_t<std::is_const_v<std::remove_pointer_t<VoidPtr>>, const T, T>;
+
+    template<class T, class VoidPtr> requires std::is_pointer_v<VoidPtr>
+    [[nodiscard]] inline auto start_lifetime_as(VoidPtr p) noexcept
+    {
+        using TargetT = match_const_t<T, VoidPtr>;
+        auto mutable_p = const_cast<void*>(static_cast<void const*>(p));
+        ::new (mutable_p) unsigned char[sizeof(T)];
+        return std::launder(reinterpret_cast<TargetT*>(mutable_p));
+    }
+    template<class T, class VoidPtr> requires std::is_pointer_v<VoidPtr>
+    [[nodiscard]] inline auto start_lifetime_as_array(VoidPtr p, size_t n) noexcept
+    {
+        using TargetT = match_const_t<T, VoidPtr>;
+        auto mutable_p = const_cast<void*>(static_cast<void const*>(p));
+        ::new (mutable_p) unsigned char[sizeof(T) * n];
+        return std::launder(reinterpret_cast<TargetT*>(mutable_p));
+    }
+
     template<class T>
     auto& any_get_or(std::any const& value, T& fallback)
     {

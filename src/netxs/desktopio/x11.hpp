@@ -12,7 +12,7 @@ namespace netxs::x11
         using field_t = std::optional<ui32>;
         auto vmask = 0u;
         auto count = sizeof(payload) / sizeof(field_t);
-        auto field = reinterpret_cast<field_t const*>(&payload);
+        auto field = netxs::start_lifetime_as_array<field_t>(&payload, count);
         auto start = yield.size();
         yield += view{ (char*)&packet, sizeof(packet) };
         for (auto i = 0u; i < count; ++i)
@@ -24,7 +24,7 @@ namespace netxs::x11
                 vmask |= 1u << i;
             }
         }
-        auto& ref = *reinterpret_cast<std::decay_t<decltype(packet)>*>(yield.data() + start);
+        auto& ref = *netxs::start_lifetime_as<std::decay_t<decltype(packet)>>(yield.data() + start);
         ref.value_mask = vmask;
         ref.length     = sizeof(packet) / 4 + std::popcount(vmask);
     }
@@ -513,7 +513,7 @@ namespace netxs::x11
 
                         auto keys_ptr() const
                         {
-                            return reinterpret_cast<ui32 const*>(reinterpret_cast<char const*>(this) + 8);
+                            return (ui32 const*)(this + 1);
                         }
                     };
                     struct button_class // 1. ButtonClass (Mouse button count + buuton names (atoms)).
@@ -525,7 +525,7 @@ namespace netxs::x11
 
                         auto state_mask_ptr() const // Button state array.
                         {
-                            return reinterpret_cast<ui32 const*>(reinterpret_cast<char const*>(this) + 8);
+                            return (ui32 const*)(this + 1);
                         }
                         auto labels_ptr() const // Button name array (atom list).
                         {
@@ -573,7 +573,7 @@ namespace netxs::x11
 
                     auto classes_ptr() const
                     {
-                        return reinterpret_cast<any_class const*>(reinterpret_cast<char const*>(this) + sizeof(device_changed));
+                        return (any_class const*)(this + 1);
                     }
                 };
                 struct km // Keybd/Mouse
@@ -599,7 +599,7 @@ namespace netxs::x11
 
                     auto buttons_mask_ptr() const
                     {
-                        return reinterpret_cast<ui32 const*>(reinterpret_cast<char const*>(this) + sizeof(*this));
+                        return (ui32 const*)(this + 1);
                     }
                     auto valuators_mask_ptr() const
                     {
@@ -607,7 +607,7 @@ namespace netxs::x11
                     }
                     auto valuators_data_ptr() const
                     {
-                        return reinterpret_cast<fx32 const*>(valuators_mask_ptr() + valuators_len);
+                        return (fx32 const*)(valuators_mask_ptr() + valuators_len);
                     }
                 };
                 struct focus
@@ -709,6 +709,86 @@ namespace netxs::x11
                 ui16 length = 2;
                 ui16 device_id;         // 0: all_devices, 1: all_master_devices, or device_id.
                 ui16 pad = 0;
+            };
+        }
+        namespace xkb
+        {
+            struct query_version
+            {
+                struct reply
+                {
+                    byte status;         // 1: Reply
+                    byte xkb_opcode;     // 0: QueryVersion (XkbUseExtension = 0).
+                    ui16 sequence;
+                    ui32 length;         // Always 0.
+                    ui16 major_version;
+                    ui16 minor_version;
+                    ui32 pad[5];
+                };
+                byte major_opcode;      // xkb_major_opcode.
+                byte minor_opcode = 0;  // 0: QueryVersion (XkbUseExtension = 0).
+                ui16 length = 2;
+                ui16 client_major_version = 2;
+                ui16 client_minor_version = 2;
+            };
+            struct get_map
+            {
+                struct reply
+                {
+                    byte type;
+                    byte device_id;      // Device ID
+                    ui16 sequence;
+                    ui32 length;         // Payload len in quads.
+                    ui16 device_spec;
+                    ui16 present;        // Payload bitmask.
+                    ui16 first_type;
+                    ui16 num_types;
+                    byte first_key;      // Start key.
+                    byte num_keys;       // Key count.
+                    byte first_key_act;
+                    byte num_acts;
+                    byte first_key_behavior;
+                    byte num_behaviors;
+                    byte first_key_explicit;
+                    byte num_explicits;
+                    byte first_mod_map;
+                    byte num_mod_maps;
+                    byte first_vmod_map;
+                    byte num_vmod_maps;
+                    ui32 pad;
+                    // payload...
+                    struct key_behavior_info
+                    {
+                        byte behavior;
+                        byte num_groups;
+                        byte width;
+                        byte pad;
+                    };
+                };
+
+                byte major_opcode;    // xkb_major_opcode
+                byte minor_opcode = 8; // 8: XkbGetMap.
+                ui16 length       = 7;
+                ui16 deviceSpec   = 0x0100; // XkbUseCoreKbd (system keybd).
+                ui16 full         = 0x0002; // XkbKeySymsMask (only KeySym).
+                ui16 partial      = 0;
+                byte first_type   = 0;
+                byte num_types    = 0;
+                byte first_key    = 8;   // s.min_keycode.
+                byte num_keys     = 255; // s.max_keycode - s.min_keycode + 1 (all keys).
+                ui32 pad[6]       = {};
+
+                //byte first_key_act      = 0;
+                //byte num_acts           = 0;
+                //byte first_key_behavior = 0;
+                //byte num_behaviors      = 0;
+                //byte first_key_explicit = 0;
+                //byte num_explicit       = 0;
+                //byte first_mod_map      = 0;
+                //byte num_mod_maps       = 0;
+                //byte first_vmod_map     = 0;
+                //byte num_vmod_maps      = 0;
+                //ui16 pad1               = 0;
             };
         }
         struct noop // Opcode 127 (NoOperation).
@@ -1026,6 +1106,9 @@ namespace netxs::x11
 
         byte                                  xi2_major_opcode = 0;
 
+        byte                                  xkb_major_opcode = 0;
+        byte                                  xkb_first_event = 0;
+
         size_t                                current_frame_index = {};
         bool shm_ready_flag[2]   = { true, true }; // Buffer ready flags.
 
@@ -1043,6 +1126,14 @@ namespace netxs::x11
         ui16                    sequence_counter = 0; // Sent request counter.
 
         std::unordered_map<ui16, device_t> input_devices;
+
+        struct key_sym_map_t
+        {
+            byte num_groups = {};   // Layout count.
+            byte width = {};        // Modifiers count.
+            std::vector<ui32> syms; // size = num_groups * width.
+        };
+        std::array<key_sym_map_t, 256> key_map = {};
 
         session_t() = default;
         ~session_t()
@@ -1149,7 +1240,7 @@ namespace netxs::x11
         }
         auto parse_error(x11::event::any& ev)
         {
-            auto& err = reinterpret_cast<x11::event::error&>(ev);
+            auto& err = *netxs::start_lifetime_as<x11::event::error>(&ev);
             log(get_error(err));
             auto is_reply = faux;
             {
@@ -1309,7 +1400,7 @@ namespace netxs::x11
                 }
                 else
                 {
-                    auto& err = reinterpret_cast<x11::event::error&>(v_reply);
+                    auto& err = *netxs::start_lifetime_as<x11::event::error>(&v_reply);
                     errdetails = utf::fprint("\n\tFailed to receive %% version details (ext_major_opcode=%% ext_completion_event=%%)\n\t%%", extension_name, (si32)major_opcode, (si32)first_event, get_error(err));
                 }
             }
@@ -1339,7 +1430,7 @@ namespace netxs::x11
             cmsg->cmsg_len   = CMSG_LEN(sizeof(int));
             cmsg->cmsg_level = SOL_SOCKET;
             cmsg->cmsg_type  = SCM_RIGHTS;
-            *reinterpret_cast<fd_t*>(CMSG_DATA(cmsg)) = shm_buffer_fd;
+            *netxs::start_lifetime_as<fd_t>(CMSG_DATA(cmsg)) = shm_buffer_fd;
             auto lock = std::lock_guard{ mutex };
             sequence_counter++;
             auto bytes_sent = ::sendmsg(x11connection->handle.w, &msg, 0);
@@ -1532,7 +1623,7 @@ namespace netxs::x11
             if constexpr (debugmode) log("%%reply_buff.size()=%% header.size()=%%", prompt::x11, reply_buff.size(), header.size());
             if (reply_buff.size() == header.size())
             {
-                auto& reply = *reinterpret_cast<x11::req::xi2::query_device::reply const*>(reply_buff.data());
+                auto& reply = *netxs::start_lifetime_as<x11::req::xi2::query_device::reply>(reply_buff.data());
                 if (reply.type == x11::event::Reply)
                 {
                     if constexpr (debugmode) log("Connected input devices: %%", reply.num_devices);
@@ -1549,7 +1640,7 @@ namespace netxs::x11
                                 log("%%Error: Broken device list", prompt::x11);
                                 break;
                             }
-                            auto& dev = *reinterpret_cast<x11::req::xi2::query_device::reply::device_info const*>(q.data());
+                            auto& dev = *netxs::start_lifetime_as<x11::req::xi2::query_device::reply::device_info>(q.data());
                             auto name_padded_len = ((size_t)dev.name_len + 3) & ~3;
                             auto total_dev_header_len = sizeof(x11::req::xi2::query_device::reply::device_info) + name_padded_len;
                             if (q.size() < total_dev_header_len)
@@ -1568,23 +1659,23 @@ namespace netxs::x11
                             for (auto c = 0u; c < dev.num_classes; ++c)
                             {
                                 if (q.size() >= sizeof(x11::req::xi2::event::device_changed::any_class))
-                                if (auto& any_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::any_class const*>(q.data()); q.size() >= any_cls.length * 4)
+                                if (auto& any_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::any_class>(q.data()); q.size() >= any_cls.length * 4)
                                 {
                                     if (any_cls.type == x11::req::xi2::event::device_changed::KeyClass)
                                     {
-                                        auto& key_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::key_class const*>(q.data());
+                                        auto& key_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::key_class>(q.data());
                                         //todo ...
                                         if constexpr (debugmode) log("\t  Key Class: num_keys=%%", key_cls.num_keys);
                                     }
                                     else if (any_cls.type == x11::req::xi2::event::device_changed::ButtonClass)
                                     {
-                                        auto& btn_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::button_class const*>(q.data());
+                                        auto& btn_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::button_class>(q.data());
                                         //todo ...
                                         if constexpr (debugmode) log("\t  Button Class: num_buttons=%%", btn_cls.num_buttons);
                                     }
                                     else if (any_cls.type == x11::req::xi2::event::device_changed::ValuatorClass)
                                     {
-                                        auto& val_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::valuator_class const*>(q.data());
+                                        auto& val_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::valuator_class>(q.data());
                                         if (target_dev.axes.size() <= val_cls.number) target_dev.axes.resize(val_cls.number + 1);
                                         auto& axis = target_dev.axes[val_cls.number];
                                         axis.last_val = val_cls.value.to_fp64();
@@ -1592,7 +1683,7 @@ namespace netxs::x11
                                     }
                                     else if (any_cls.type == x11::req::xi2::event::device_changed::ScrollClass)
                                     {
-                                        auto& scr_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::scroll_class const*>(q.data());
+                                        auto& scr_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::scroll_class>(q.data());
                                         if (target_dev.axes.size() <= scr_cls.number) target_dev.axes.resize(scr_cls.number + 1);
                                         auto& axis = target_dev.axes[scr_cls.number];
                                         axis.is_scroll = true;
@@ -1602,7 +1693,7 @@ namespace netxs::x11
                                     }
                                     else if (any_cls.type == x11::req::xi2::event::device_changed::TouchClass)
                                     {
-                                        auto& tch_cls = *reinterpret_cast<x11::req::xi2::event::device_changed::touch_class const*>(q.data());
+                                        auto& tch_cls = *netxs::start_lifetime_as<x11::req::xi2::event::device_changed::touch_class>(q.data());
                                         //todo ...
                                         if constexpr (debugmode) log("\t  Touch Class: mode='%%' num_touches=%%", tch_cls.mode ? "touchpad":"touchscreen", tch_cls.num_touches);
                                     }
@@ -1622,7 +1713,7 @@ namespace netxs::x11
                     auto offset = header.size();
                     header.resize(sizeof(x11::event::error));
                     x11connection->recv(header.data() + offset, header.size() - offset);
-                    auto& err = *reinterpret_cast<x11::event::error const*>(header.data());
+                    auto& err = *netxs::start_lifetime_as<x11::event::error>(header.data());
                     log("%%Failed to query devices: %%", prompt::x11, get_error(err));
                 }
             }
@@ -1650,6 +1741,40 @@ namespace netxs::x11
                                                 .mask_len = 2,
                                                 .mask1    = event_mask_bits,
                                             });
+        }
+        auto load_keyboard_map()
+        {
+            sendrq(x11::req::xkb::get_map{ .major_opcode = xkb_major_opcode,
+                                           .first_key    = s.min_keycode,
+                                           .num_keys     = (byte)(s.max_keycode - s.min_keycode + 1) });
+            auto reply = x11::req::xkb::get_map::reply{};
+            if (x11connection->recv((char*)&reply, sizeof(reply)).size() == sizeof(reply))
+            {
+                auto payload_size = reply.length * 4;
+                auto buffer = text(payload_size, '\0');
+                if (x11connection->recv(buffer.data(), buffer.size()).size() != buffer.size()) return faux;
+                auto q = qiew{ buffer };
+                auto behaviors_ptr = netxs::start_lifetime_as_array<x11::req::xkb::get_map::reply::key_behavior_info>(q.data(), reply.num_keys);
+                q.remove_prefix(reply.num_keys * 4);
+                for (auto i = 0u; i < reply.num_keys; ++i)
+                {
+                    auto keycode = (byte)(reply.first_key + i);
+                    auto& map_entry = key_map[keycode];
+                    auto& info = behaviors_ptr[i];
+                    map_entry.num_groups = info.num_groups;
+                    map_entry.width      = info.width;
+                    auto total_syms_for_key = info.num_groups * info.width;
+                    if (total_syms_for_key)
+                    {
+                        map_entry.syms.resize(total_syms_for_key);
+                        if (q.size() < (size_t)total_syms_for_key * 4) break;
+                        std::memcpy(map_entry.syms.data(), q.data(), total_syms_for_key * 4);
+                        q.remove_prefix(total_syms_for_key * 4);
+                    }
+                }
+                return true;
+            }
+            return faux;
         }
     };
 
@@ -1809,9 +1934,10 @@ namespace netxs::x11
             {
                 auto& session = *session_ptr;
                 if (session.detect_argb_32bit())
-                if (session.detect_extension<x11::req::shm::query_version>("MIT-SHM", session.shm_major_opcode, session.shm_completion_event, 1, 2)) // MIT-SHM ver >= 1.2
-                if (session.detect_extension<x11::req::xfixes::query_version>("XFIXES", session.xfixes_major_opcode, session.xfixes_first_event, 2, 0)) // XFIXES ver >= 2.0
-                if (session.detect_extension<x11::req::xi2::query_version>("XInputExtension", session.xi2_major_opcode, byte{}, 2, 4)) // XInputExtension (XInput2) ver >= 2.4
+                if (session.detect_extension<x11::req::shm::query_version   >("MIT-SHM"        , session.shm_major_opcode, session.shm_completion_event, 1, 2)) // MIT-SHM ver >= 1.2
+                if (session.detect_extension<x11::req::xfixes::query_version>("XFIXES"         , session.xfixes_major_opcode, session.xfixes_first_event, 2, 0)) // XFIXES ver >= 2.0
+                if (session.detect_extension<x11::req::xi2::query_version   >("XInputExtension", session.xi2_major_opcode, byte{}, 2, 4)) // XInputExtension (XInput2) ver >= 2.4
+                if (session.detect_extension<x11::req::xkb::query_version   >("XKEYBOARD"      , session.xkb_major_opcode, session.xkb_first_event, 1, 0))
                 if (session.get_atoms())
                 {
                     if constexpr (debugmode) log(session.str());
