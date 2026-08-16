@@ -4345,7 +4345,6 @@ namespace netxs::gui
         void mouse_wheel(fp32 delta, bool hz)
         {
             if (delta == 0) return;
-            if (hz) delta = -delta;
             auto wheelfp = delta / wdelta; // Same code in system.hpp.
             if (whlacc * wheelfp < 0) whlacc = {}; // Reset accum if direction has changed.
             whlacc += wheelfp;
@@ -6350,7 +6349,7 @@ namespace netxs::gui
                     case WM_XBUTTONDOWN:      w->mouse_press(xbttn(wParam), true);               break;
                     case WM_XBUTTONUP:        w->mouse_press(xbttn(wParam), faux);               break;
                     case WM_MOUSEWHEEL:       w->mouse_wheel((fp32)hi(wParam), 0);               break;
-                    case WM_MOUSEHWHEEL:      w->mouse_wheel((fp32)hi(wParam), 1);               break;
+                    case WM_MOUSEHWHEEL:      w->mouse_wheel(-(fp32)hi(wParam), 1);              break;
                     case WM_CAPTURECHANGED:   w->mouse_catch_outside();                          break; // Catch outside clicks.
                     case WM_ACTIVATEAPP:      if (wParam == TRUE) w->window_make_focused();      break; // Do focus explicitly: Sometimes WM_SETFOCUS follows WM_ACTIVATEAPP, sometime not. explorer.exe gives us focus (w/o WM_SETFOCUS) when other window minimizing.
                     case WM_SETFOCUS:         if (wParam != (arch)hWnd) w->focus_event(true);    break; // Don't refocus. ::SetFocus calls twice wnd_proc(WM_KILLFOCUS+WM_SETFOCUS).
