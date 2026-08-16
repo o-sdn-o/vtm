@@ -1089,6 +1089,7 @@ namespace netxs::x11
                 bool is_scroll{};
             };
             std::vector<axis_t> axes;
+            text name;
             ui32 min_keycode{};
             ui32 max_keycode{};
             std::vector<ui32> pressed_buttons;
@@ -1648,6 +1649,110 @@ namespace netxs::x11
                                             x11::req::configure_window::payload{ .x = (ui16)coor.x,
                                                                                  .y = (ui16)coor.y });
         }
+        auto sync_device_classes(ui16 num_classes, view& q)
+        {
+            for (auto c = 0u; c < num_classes; ++c)
+            {
+                if (q.size() >= sizeof(x11::req::xi2::event::device_changed::any_class))
+                if (auto any_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::any_class>(q.data()); q.size() >= any_cls.length * 4)
+                {
+                    if (any_cls.type == x11::req::xi2::event::device_changed::KeyClass)
+                    {
+                        auto key_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::key_class>(q.data());
+                        auto& dev = input_devices[key_cls.sourceid];
+                        auto min_keycode = 0xFFFFFFFFu;
+                        auto max_keycode = 0u;
+                        auto keys_data_ptr = q.data() + sizeof(x11::req::xi2::event::device_changed::key_class);
+                        if (q.size() >= sizeof(x11::req::xi2::event::device_changed::key_class) + (key_cls.num_keys * sizeof(ui32)))
+                        {
+                            for (auto k = 0u; k < key_cls.num_keys; ++k)
+                            {
+                                auto keycode = 0u;
+                                std::memcpy(&keycode, keys_data_ptr + (k * sizeof(ui32)), sizeof(ui32));
+                                //if constexpr (debugmode) log<faux>("key%%=%% ", k, keycode);
+                                if (keycode)
+                                {
+                                    if (keycode < min_keycode) min_keycode = keycode;
+                                    if (keycode > max_keycode) max_keycode = keycode;
+                                }
+                            }
+                            dev.min_keycode = min_keycode;
+                            dev.max_keycode = max_keycode;
+                        }
+                        if constexpr (debugmode) log("\t  Key Class: dev_id=%% '%%' num_keys: %% (Range: %%-%%)", key_cls.sourceid, dev.name,
+                                key_cls.num_keys, min_keycode == 0xFFFFFFFF ? 0 : min_keycode, max_keycode);
+                    }
+                    else if (any_cls.type == x11::req::xi2::event::device_changed::ButtonClass)
+                    {
+                        auto btn_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::button_class>(q.data());
+                        auto& dev = input_devices[btn_cls.sourceid];
+                        if constexpr (debugmode) log("\t  Button Class: dev_id=%% '%%' num_buttons: %%", btn_cls.sourceid, dev.name, btn_cls.num_buttons);
+                        auto mask_words = ((size_t)btn_cls.num_buttons + 31) / 32;
+                        auto dynamic_payload_bytes = (mask_words * sizeof(ui32)) + (btn_cls.num_buttons * sizeof(ui32));
+                        if (q.size() >= sizeof(x11::req::xi2::event::device_changed::button_class) + dynamic_payload_bytes)
+                        {
+                            auto state_ptr = btn_cls.state_mask_ptr(q.data());
+                            dev.pressed_buttons.reserve(mask_words);
+                            for (auto word_idx = 0u; word_idx < mask_words; ++word_idx)
+                            {
+                                auto mask_word = netxs::start_lifetime_as<ui32>(state_ptr + word_idx);
+                                dev.pressed_buttons.push_back(mask_word);
+                            }
+                            if constexpr (debugmode)
+                            {
+                                auto labels_ptr = btn_cls.labels_ptr(q.data());
+                                for (auto b = 0u; b < btn_cls.num_buttons; ++b)
+                                {
+                                    auto button_atom = netxs::start_lifetime_as<ui32>(labels_ptr + b);
+                                    auto word_idx = b / 32;
+                                    auto bit_idx = b % 32;
+                                    auto mask_word = netxs::start_lifetime_as<ui32>(state_ptr + word_idx);
+                                    auto is_pressed = (mask_word & (1u << bit_idx)) != 0;
+                                    log("\t    Button #%% Atom ID: %% [%%]",
+                                            b + 1, button_atom, is_pressed ? "Pressed" : "Released");
+                                }
+                            }
+                        }
+                    }
+                    else if (any_cls.type == x11::req::xi2::event::device_changed::ValuatorClass)
+                    {
+                        auto val_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::valuator_class>(q.data());
+                        auto& dev = input_devices[val_cls.sourceid];
+                        if (dev.axes.size() <= val_cls.number) dev.axes.resize(val_cls.number + 1);
+                        auto& axis = dev.axes[val_cls.number];
+                        axis.last_val = val_cls.value.to_fp64();
+                        axis.min_max  = { val_cls.min.to_fp64(), val_cls.max.to_fp64() };
+                        axis.is_abs   = !val_cls.mode;
+                        axis.dpi      = val_cls.resolution;
+                        if constexpr (debugmode) log("\t  Valuator Axis: dev_id=%% '%%' axis: %% min_max: %% last_val: %% dpi: %% mode: %%", val_cls.sourceid, dev.name, val_cls.number, axis.min_max, axis.last_val, val_cls.resolution, val_cls.mode ? "Relative":"Absolute");
+                    }
+                    else if (any_cls.type == x11::req::xi2::event::device_changed::ScrollClass)
+                    {
+                        auto scr_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::scroll_class>(q.data());
+                        auto& dev = input_devices[scr_cls.sourceid];
+                        if (dev.axes.size() <= scr_cls.number) dev.axes.resize(scr_cls.number + 1);
+                        auto& axis = dev.axes[scr_cls.number];
+                        axis.is_scroll = true;
+                        axis.vertical  = scr_cls.scroll_type == x11::req::xi2::event::device_changed::scroll_class::Vertical;
+                        axis.inc_step  = scr_cls.inc_step.to_fp64();
+                        if constexpr (debugmode) log("\t  Scroll Axis: dev_id=%% '%%' axis: %% type: %% step: %%", scr_cls.sourceid, dev.name, scr_cls.number, axis.vertical ? "Vertical" : "Horizontal", axis.inc_step);
+                    }
+                    else if (any_cls.type == x11::req::xi2::event::device_changed::TouchClass)
+                    {
+                        auto tch_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::touch_class>(q.data());
+                        auto& dev = input_devices[tch_cls.sourceid];
+                        dev.touch_mode  = tch_cls.mode;
+                        dev.num_touches = tch_cls.num_touches;
+                        if constexpr (debugmode) log("\t  Touch Class: dev_id=%% '%%' mode: '%%' num_touches: %%", tch_cls.sourceid, dev.name, tch_cls.mode ? "touchpad":"touchscreen", tch_cls.num_touches);
+                    }
+                    q.remove_prefix(any_cls.length * 4);
+                    continue;
+                }
+                log("%%Error: Unexpected buffer end", prompt::x11);
+                q = {};
+                break;
+            }
+        }
         auto query_devices()
         {
             sendrq(x11::req::xi2::query_device{ .major_opcode = xi2_major_opcode,
@@ -1686,106 +1791,11 @@ namespace netxs::x11
                             auto name = q.substr(0, dev.name_len);
                             q.remove_prefix(name_padded_len);
                             auto& target_dev = input_devices[dev.deviceid];
+                            target_dev.name = name;
                             target_dev.is_master = dev.use == x11::req::xi2::MasterPointer
                                                 || dev.use == x11::req::xi2::MasterKeyboard;
                             if constexpr (debugmode) log("\tDeviceID=%% Name='%%' Classes=%% is_master=%%", dev.deviceid, name, dev.num_classes, target_dev.is_master);
-                            target_dev.axes.clear();
-                            for (auto c = 0u; c < dev.num_classes; ++c)
-                            {
-                                if (q.size() >= sizeof(x11::req::xi2::event::device_changed::any_class))
-                                if (auto any_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::any_class>(q.data()); q.size() >= any_cls.length * 4)
-                                {
-                                    if (any_cls.type == x11::req::xi2::event::device_changed::KeyClass)
-                                    {
-                                        auto key_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::key_class>(q.data());
-                                        auto min_keycode = 0xFFFFFFFFu;
-                                        auto max_keycode = 0u;
-                                        auto keys_data_ptr = q.data() + sizeof(x11::req::xi2::event::device_changed::key_class);
-                                        if (q.size() >= sizeof(x11::req::xi2::event::device_changed::key_class) + (key_cls.num_keys * sizeof(ui32)))
-                                        {
-                                            for (auto k = 0u; k < key_cls.num_keys; ++k)
-                                            {
-                                                auto keycode = 0u;
-                                                std::memcpy(&keycode, keys_data_ptr + (k * sizeof(ui32)), sizeof(ui32));
-                                                if constexpr (debugmode) log<faux>("key%%=%% ", k, keycode);
-                                                if (keycode)
-                                                {
-                                                    if (keycode < min_keycode) min_keycode = keycode;
-                                                    if (keycode > max_keycode) max_keycode = keycode;
-                                                }
-                                            }
-                                            target_dev.min_keycode = min_keycode;
-                                            target_dev.max_keycode = max_keycode;
-                                        }
-                                        if constexpr (debugmode) log("\t  Key Class: num_keys=%% (Range: %%-%%)",
-                                                key_cls.num_keys, min_keycode == 0xFFFFFFFF ? 0 : min_keycode, max_keycode);
-                                    }
-                                    else if (any_cls.type == x11::req::xi2::event::device_changed::ButtonClass)
-                                    {
-                                        auto btn_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::button_class>(q.data());
-                                        if constexpr (debugmode) log("\t  Button Class: num_buttons=%%", btn_cls.num_buttons);
-                                        auto mask_words = ((size_t)btn_cls.num_buttons + 31) / 32;
-                                        auto dynamic_payload_bytes = (mask_words * sizeof(ui32)) + (btn_cls.num_buttons * sizeof(ui32));
-                                        if (q.size() >= sizeof(x11::req::xi2::event::device_changed::button_class) + dynamic_payload_bytes)
-                                        {
-                                            auto state_ptr = btn_cls.state_mask_ptr(q.data());
-                                            target_dev.pressed_buttons.reserve(mask_words);
-                                            for (auto word_idx = 0u; word_idx < mask_words; ++word_idx)
-                                            {
-                                                auto mask_word = netxs::start_lifetime_as<ui32>(state_ptr + word_idx);
-                                                target_dev.pressed_buttons.push_back(mask_word);
-                                            }
-                                            if constexpr (debugmode)
-                                            {
-                                                auto labels_ptr = btn_cls.labels_ptr(q.data());
-                                                for (auto b = 0u; b < btn_cls.num_buttons; ++b)
-                                                {
-                                                    auto button_atom = netxs::start_lifetime_as<ui32>(labels_ptr + b);
-                                                    auto word_idx = b / 32;
-                                                    auto bit_idx = b % 32;
-                                                    auto mask_word = netxs::start_lifetime_as<ui32>(state_ptr + word_idx);
-                                                    auto is_pressed = (mask_word & (1u << bit_idx)) != 0;
-                                                    log("\t    Button #%% Atom ID: %% [State: %%]",
-                                                            b + 1, button_atom, is_pressed ? "Pressed" : "Released");
-                                                }
-                                            }
-                                        }
-                                    }
-                                    else if (any_cls.type == x11::req::xi2::event::device_changed::ValuatorClass)
-                                    {
-                                        auto val_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::valuator_class>(q.data());
-                                        if (target_dev.axes.size() <= val_cls.number) target_dev.axes.resize(val_cls.number + 1);
-                                        auto& axis = target_dev.axes[val_cls.number];
-                                        axis.last_val = val_cls.value.to_fp64();
-                                        axis.min_max  = { val_cls.min.to_fp64(), val_cls.max.to_fp64() };
-                                        axis.is_abs   = !val_cls.mode;
-                                        axis.dpi      = val_cls.resolution;
-                                        if constexpr (debugmode) log("\t  Valuator Axis #%% min_max: %% last_val: %% dpi: %% mode: %%", val_cls.number, axis.min_max, axis.last_val, val_cls.resolution, val_cls.mode ? "Relative":"Absolute");
-                                    }
-                                    else if (any_cls.type == x11::req::xi2::event::device_changed::ScrollClass)
-                                    {
-                                        auto scr_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::scroll_class>(q.data());
-                                        if (target_dev.axes.size() <= scr_cls.number) target_dev.axes.resize(scr_cls.number + 1);
-                                        auto& axis = target_dev.axes[scr_cls.number];
-                                        axis.is_scroll = true;
-                                        axis.vertical  = scr_cls.scroll_type == x11::req::xi2::event::device_changed::scroll_class::Vertical;
-                                        axis.inc_step  = scr_cls.inc_step.to_fp64();
-                                        if constexpr (debugmode) log("\t  Scroll Axis #%% type=%% step=%%", scr_cls.number, axis.vertical ? "Vertical" : "Horizontal", axis.inc_step);
-                                    }
-                                    else if (any_cls.type == x11::req::xi2::event::device_changed::TouchClass)
-                                    {
-                                        auto tch_cls = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::touch_class>(q.data());
-                                        target_dev.touch_mode  = tch_cls.mode;
-                                        target_dev.num_touches = tch_cls.num_touches;
-                                        if constexpr (debugmode) log("\t  Touch Class: mode='%%' num_touches=%%", tch_cls.mode ? "touchpad":"touchscreen", tch_cls.num_touches);
-                                    }
-                                    q.remove_prefix(any_cls.length * 4);
-                                    continue;
-                                }
-                                log("%%Error: Unexpected buffer end", prompt::x11);
-                                q = {};
-                                break;
-                            }
+                            sync_device_classes(dev.num_classes, q);
                         }
                         return true;
                     }

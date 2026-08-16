@@ -4345,6 +4345,7 @@ namespace netxs::gui
         void mouse_wheel(fp32 delta, bool hz)
         {
             if (delta == 0) return;
+            if (hz) delta = -delta;
             auto wheelfp = delta / wdelta; // Same code in system.hpp.
             if (whlacc * wheelfp < 0) whlacc = {}; // Reset accum if direction has changed.
             whlacc += wheelfp;
@@ -6349,7 +6350,7 @@ namespace netxs::gui
                     case WM_XBUTTONDOWN:      w->mouse_press(xbttn(wParam), true);               break;
                     case WM_XBUTTONUP:        w->mouse_press(xbttn(wParam), faux);               break;
                     case WM_MOUSEWHEEL:       w->mouse_wheel((fp32)hi(wParam), 0);               break;
-                    case WM_MOUSEHWHEEL:      w->mouse_wheel(-(fp32)hi(wParam), 1);              break;
+                    case WM_MOUSEHWHEEL:      w->mouse_wheel((fp32)hi(wParam), 1);               break;
                     case WM_CAPTURECHANGED:   w->mouse_catch_outside();                          break; // Catch outside clicks.
                     case WM_ACTIVATEAPP:      if (wParam == TRUE) w->window_make_focused();      break; // Do focus explicitly: Sometimes WM_SETFOCUS follows WM_ACTIVATEAPP, sometime not. explorer.exe gives us focus (w/o WM_SETFOCUS) when other window minimizing.
                     case WM_SETFOCUS:         if (wParam != (arch)hWnd) w->focus_event(true);    break; // Don't refocus. ::SetFocus calls twice wnd_proc(WM_KILLFOCUS+WM_SETFOCUS).
@@ -6846,90 +6847,26 @@ namespace netxs::gui
             if constexpr (debugmode) log("Beg ----------------------------------------");//, "Packet in hex:\n", utf::buffer_to_hex(packet, true));
             auto d = netxs::start_lifetime_as<x11::req::xi2::event::base>(packet.data());
             auto is_master = session.input_devices[d.deviceid].is_master;
-            if constexpr (debugmode) log("XInput2: %% evtype=%% deviceid=%% is_master=%%", x11::req::xi2::event::names[d.evtype], d.evtype, d.deviceid, is_master);
+            if constexpr (debugmode) log("XInput2: %% evtype=%% deviceid=%% '%%' is_master=%%", x11::req::xi2::event::names[d.evtype], d.evtype, d.deviceid, session.input_devices[d.deviceid].name, is_master);
 
             if (d.evtype == x11::req::xi2::event::DeviceChanged) // Layout changed? Mouse DPI changed?
             {
                 auto dc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed>(packet.data());
-                if constexpr (debugmode) log("  XI_DeviceChanged: device=%% reason=%%(%%) classes=%% sourceid=%%",//\n packet:\n%%",
-                    dc.header.deviceid,
+                if constexpr (debugmode) log("  DeviceChanged: deviceid=%% '%%' reason=%%(%%) classes=%% source_dev_id=%% '%%'",//\n packet:\n%%",
+                    dc.header.deviceid, session.input_devices[dc.header.deviceid].name,
                     dc.reason == x11::req::xi2::event::device_changed::SlaveSwitch ? "SlaveSwitch" : (dc.reason == x11::req::xi2::event::device_changed::DeviceChange ? "DeviceChange" : "unknown"), (si32)dc.reason,
-                    dc.num_classes, dc.sourceid);//, utf::buffer_to_hex(packet, true));
-
-                auto& dev = session.input_devices[dc.header.deviceid];
-                auto current_class_ptr = (x11::req::xi2::event::device_changed::any_class const*)(packet.data() + sizeof(dc)); //dc.classes_ptr();
-                auto buffer_end_ptr = packet.data() + packet.size();
-                for (auto i = 0u; i < dc.num_classes; ++i)
+                    dc.num_classes, dc.sourceid, session.input_devices[dc.sourceid].name);//, utf::buffer_to_hex(packet, true));
+                if (dc.reason == x11::req::xi2::event::device_changed::DeviceChange) // Update physical device.
                 {
-                    if ((char const*)current_class_ptr >= buffer_end_ptr) break;
-                    switch (current_class_ptr->type)
-                    {
-                        case x11::req::xi2::event::device_changed::KeyClass: // Keybd props.
-                        {
-                            auto kc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::key_class>(current_class_ptr);
-                            //todo key range
-                            if constexpr (debugmode) log("\t KeyClass: source=%% total_keys=%%", kc.sourceid, kc.num_keys);
-                            break;
-                        }
-                        case x11::req::xi2::event::device_changed::ButtonClass: // Mouse button count with names.
-                        {
-                            auto bc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::button_class>(current_class_ptr);
-                            //todo pressed masks
-                            //todo atoms
-                            if constexpr (debugmode)
-                            {
-                                log("\t ButtonClass: source=%% total_buttons=%%", bc.sourceid, bc.num_buttons);
-                                auto labels_ptr = bc.labels_ptr((char const*)current_class_ptr);
-                                for(auto b = 0u; b < bc.num_buttons; ++b)
-                                {
-                                    log("\t    Button %% Atom ID: %%", b + 1, labels_ptr[b]);
-                                }
-                            }
-                            break;
-                        }
-                        case x11::req::xi2::event::device_changed::ValuatorClass: // axis props.
-                        {
-                            auto vc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::valuator_class>(current_class_ptr);
-                            auto axis = vc.number;
-                            auto mode = (ui32)vc.mode;
-                            if ((si32)dev.axes.size() < axis + 1) dev.axes.resize(axis + 1);
-                            auto& axis_info = dev.axes[axis];
-                            axis_info.is_scroll = faux; // Reset scroll axis properties.
-                            axis_info.last_val = vc.value.to_fp64();
-                            if constexpr (debugmode) log("\t ValuatorClass: axis=%% label=%% mode=%% last_val=%%", axis, vc.label, mode == x11::req::xi2::event::device_changed::Absolute ? "Absolute" : "Relative", axis_info.last_val);
-                            break;
-                        }
-                        case x11::req::xi2::event::device_changed::ScrollClass: // mouse wheel axis step.
-                        {
-                            auto sc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::scroll_class>(current_class_ptr);
-                            auto is_vertical = sc.scroll_type == 1;
-                            auto axis = sc.number;
-                            if constexpr (debugmode) log("\t ScrollClass: axis=%% type=%%(%%) inc_step=%% flags=%%(%%)",
-                                axis, is_vertical ? "Vertical" : "Horizontal", sc.scroll_type, sc.inc_step.to_fp64(),
-                                utf::to_hex(sc.flags), sc.flags == x11::req::xi2::event::device_changed::scroll_class::NoEmulation ? "ScrollNoEmulation" : (sc.flags == x11::req::xi2::event::device_changed::scroll_class::Preferred ? "ScrollPreferred" : "n/a"));
-                            if ((si32)dev.axes.size() < axis + 1) dev.axes.resize(axis + 1);
-                            auto& axis_info = dev.axes[axis]; // Update scroll properties.
-                            axis_info.is_scroll = true;
-                            axis_info.inc_step  = sc.inc_step.to_fp64();
-                            axis_info.vertical  = is_vertical;
-                            break;
-                        }
-                        case x11::req::xi2::event::device_changed::TouchClass: // Touchpad properties.
-                        {
-                            auto tc = netxs::start_lifetime_as<x11::req::xi2::event::device_changed::touch_class>(current_class_ptr);
-                            dev.touch_mode  = tc.mode;
-                            dev.num_touches = tc.num_touches;
-                            if constexpr (debugmode) log("\t TouchClass: source=%% mode=%% (%%) max_simultaneous_touches=%%",
-                                    tc.sourceid, tc.mode == 0 ? "Direct (TouchScreen)" : "Dependent (TouchPad)", (ui32)tc.mode, tc.num_touches);
-                            break;
-                        }
-                    }
-                    current_class_ptr = (x11::req::xi2::event::device_changed::any_class const*)((char const*)current_class_ptr + current_class_ptr->length * 4);
+                    packet.remove_prefix(sizeof(dc));
+                    session.input_devices[dc.sourceid].axes.clear();
+                    session.sync_device_classes(dc.num_classes, packet);
                 }
             }
             else if (d.evtype == x11::req::xi2::event::KeyPress
                   || d.evtype == x11::req::xi2::event::KeyRelease)
             {
+                if (is_master) return true; // Ignore master keyboard.
                 auto k = netxs::start_lifetime_as<x11::req::xi2::event::km>(packet.data());
                 auto is_pressed = d.evtype == x11::req::xi2::event::KeyPress;
                 auto s_keycode  = k.detail; // Native keycode.
@@ -6970,7 +6907,7 @@ namespace netxs::gui
                   || d.evtype == x11::req::xi2::event::ButtonRelease
                   || d.evtype == x11::req::xi2::event::Motion)
             {
-                if (is_master) return true; // Ignore master devices.
+                if (is_master) return true; // Ignore master mouse.
                 auto m = netxs::start_lifetime_as<x11::req::xi2::event::km>(packet.data());
                 auto& dev = session.input_devices[m.sourceid];
                 auto mouse_coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
@@ -7005,25 +6942,30 @@ namespace netxs::gui
                     auto mask_ptr = m.valuators_mask_ptr(packet.data());
                     auto data_ptr = m.valuators_data_ptr(packet.data());
                     auto data_index = 0u;
-                    auto mask = mask_ptr[0];
-                    while (mask)
+                    for (auto word_idx = 0u; word_idx < (ui32)m.valuators_len; ++word_idx)
                     {
-                        auto axis = std::countr_zero(mask);
-                        auto axis_value = data_ptr[data_index++];
-                        auto current_value = axis_value.to_fp64();
-                        if constexpr (debugmode) log("\t Axis %% changed to fp64=%%", axis, current_value);
-                        auto& axis_info = dev.axes[axis];
-                        if (axis_info.is_scroll) // Update scroll properties.
+                        auto mask = mask_ptr[word_idx];
+                        while (mask)
                         {
-                            auto delta = axis_info.last_val - current_value;
-                            wdelta = axis_info.inc_step;
-                            if (os::dtvt::wheelrate) delta *= os::dtvt::wheelrate;
-                            axis_info.last_val = current_value;
-                            axis_info.vertical ? mouse_wheel(delta, faux)
-                                               : mouse_wheel(delta, true);
-                            if constexpr (debugmode) log("\t delta=%% cur_val=%%", delta, current_value);
+                            auto bit_idx = std::countr_zero(mask);
+                            auto axis = (word_idx * 32) + bit_idx;
+                            auto axis_value = netxs::start_lifetime_as<fx32>(data_ptr + data_index);
+                            data_index++;
+                            auto current_value = axis_value.to_fp64();
+                            if constexpr (debugmode) log("\t Axis %% changed to fp64=%%", axis, current_value);
+                            if (dev.axes.size() <= axis) dev.axes.resize(axis + 1);
+                            auto& axis_info = dev.axes[axis];
+                            auto delta = std::exchange(axis_info.last_val, current_value) - current_value;
+                            if (axis_info.is_scroll)
+                            {
+                                wdelta = axis_info.inc_step;
+                                if (os::dtvt::wheelrate) delta *= os::dtvt::wheelrate;
+                                axis_info.vertical ? mouse_wheel(delta, faux)
+                                                   : mouse_wheel(delta, true);
+                                if constexpr (debugmode) log("\t delta=%% cur_val=%% (fullstep=%%)", delta, current_value, wdelta);
+                            }
+                            mask &= mask - 1;
                         }
-                        mask &= mask - 1;
                     }
                 }
             }
@@ -7032,13 +6974,14 @@ namespace netxs::gui
                 if (!is_master) return true; // Ignore slave devices.
                 auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
                 auto hover = d.evtype == x11::req::xi2::event::Enter;
-                if constexpr (debugmode) log("%%Hover: sourceid=%% mods=0x%% hover=%%", prompt::x11, f.sourceid, utf::to_hex(f.mods.effective), hover);
+                if constexpr (debugmode) log("%%Hover: sourceid=%% '%%' mods=0x%% hover=%%", prompt::x11, f.sourceid, utf::to_hex(f.mods.effective), hover);
                 if (!hover) mouse_leave();
             }
             else if (d.evtype == x11::req::xi2::event::FocusIn || d.evtype == x11::req::xi2::event::FocusOut)
             {
+                if (!is_master) return true; // Ignore slave devices.
                 auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
-                if constexpr (debugmode) log("%%Focus: sourceid=%% mods=0x%% focus=%%", prompt::x11, f.sourceid, utf::to_hex(f.mods.effective), (si32)f.focus);
+                if constexpr (debugmode) log("%%Focus: sourceid=%% '%%' mods=0x%% focus=%%", prompt::x11, f.sourceid, utf::to_hex(f.mods.effective), (si32)f.focus);
                 focus_event(!!f.focus);
             }
             if constexpr (debugmode) log("End ----------------------------------------");
