@@ -738,6 +738,54 @@ namespace netxs::x11
                 ui16 device_id;         // 0: all_devices, 1: all_master_devices, or device_id.
                 ui16 pad = 0;
             };
+            struct grab_device // Minor opcode 51.
+            {
+                static constexpr auto GrabModeSync  = 0;
+                static constexpr auto GrabModeAsync = 1;
+                static constexpr auto GrabModeTouch = 2;
+
+                static constexpr auto StatusGrabSuccess     = 0;
+                static constexpr auto StatusAlreadyGrabbed  = 1;
+                static constexpr auto StatusGrabInvalidTime = 2;
+                static constexpr auto StatusGrabNotViewable = 3;
+                static constexpr auto StatusGrabFrozen      = 4;
+
+                struct reply
+                {
+                    byte type;
+                    byte minor_opcode;
+                    ui16 sequence;
+                    ui32 length;
+                    byte status;
+                    byte pad[23];
+                };
+                byte major_opcode;      // xi2_major_opcode
+                byte minor_opcode = 51; // 51: GrabDevice
+                ui16 length = 7;        // Length in quads.
+                ui32 window_id;
+                ui32 time      = 0;     // 0: CurrentTime.
+                ui32 cursor_id = 0;
+                ui16 device_id;         // Virtual master pointer id.
+                byte grab_mode          = grab_device::GrabModeAsync;
+                byte paired_device_mode = grab_device::GrabModeAsync;;
+                byte owner_events = 0;  // 0: window_id is the only owner.
+                byte pad = {};
+                ui16 mask_len = 1;
+                // Payload:
+                ui32 mask = (1u << x11::req::xi2::event::Motion)
+                          | (1u << x11::req::xi2::event::ButtonPress)
+                          | (1u << x11::req::xi2::event::ButtonRelease)
+                          | (1u << x11::req::xi2::event::DeviceChanged);
+            };
+            struct ungrab_device // Minor opcode 52.
+            {
+                byte major_opcode;      // xi2_major_opcode
+                byte minor_opcode = 52; // 52: UngrabDevice
+                ui16 length       = 3;
+                ui32 time         = 0;
+                ui16 device_id;         // Virtual master pointer id.
+                ui16 pad          = {};
+            };
         }
         namespace xkb
         {
@@ -1243,8 +1291,9 @@ namespace netxs::x11
                 r.callback(ev, extra_data);
             }
         }
-        auto get_error(x11::event::error const& err)
+        auto get_error(x11::event::any const& ev)
         {
+            auto err = netxs::start_lifetime_as<x11::event::error>(ev);
             auto err_str = text{};
             switch (err.error_code)
             {
@@ -1275,12 +1324,11 @@ namespace netxs::x11
         }
         auto parse_error(x11::event::any& ev)
         {
-            auto err = netxs::start_lifetime_as<x11::event::error>(ev);
-            log(get_error(err));
+            log(get_error(ev));
             auto is_reply = faux;
             {
                 auto lock = std::lock_guard{ mutex };
-                is_reply = reply_callbacks.size() && reply_callbacks.front().sequence == err.sequence;
+                is_reply = reply_callbacks.size() && reply_callbacks.front().sequence == ev.sequence;
             }
             if (is_reply) // Forward broken request reply to handler.
             {
@@ -1445,8 +1493,8 @@ namespace netxs::x11
                 }
                 else
                 {
-                    auto err = netxs::start_lifetime_as<x11::event::error>(&v_reply);
-                    errdetails = utf::fprint("\n\tFailed to receive %% version details (ext_major_opcode=%% ext_completion_event=%%)\n\t%%", extension_name, (si32)major_opcode, (si32)first_event, get_error(err));
+                    auto ev = netxs::start_lifetime_as<x11::event::any>(&v_reply);
+                    errdetails = utf::fprint("\n\tFailed to receive %% version details (ext_major_opcode=%% ext_completion_event=%%)\n\t%%", extension_name, (si32)major_opcode, (si32)first_event, get_error(ev));
                 }
             }
             auto errmsg = utf::fprint("%%The required %% extension (or required min version %%.%%) is missing", prompt::x11, extension_name, required_major_version, required_minor_version);
@@ -1771,8 +1819,7 @@ namespace netxs::x11
                 {
                     if (ev.type == x11::event::Error)
                     {
-                        auto err = netxs::start_lifetime_as<x11::event::error>(ev);
-                        log("%%Failed to query devices: %%", prompt::x11, get_error(err));
+                        log("%%Failed to query devices: %%", prompt::x11, get_error(ev));
                     }
                     else
                     {

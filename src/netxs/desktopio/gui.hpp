@@ -3569,8 +3569,8 @@ namespace netxs::gui
         virtual bool keybd_read_media(si16 cmd, ui16 uDevice, ui16 dwKeys) = 0;
         virtual void keybd_reset_deadkey(arch hkl = {}) = 0;
 
-        virtual void mouse_capture(si32 captured_by) = 0;
-        virtual void mouse_release(si32 released_by) = 0;
+        virtual void mouse_capture_impl() = 0;
+        virtual void mouse_release_impl() = 0;
         virtual void mouse_catch_outside() = 0;
         virtual fp2d mouse_get_pos() = 0;
 
@@ -3591,6 +3591,22 @@ namespace netxs::gui
 
         virtual void sync_os_settings() = 0;
 
+        void mouse_capture(si32 captured_by)
+        {
+            if (!std::exchange(heldby, heldby | captured_by))
+            {
+                mouse_capture_impl();
+                if constexpr (debug_foci) log("captured by ", captured_by == by::mouse ? "mouse" : "keybd");
+            }
+        }
+        void mouse_release(si32 captured_by = -1)
+        {
+            if (std::exchange(heldby, heldby & ~captured_by) && !heldby)
+            {
+                if constexpr (debug_foci) log("released by ", captured_by == by::mouse ? "mouse" : captured_by == by::keybd ? "keybd" : "system");
+                mouse_release_impl();
+            }
+        }
         void mouse_normalize_wheeldt(fp32& wheelfp)
         {
             wheelfp /= wheel_delta_base / wdelta; // Disable system-wide acceleration.
@@ -6151,22 +6167,8 @@ namespace netxs::gui
         void window_shutdown()           { ::SendMessageW((HWND)master.hWnd, WM_CLOSE, NULL, NULL); }
         void window_cleanup()            { ::RemoveClipboardFormatListener((HWND)master.hWnd); ::PostQuitMessage(0); }
         fp2d mouse_get_pos()             { return fp2d{ winmsg.pt.x, winmsg.pt.y }; }
-        void mouse_capture(si32 captured_by)
-        {
-            if (!std::exchange(heldby, heldby | captured_by))
-            {
-                ::SetCapture((HWND)master.hWnd);
-                if constexpr (debug_foci) log("captured by ", captured_by == by::mouse ? "mouse" : "keybd");
-            }
-        }
-        void mouse_release(si32 captured_by = -1)
-        {
-            if (std::exchange(heldby, heldby & ~captured_by) && !heldby)
-            {
-                if constexpr (debug_foci) log("released by ", captured_by == by::mouse ? "mouse" : captured_by == by::keybd ? "keybd" : "system");
-                ::ReleaseCapture();
-            }
-        }
+        void mouse_capture_impl()        { ::SetCapture((HWND)master.hWnd); }
+        void mouse_release_impl()        { ::ReleaseCapture(); }
         void mouse_catch_outside()
         {
             auto ctrl_click = ctrl_pressed()                        // Detect Ctrl+LeftClick
@@ -6481,6 +6483,8 @@ namespace netxs::gui
     {
         text batch_buffer;
         fp2d current_mouse_pos;
+        ui16 master_pointer_id{};
+        ui16 captured_pointer_id{};
 
         window(auto&& ...Args)
             : winbase{ Args... }
@@ -6837,14 +6841,47 @@ namespace netxs::gui
         {
             return current_mouse_pos;
         }
-        void mouse_capture(si32 /*captured_by*/) {}
-        void mouse_release(si32 /*released_by*/) {}
+        void mouse_capture_impl()
+        {
+            captured_pointer_id = master_pointer_id;
+            if constexpr (debugmode)
+            {
+                x11::session_ptr->sendrq<x11::req::xi2::grab_device>({ .major_opcode = x11::session_ptr->xi2_major_opcode,
+                                                                       .window_id    = (ui32)master.hWnd,
+                                                                       .device_id    = master_pointer_id }, {},
+                [&](auto& ev, view /*payload*/)
+                {
+                    if (ev.type != x11::event::Error)
+                    {
+                        auto reply = netxs::start_lifetime_as<x11::req::xi2::grab_device::reply>(ev);
+                        log("%%  Grab device reply: status=%% (%%)", prompt::x11, (si32)reply.status,
+                            reply.status == x11::req::xi2::grab_device::StatusGrabSuccess     ? "StatusGrabSuccess"     :
+                            reply.status == x11::req::xi2::grab_device::StatusAlreadyGrabbed  ? "StatusAlreadyGrabbed"  :
+                            reply.status == x11::req::xi2::grab_device::StatusGrabInvalidTime ? "StatusGrabInvalidTime" :
+                            reply.status == x11::req::xi2::grab_device::StatusGrabNotViewable ? "StatusGrabNotViewable" :
+                            reply.status == x11::req::xi2::grab_device::StatusGrabFrozen      ? "StatusGrabFrozen"      : "unknown");
+                    }
+                });
+            }
+            else
+            {
+                x11::session_ptr->sendrq<x11::req::xi2::grab_device>({ .major_opcode = x11::session_ptr->xi2_major_opcode,
+                                                                       .window_id    = (ui32)master.hWnd,
+                                                                       .device_id    = master_pointer_id });
+            }
+        }
+        void mouse_release_impl()
+        {
+            x11::session_ptr->sendrq<x11::req::xi2::ungrab_device>({ .major_opcode = x11::session_ptr->xi2_major_opcode,
+                                                                     .device_id    = captured_pointer_id });
+        }
         void mouse_catch_outside() {}
         bool input_read(view packet)
         {
             auto& session = *x11::session_ptr;
             if constexpr (debugmode) log("Beg ----------------------------------------");//, "Packet in hex:\n", utf::buffer_to_hex(packet, true));
             auto d = netxs::start_lifetime_as<x11::req::xi2::event::base>(packet.data());
+            auto device_id = d.deviceid;
             auto is_master = session.input_devices[d.deviceid].is_master;
             if constexpr (debugmode) log("XInput2: %% evtype=%% deviceid=%% '%%' is_master=%%", x11::req::xi2::event::names[d.evtype], d.evtype, d.deviceid, session.input_devices[d.deviceid].name, is_master);
 
@@ -6952,7 +6989,8 @@ namespace netxs::gui
                   || d.evtype == x11::req::xi2::event::ButtonRelease
                   || d.evtype == x11::req::xi2::event::Motion)
             {
-                if (is_master) return true; // Ignore master mouse.
+                if (!is_master) return true; // Ignore slave mouse.
+                master_pointer_id = device_id;
                 auto m = netxs::start_lifetime_as<x11::req::xi2::event::km>(packet.data());
                 auto& dev = session.input_devices[m.sourceid];
                 auto mouse_coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
@@ -7017,6 +7055,7 @@ namespace netxs::gui
             else if (d.evtype == x11::req::xi2::event::Enter || d.evtype == x11::req::xi2::event::Leave)
             {
                 if (!is_master) return true; // Ignore slave devices.
+                master_pointer_id = device_id;
                 auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
                 auto hover = d.evtype == x11::req::xi2::event::Enter;
                 if constexpr (debugmode) log("%%Hover: sourceid=%% '%%' mods=0x%% hover=%%", prompt::x11, f.sourceid, utf::to_hex(f.mods.effective), hover);
@@ -7087,8 +7126,8 @@ namespace netxs::gui
         void window_cleanup() {}
         void window_set_title(view /*utf8*/) {}
         fp2d mouse_get_pos() { return fp2d{}; }
-        void mouse_capture(si32 /*captured_by*/) {}
-        void mouse_release(si32 /*released_by*/) {}
+        void mouse_capture_impl() {}
+        void mouse_release_impl() {}
         void mouse_catch_outside() {}
         void sync_os_settings() {}
     };
