@@ -649,10 +649,19 @@ namespace netxs::x11
                     kbmods   mods;
                     kblayout group;
                 };
-                struct hierarchy
+                struct hierarchy_changed
                 {
+                    static constexpr auto MasterAdded    = 1 << 0;
+                    static constexpr auto MasterDeleted  = 1 << 1;
+                    static constexpr auto SlaveAdded     = 1 << 2;
+                    static constexpr auto SlaveRemoved   = 1 << 3;
+                    static constexpr auto SlaveAttached  = 1 << 4;
+                    static constexpr auto SlaveDetached  = 1 << 5;
+                    static constexpr auto DeviceEnabled  = 1 << 6;
+                    static constexpr auto DeviceDisabled = 1 << 7;
+
                     base header;
-                    ui32 flags; // MasterAdded, MasterDeleted, SlaveAttached, SlaveDetached, SlaveAdded, SlaveRemoved, DeviceEnabled, DeviceDisabled.
+                    ui32 flags; // MasterAdded|MasterDeleted|SlaveAttached...
                     ui16 num_info;
                     ui16 pad0;
                     ui32 pad1;
@@ -665,7 +674,7 @@ namespace netxs::x11
                         byte use;        // MasterKeyboard, MasterPointer, ...
                         byte enabled;
                         ui16 pad;
-                        ui32 flags;      // MasterAdded, MasterRemoved, SlaveAttached, SlaveDetached, SlaveAdded, SlaveRemoved, DeviceEnabled, DeviceDisabled.
+                        ui32 flags;      // MasterAdded|MasterDeleted|SlaveAttached...
                     };
                 };
             }
@@ -1096,6 +1105,7 @@ namespace netxs::x11
             si32 touch_mode{};
             ui16 num_touches{};
             bool is_master{};
+            bool enabled{};
         };
 
         text                                  vendor_str;     // buffer[32..32+vendor_length] = vendor_str
@@ -1753,25 +1763,22 @@ namespace netxs::x11
                 break;
             }
         }
-        auto query_devices()
+        auto query_device(ui16 device_id)
         {
             sendrq(x11::req::xi2::query_device{ .major_opcode = xi2_major_opcode,
-                                                .device_id    = x11::req::xi2::dev_type::all_devices });
-            auto header = text(sizeof(x11::req::xi2::query_device::reply), '\0');
-            auto reply_buff = x11connection->recv(header.data(), header.size());
-            if constexpr (debugmode) log("%%reply_buff.size()=%% header.size()=%%", prompt::x11, reply_buff.size(), header.size());
-            if (reply_buff.size() == header.size())
-            {
-                auto reply = netxs::start_lifetime_as<x11::req::xi2::query_device::reply>(reply_buff.data());
-                if (reply.type == x11::event::Reply)
+                                                .device_id    = device_id }, {},
+                [&](auto& ev, qiew q)
                 {
-                    if constexpr (debugmode) log("Connected input devices: %%", reply.num_devices);
-                    if (reply.num_devices == 0) return true;
-                    auto buffer = text(reply.length * 4, '\0');
-                    if (x11connection->recv(buffer.data(), buffer.size()).size() == buffer.size())
+                    if (ev.type == x11::event::Error)
                     {
-                        //if constexpr (debugmode) log("Buffer:\n%%", utf::buffer_to_hex(buffer, true));
-                        auto q = qiew{ buffer };
+                        auto err = netxs::start_lifetime_as<x11::event::error>(ev);
+                        log("%%Failed to query devices: %%", prompt::x11, get_error(err));
+                    }
+                    else
+                    {
+                        auto reply = netxs::start_lifetime_as<x11::req::xi2::query_device::reply>(ev);
+                        if constexpr (debugmode) log("Connected input devices: %%", reply.num_devices);
+                        if (reply.num_devices)
                         while (q)
                         {
                             if (q.size() < sizeof(x11::req::xi2::query_device::reply::device_info))
@@ -1791,29 +1798,19 @@ namespace netxs::x11
                             auto name = q.substr(0, dev.name_len);
                             q.remove_prefix(name_padded_len);
                             auto& target_dev = input_devices[dev.deviceid];
-                            target_dev.name = name;
+                            target_dev.enabled   = dev.enabled;
+                            target_dev.name      = name;
                             target_dev.is_master = dev.use == x11::req::xi2::MasterPointer
                                                 || dev.use == x11::req::xi2::MasterKeyboard;
-                            if constexpr (debugmode) log("\tDeviceID=%% Name='%%' Classes=%% is_master=%%", dev.deviceid, name, dev.num_classes, target_dev.is_master);
+                            if constexpr (debugmode) log("\tdDeviceID=%% '%%' Classes=%% is_master=%%", dev.deviceid, name, dev.num_classes, target_dev.is_master);
                             sync_device_classes(dev.num_classes, q);
                         }
-                        return true;
                     }
-                }
-                else
-                {
-                    auto offset = header.size();
-                    header.resize(sizeof(x11::event::error));
-                    x11connection->recv(header.data() + offset, header.size() - offset);
-                    auto err = netxs::start_lifetime_as<x11::event::error>(header.data());
-                    log("%%Failed to query devices: %%", prompt::x11, get_error(err));
-                }
-            }
-            return faux;
+                });
         }
         void activate_xinput2(arch master_window_id)
         {
-            query_devices();
+            query_device(x11::req::xi2::dev_type::all_devices);
             auto event_mask_bits = 0u;
             event_mask_bits |= 1u << x11::req::xi2::event::KeyPress;
             event_mask_bits |= 1u << x11::req::xi2::event::KeyRelease;
@@ -1825,6 +1822,7 @@ namespace netxs::x11
             event_mask_bits |= 1u << x11::req::xi2::event::FocusIn;
             event_mask_bits |= 1u << x11::req::xi2::event::FocusOut;
             event_mask_bits |= 1u << x11::req::xi2::event::DeviceChanged;
+            event_mask_bits |= 1u << x11::req::xi2::event::HierarchyChanged;
             sendrq(x11::req::xi2::select_events{ .major_opcode = xi2_major_opcode,
                                                  .window_id    = (ui32)master_window_id, },
                                             x11::req::xi2::select_events::payload

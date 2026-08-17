@@ -6862,6 +6862,52 @@ namespace netxs::gui
                     session.sync_device_classes(dc.num_classes, packet);
                 }
             }
+            else if (d.evtype == x11::req::xi2::event::HierarchyChanged)
+            {
+                auto hc = netxs::start_lifetime_as<x11::req::xi2::event::hierarchy_changed>(packet.data());
+                if constexpr (debugmode) log("  HierarchyChanged: deviceid=%% '%%' info_count=%% flags=0x%%",//\n packet:\n%%",
+                    hc.header.deviceid, session.input_devices[hc.header.deviceid].name,
+                    hc.num_info, utf::to_hex(hc.flags));//, utf::buffer_to_hex(packet, true));
+
+                if (packet.size() >= sizeof(hc) + hc.num_info * sizeof(x11::req::xi2::event::hierarchy_changed::info))
+                {
+                    auto info_ptr = packet.data() + sizeof(hc);
+                    for (auto i = 0u; i < hc.num_info; ++i)
+                    {
+                        auto inf = netxs::start_lifetime_as<x11::req::xi2::event::hierarchy_changed::info>(info_ptr + (i * sizeof(x11::req::xi2::event::hierarchy_changed::info)));
+                        if constexpr (debugmode) log("\tdeviceid=%% attachment=%% use=%% enabled=%% flags=0x%%(%%)",
+                                inf.deviceid, inf.attachment, (ui32)inf.use, (ui32)inf.enabled, utf::to_hex(inf.flags),
+                                utf::concat(inf.flags & x11::req::xi2::event::hierarchy_changed::MasterAdded    ? "MasterAdded | "    : "",
+                                            inf.flags & x11::req::xi2::event::hierarchy_changed::MasterDeleted  ? "MasterDeleted | "  : "",
+                                            inf.flags & x11::req::xi2::event::hierarchy_changed::SlaveAdded     ? "SlaveAdded | "     : "",
+                                            inf.flags & x11::req::xi2::event::hierarchy_changed::SlaveRemoved   ? "SlaveRemoved | "   : "",
+                                            inf.flags & x11::req::xi2::event::hierarchy_changed::SlaveAttached  ? "SlaveAttached | "  : "",
+                                            inf.flags & x11::req::xi2::event::hierarchy_changed::SlaveDetached  ? "SlaveDetached | "  : "",
+                                            inf.flags & x11::req::xi2::event::hierarchy_changed::DeviceEnabled  ? "DeviceEnabled | "  : "",
+                                            inf.flags & x11::req::xi2::event::hierarchy_changed::DeviceDisabled ? "DeviceDisabled | " : ""));
+                        if (inf.flags & (x11::req::xi2::event::hierarchy_changed::MasterAdded | x11::req::xi2::event::hierarchy_changed::SlaveAdded))
+                        {
+                            session.query_device(inf.deviceid);
+                        }
+                        if (inf.flags & (x11::req::xi2::event::hierarchy_changed::MasterDeleted | x11::req::xi2::event::hierarchy_changed::SlaveRemoved))
+                        {
+                            session.input_devices.erase(inf.deviceid);
+                        }
+                        if (inf.flags & x11::req::xi2::event::hierarchy_changed::DeviceEnabled)
+                        {
+                            session.input_devices[inf.deviceid].enabled = true;
+                        }
+                        if (inf.flags & x11::req::xi2::event::hierarchy_changed::DeviceDisabled)
+                        {
+                            session.input_devices[inf.deviceid].enabled = faux;
+                        }
+                    }
+                }
+                else
+                {
+                    log("%%Error: HierarchyChanged packet payload truncated", prompt::x11);
+                }
+            }
             else if (d.evtype == x11::req::xi2::event::KeyPress
                   || d.evtype == x11::req::xi2::event::KeyRelease)
             {
