@@ -166,6 +166,12 @@ namespace netxs::x11
         };
         struct configure_window // Opcode 12 (configure window).
         {
+            static constexpr auto Above    = 0;
+            static constexpr auto Below    = 1;
+            static constexpr auto TopIf    = 2;
+            static constexpr auto BottomIf = 3;
+            static constexpr auto Opposite = 4;
+
             byte opcode = 12;
             byte pad1   = 0;
             ui16 length;
@@ -674,7 +680,7 @@ namespace netxs::x11
                     fx16 event_x;
                     fx16 event_y;
                     byte same_screen;
-                    byte focus;
+                    byte focus;       // Unspecified for FocusIn/Out events.
                     ui16 buttons_len; // Length of button mask in payload (in quads).
 
                     kbmods   mods;

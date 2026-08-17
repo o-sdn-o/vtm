@@ -6718,31 +6718,38 @@ namespace netxs::gui
         cont window_recv_command(arch /*lParam*/) { return cont{}; }
         void window_make_foreground()
         {
-            //if constexpr (debugmode) log("Try to make window foreground");
-            //window_make_focused_impl();
+            if constexpr (debugmode) log("Try to make window foreground");
+            for (auto& l : layers)
+            {
+                auto& p = l.get();
+                x11::session_ptr->accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)p.hWnd },
+                    x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
+            }
+            x11::session_ptr->accumrq(batch_buffer, x11::req::set_input_focus{ .window_id = (ui32)master.hWnd });
+            x11::session_ptr->x11connection->send(batch_buffer);
+            batch_buffer.clear();
         }
         void window_make_focused_impl()
         {
-            //todo
-            //if constexpr (debugmode)
-            //{
-            //    log("Try to set input focus");
-            //    x11::session_ptr->sendrq<x11::req::set_input_focus>({ .window_id = (ui32)master.hWnd }, {},
-            //        [&](auto& ev, view /*payload*/)
-            //        {
-            //            if (ev.type == x11::event::Error)
-            //            {
-            //                log("Failed to set focus");
-            //            }
-            //        });
-            //}
-            //else
-            //{
-            //    x11::session_ptr->sendrq<x11::req::set_input_focus>({ .window_id = (ui32)master.hWnd });
-            //    //x11::session_ptr->sendrq<x11::req::xi2::set_focus>({ .major_opcode = x11::session_ptr->xi2_major_opcode,
-            //    //                                                     .window_id    = (ui32)master.hWnd,
-            //    //                                                     .device_id    = 3 });//master_keybd_id });
-            //}
+            if constexpr (debugmode)
+            {
+                log("Try to set input focus");
+                x11::session_ptr->sendrq<x11::req::set_input_focus>({ .window_id = (ui32)master.hWnd }, {},
+                    [&](auto& ev, view /*payload*/)
+                    {
+                        if (ev.type == x11::event::Error)
+                        {
+                            log("Failed to set focus");
+                        }
+                    });
+            }
+            else
+            {
+                x11::session_ptr->sendrq<x11::req::set_input_focus>({ .window_id = (ui32)master.hWnd });
+                //x11::session_ptr->sendrq<x11::req::xi2::set_focus>({ .major_opcode = x11::session_ptr->xi2_major_opcode,
+                //                                                     .window_id    = (ui32)master.hWnd,
+                //                                                     .device_id    = 3 });//master_keybd_id });
+            }
         }
         void window_make_exposed() {}
         void window_make_topmost(bool) {}
@@ -7008,8 +7015,8 @@ namespace netxs::gui
                 if constexpr (debugmode)
                 {
                     log("%%sourceid=%% '%%' Key%%: keycode=%% mods=0x%% layout_idx=%% (Super:%% Shift:%%, Ctrl:%%, Alt:%% AltGr:%% Caps:%% Num:%% Scrl:%%)",
-                        k.sourceid, session.input_devices[k.sourceid].name,
-                        prompt::x11, is_pressed ? (repeated ? "Repeat" : "Press") : "Release", s_keycode,
+                        prompt::x11, k.sourceid, session.input_devices[k.sourceid].name,
+                        is_pressed ? (repeated ? "Repeat" : "Press") : "Release", s_keycode,
                         utf::to_hex(xi_mods),
                         (si32)layout_idx,
                         (si32)(bool)(keymods & mods::LSuper),
@@ -7107,7 +7114,7 @@ namespace netxs::gui
                 if (!is_master) return true; // Ignore slave devices.
                 auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
                 auto focused = d.evtype == x11::req::xi2::event::FocusIn;
-                if constexpr (debugmode) log("%%Focus: sourceid=%% '%%' mods=0x%% f.focus=%% focused=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, utf::to_hex(f.mods.effective), (si32)f.focus, (si32)focused);
+                if constexpr (debugmode) log("%%Focus: sourceid=%% '%%' mods=0x%% focused=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, utf::to_hex(f.mods.effective), (si32)focused);
                 focus_event(focused);
             }
             if constexpr (debugmode) log("End ----------------------------------------");
