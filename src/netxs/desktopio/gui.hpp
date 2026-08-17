@@ -3585,12 +3585,17 @@ namespace netxs::gui
         virtual void window_shutdown() = 0;
         virtual void window_cleanup() = 0;
         virtual void window_make_foreground() = 0;
-        virtual void window_make_focused() = 0;
+        virtual void window_make_focused_impl() = 0;
         virtual void window_make_exposed() = 0;
         virtual void window_make_topmost(bool) = 0;
 
         virtual void sync_os_settings() = 0;
 
+        void window_make_focused()
+        {
+            restore_if_minimized();
+            window_make_focused_impl();
+        }
         void mouse_capture(si32 captured_by)
         {
             if (!std::exchange(heldby, heldby | captured_by))
@@ -6160,7 +6165,7 @@ namespace netxs::gui
                 return faux; // The event is not processed.
             }
         }
-        void window_make_focused()       { restore_if_minimized(); ::SetFocus((HWND)master.hWnd); } // Calls WM_KILLFOCOS(prev) + WM_ACTIVATEAPP(next) + WM_SETFOCUS(next).
+        void window_make_focused_impl()  { ::SetFocus((HWND)master.hWnd); } // Calls WM_KILLFOCOS(prev) + WM_ACTIVATEAPP(next) + WM_SETFOCUS(next).
         void window_make_exposed()       { ::SetWindowPos((HWND)master.hWnd, HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOSENDCHANGING | SWP_NOACTIVATE); }
         void window_make_topmost(bool s) { ontop_state = s; ::SetWindowPos((HWND)master.hWnd, s ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE); }
         void window_make_foreground()    { ::SetForegroundWindow((HWND)master.hWnd); } //::AllowSetForegroundWindow(ASFW_ANY); } // Neither ::SetFocus() nor ::SetActiveWindow() can switch focus immediately.
@@ -6711,8 +6716,34 @@ namespace netxs::gui
         void window_send_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         void window_post_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         cont window_recv_command(arch /*lParam*/) { return cont{}; }
-        void window_make_foreground() {}
-        void window_make_focused() {}
+        void window_make_foreground()
+        {
+            //if constexpr (debugmode) log("Try to make window foreground");
+            //window_make_focused_impl();
+        }
+        void window_make_focused_impl()
+        {
+            //todo
+            //if constexpr (debugmode)
+            //{
+            //    log("Try to set input focus");
+            //    x11::session_ptr->sendrq<x11::req::set_input_focus>({ .window_id = (ui32)master.hWnd }, {},
+            //        [&](auto& ev, view /*payload*/)
+            //        {
+            //            if (ev.type == x11::event::Error)
+            //            {
+            //                log("Failed to set focus");
+            //            }
+            //        });
+            //}
+            //else
+            //{
+            //    x11::session_ptr->sendrq<x11::req::set_input_focus>({ .window_id = (ui32)master.hWnd });
+            //    //x11::session_ptr->sendrq<x11::req::xi2::set_focus>({ .major_opcode = x11::session_ptr->xi2_major_opcode,
+            //    //                                                     .window_id    = (ui32)master.hWnd,
+            //    //                                                     .device_id    = 3 });//master_keybd_id });
+            //}
+        }
         void window_make_exposed() {}
         void window_make_topmost(bool) {}
         void window_message_pump()
@@ -6740,6 +6771,16 @@ namespace netxs::gui
                     case x11::event::CreateNotify:
                         if constexpr (debugmode) log("Window created");
                         break;
+                    //case x11::event::MapNotify:
+                    //{
+                    //    auto mn = netxs::start_lifetime_as<x11::event::map_notify>(read_buffer.data());
+                    //    if constexpr (debugmode) log("%%Window mapped window_id=0x%%", prompt::x11, utf::to_hex(mn.window_id));
+                    //    if (mn.window_id == master.hWnd)
+                    //    {
+                    //        window_make_focused_impl();
+                    //    }
+                    //    break;
+                    //}
                     case x11::event::ConfigureNotify: // WM_WINDOWPOSCHANGED
                     {
                         //auto cfg = netxs::start_lifetime_as<x11::event::configure>(read_buffer.data());
@@ -6912,8 +6953,8 @@ namespace netxs::gui
                     for (auto i = 0u; i < hc.num_info; ++i)
                     {
                         auto inf = netxs::start_lifetime_as<x11::req::xi2::event::hierarchy_changed::info>(info_ptr + (i * sizeof(x11::req::xi2::event::hierarchy_changed::info)));
-                        if constexpr (debugmode) log("\tdeviceid=%% attachment=%% use=%% enabled=%% flags=0x%%(%%)",
-                                inf.deviceid, inf.attachment, (ui32)inf.use, (ui32)inf.enabled, utf::to_hex(inf.flags),
+                        if constexpr (debugmode) log("\tdeviceid=%% '%%' attachment=%% use=%% enabled=%% flags=0x%%(%%)",
+                                inf.deviceid, session.input_devices[inf.deviceid].name, inf.attachment, (ui32)inf.use, (ui32)inf.enabled, utf::to_hex(inf.flags),
                                 utf::concat(inf.flags & x11::req::xi2::event::hierarchy_changed::MasterAdded    ? "MasterAdded | "    : "",
                                             inf.flags & x11::req::xi2::event::hierarchy_changed::MasterDeleted  ? "MasterDeleted | "  : "",
                                             inf.flags & x11::req::xi2::event::hierarchy_changed::SlaveAdded     ? "SlaveAdded | "     : "",
@@ -6948,7 +6989,7 @@ namespace netxs::gui
             else if (d.evtype == x11::req::xi2::event::KeyPress
                   || d.evtype == x11::req::xi2::event::KeyRelease)
             {
-                if (is_master) return true; // Ignore master keyboard.
+                if (!is_master) return true; // Ignore slave keyboard.
                 auto k = netxs::start_lifetime_as<x11::req::xi2::event::km>(packet.data());
                 auto is_pressed = d.evtype == x11::req::xi2::event::KeyPress;
                 auto s_keycode  = k.detail; // Native keycode.
@@ -6966,8 +7007,8 @@ namespace netxs::gui
                 if (xi_mods & x11::req::xi2::mods::mod5    ) keymods |= mods::ScrollLock;
                 if constexpr (debugmode)
                 {
-                    log("%%sourceid=%% Key%%: keycode=%% mods=0x%% layout_idx=%% (Super:%% Shift:%%, Ctrl:%%, Alt:%% AltGr:%% Caps:%% Num:%% Scrl:%%)",
-                        k.sourceid,
+                    log("%%sourceid=%% '%%' Key%%: keycode=%% mods=0x%% layout_idx=%% (Super:%% Shift:%%, Ctrl:%%, Alt:%% AltGr:%% Caps:%% Num:%% Scrl:%%)",
+                        k.sourceid, session.input_devices[k.sourceid].name,
                         prompt::x11, is_pressed ? (repeated ? "Repeat" : "Press") : "Release", s_keycode,
                         utf::to_hex(xi_mods),
                         (si32)layout_idx,
@@ -6997,7 +7038,7 @@ namespace netxs::gui
                 //auto xi_mods = m.mods.effective;
                 auto emulated = !!(m.flags & x11::req::xi2::event::km::PointerEmulated);
                 auto moved = current_mouse_pos(mouse_coor);
-                if constexpr (debugmode) log("%%Mouse: sourceid=%% coor=%% mods=0x%% flags=0x%% emulated=%%", prompt::x11, m.sourceid, moved ? ansi::clr(tint::greenlt, mouse_coor) : utf::concat(mouse_coor), utf::to_hex(m.mods.effective), utf::to_hex(m.flags), (si32)emulated);
+                if constexpr (debugmode) log("%%Mouse: sourceid=%% '%%' coor=%% mods=0x%% flags=0x%% emulated=%%", prompt::x11, m.sourceid, session.input_devices[m.sourceid].name, moved ? ansi::clr(tint::greenlt, mouse_coor) : utf::concat(mouse_coor), utf::to_hex(m.mods.effective), utf::to_hex(m.flags), (si32)emulated);
                 if (moved)
                 {
                     mouse_moved();
@@ -7058,15 +7099,16 @@ namespace netxs::gui
                 master_pointer_id = device_id;
                 auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
                 auto hover = d.evtype == x11::req::xi2::event::Enter;
-                if constexpr (debugmode) log("%%Hover: sourceid=%% '%%' mods=0x%% hover=%%", prompt::x11, f.sourceid, utf::to_hex(f.mods.effective), hover);
+                if constexpr (debugmode) log("%%Hover: sourceid=%% '%%' mods=0x%% hover=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, utf::to_hex(f.mods.effective), (si32)hover);
                 if (!hover) mouse_leave();
             }
             else if (d.evtype == x11::req::xi2::event::FocusIn || d.evtype == x11::req::xi2::event::FocusOut)
             {
                 if (!is_master) return true; // Ignore slave devices.
                 auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
-                if constexpr (debugmode) log("%%Focus: sourceid=%% '%%' mods=0x%% focus=%%", prompt::x11, f.sourceid, utf::to_hex(f.mods.effective), (si32)f.focus);
-                focus_event(!!f.focus);
+                auto focused = d.evtype == x11::req::xi2::event::FocusIn;
+                if constexpr (debugmode) log("%%Focus: sourceid=%% '%%' mods=0x%% f.focus=%% focused=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, utf::to_hex(f.mods.effective), (si32)f.focus, (si32)focused);
+                focus_event(focused);
             }
             if constexpr (debugmode) log("End ----------------------------------------");
             return true;
@@ -7117,7 +7159,7 @@ namespace netxs::gui
         void window_post_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         cont window_recv_command(arch /*lParam*/) { return cont{}; }
         void window_make_foreground() {}
-        void window_make_focused() {}
+        void window_make_focused_impl() {}
         void window_make_exposed() {}
         void window_make_topmost(bool) {}
         void window_message_pump() {}

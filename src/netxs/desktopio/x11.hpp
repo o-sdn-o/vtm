@@ -65,9 +65,26 @@ namespace netxs::x11
     }
 
     #pragma pack(push, 1)
+    namespace icccm
+    {
+        //todo it doesn't work for input/non-input
+        static constexpr auto InputHint = 1 << 0;
+        struct wm_hints
+        {
+            ui32 flags         = InputHint;
+            ui32 input         = 1;  // 1: Available for input focus.
+            ui32 initial_state = 1;  // 1: NormalState.
+            ui32 icon_pixmap   = 0;
+            ui32 icon_window   = 0;
+            ui32 icon_x        = 0;
+            ui32 icon_y        = 0;
+            ui32 icon_mask     = 0;
+            ui32 window_group  = 0;
+        };
+    }
     namespace motif
     {
-        static constexpr auto decorations = 1 << 1;
+        static constexpr auto Decorations = 1 << 1;
         struct hints // Motif WM Hints to disable decorations.
         {
             ui32 flags       = 2; // MWM_HINTS_DECORATIONS
@@ -223,6 +240,18 @@ namespace netxs::x11
             ui32 prop_type;       // Property type, 0: for any. (e.g., XA_WINDOW=33)
             ui32 long_offset = 0; // Offset from beginning in 32-bit words.
             ui32 long_length = 1; // Read ammount in 32-bit words.
+        };
+        struct set_input_focus // Opcode 42 (set input focus)
+        {
+            static constexpr auto RevertToNone   = 0;
+            static constexpr auto RevertToRoot   = 1;
+            static constexpr auto RevertToParent = 2;
+
+            byte opcode    = 42;
+            byte revert_to = RevertToRoot;
+            ui16 length    = 3;
+            ui32 window_id;
+            ui32 time      = 0; // 0: CurrentTime.
         };
         struct get_input_focus // Opcode 43 (get_input focus).
         {
@@ -594,8 +623,10 @@ namespace netxs::x11
                 };
                 struct km // Keybd/Mouse
                 {
-                    static constexpr auto PointerEmulated = 1u << 4;
-                    static constexpr auto KeyRepeated     = 1u << 16;
+                    static constexpr auto PointerEmulated       = 1u << 16;//1u << 4;?
+                    static constexpr auto KeyRepeated           = 1u << 16;
+                    static constexpr auto TouchPendingEnd       = 1u << 16;
+                    static constexpr auto TouchEmulatingPointer = 1u << 17;
 
                     base header;
                     ui32 detail;         // Keybd: Keycode. Mouse: 0: Motion, 1: Left, 2: Middle, 3: Right, 4/5: Scroll.
@@ -738,6 +769,16 @@ namespace netxs::x11
                 ui16 device_id;         // 0: all_devices, 1: all_master_devices, or device_id.
                 ui16 pad = 0;
             };
+            //struct set_focus // Minor opcode 49.
+            //{
+            //    byte major_opcode;      // xi2_major_opcode
+            //    byte minor_opcode = 49; // 49: SetFocus
+            //    ui16 length = 4;        // Length in quads.
+            //    ui32 window_id;
+            //    ui32 time = 0;          // 0: CurrentTime.
+            //    ui16 device_id;         // Virtual master keyboard id.
+            //    ui16 pad = {};
+            //};
             struct grab_device // Minor opcode 51.
             {
                 static constexpr auto GrabModeSync  = 0;
@@ -982,6 +1023,16 @@ namespace netxs::x11
             byte major_opcode; // Request's major opcode.
             byte pad[21];
         };
+        //struct map_notify // Type 19 (window map notify)
+        //{
+        //    byte type;
+        //    byte pad0;
+        //    ui16 sequence;
+        //    ui32 event_window_id;   // Window ID sent event (could be parent).
+        //    ui32 window_id;         // Mapped Window ID.
+        //    byte override_redirect; // 0:..., 1:...
+        //    byte pad2[19];
+        //};
         struct configure // Type 22 (configure notify) a-la WM_SIZE/WM_MOVE.
         {
             byte type;
@@ -1163,13 +1214,17 @@ namespace netxs::x11
         ui32                                  argb_visual32_id = 0;
         ui32                                  argb_colormap_id = 0;
 
+        ui32                                  atom_wm_hints = 35; // WM_HINTS
+
         ui32                                  atom_motif_wm_hints = 0; // Disable decoractions.
         ui32                                  atom_net_wm_name = 0;
         ui32                                  atom_net_wm_state_skip_taskbar = 0; // Hide from the taskbar.
         ui32                                  atom_net_wm_state = 0;              //
-        //ui32                                  atom_net_wm_window_type = 0;
+        ui32                                  atom_net_wm_window_type = 0;
+        ui32                                  atom_net_wm_window_type_utility = 0;
         //ui32                                  atom_net_wm_window_type_combo = 0;
         //ui32                                  atom_compton_shadow = 0;
+
         ui32                                  atom_utf8_string = 0;
         ui32                                  atom_active_window = 0;
         ui32                                  atom_number_of_desktops = 0;
@@ -1550,18 +1605,37 @@ namespace netxs::x11
                                               .visual_id = argb_visual32_id },
                                             x11::req::create_window::payload{ .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
                                                                               .override_redirect = 0,       // 1: On.
-                                                                              .event_mask        = 0u
-                                                                                                 | x11::event::mask::Exposure
-                                                                                                 | x11::event::mask::StructureNotify,
+                                                                              .event_mask        = 0u,
+                                                                                                 //| x11::event::mask::Exposure
+                                                                                                 //| x11::event::mask::StructureNotify
                                                                               .colormap_id       = argb_colormap_id });
             // Disable decorations.
             sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                 .property  = atom_motif_wm_hints,   // Atom "_MOTIF_WM_HINTS".
-                                                .type      = atom_motif_wm_hints }, // Atom "_MOTIF_WM_HINTS" (same).
-                                            x11::motif::hints{ .flags = x11::motif::decorations, .decorations = 0 });
+                                                .type      = atom_motif_wm_hints }, // Atom "_MOTIF_WM_HINTS".
+                                            x11::motif::hints{ .flags = x11::motif::Decorations, .decorations = 0 });
 
-            if (area.size == dot_11)
+            if (area.size != dot_11)
             {
+                //todo it doesn't work // Make the window available for input focus.
+                //sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                //                                    .property  = atom_wm_hints,   // WM_HINTS.
+                //                                    .type      = atom_wm_hints }, // WM_HINTS.
+                //                                x11::icccm::wm_hints{ .flags = x11::icccm::InputHint, .input = 1 });
+            }
+            else
+            {
+                //todo it doesn't work // Make the window output only.
+                //sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                //                                    .property  = atom_wm_hints,   // WM_HINTS.
+                //                                    .type      = atom_wm_hints }, // WM_HINTS.
+                //                                x11::icccm::wm_hints{ .flags = x11::icccm::InputHint, .input = 0 });
+
+                // Make the window output only.
+                sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                                                    .property  = atom_net_wm_window_type,
+                                                    .type      = 4 }, // XA_ATOM.
+                                                atom_net_wm_window_type_utility);
                 // Remove sub-layers from taskbar.
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                     .property  = 68,   // Atom WM_TRANSIENT_FOR=68.
@@ -1680,10 +1754,13 @@ namespace netxs::x11
             atom_net_wm_name               = get_atom_id("_NET_WM_NAME", true);
             atom_net_wm_state              = get_atom_id("_NET_WM_STATE", true);
             atom_net_wm_state_skip_taskbar = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR", true);
-            //atom_net_wm_window_type        = get_atom_id("_NET_WM_WINDOW_TYPE", true);
+            atom_net_wm_window_type        = get_atom_id("_NET_WM_WINDOW_TYPE", true);
+            atom_net_wm_window_type_utility = get_atom_id("_NET_WM_WINDOW_TYPE_UTILITY", true);
             //atom_net_wm_window_type_combo  = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO", true);
             //atom_compton_shadow            = get_atom_id("_COMPTON_SHADOW", true); // Picom/Compton
+
             // Server related.
+            atom_wm_hints           = get_atom_id("WM_HINTS", faux);
             atom_utf8_string        = get_atom_id("UTF8_STRING", faux);
             atom_active_window      = get_atom_id("_NET_ACTIVE_WINDOW", faux);
             atom_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
