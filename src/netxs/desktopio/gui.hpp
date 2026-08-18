@@ -6719,12 +6719,8 @@ namespace netxs::gui
         void window_make_foreground()
         {
             if constexpr (debugmode) log("Try to make window foreground");
-            for (auto& l : layers)
-            {
-                auto& p = l.get();
-                x11::session_ptr->accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)p.hWnd },
-                    x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
-            }
+            x11::session_ptr->accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)master.hWnd },
+                                                    x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
             x11::session_ptr->accumrq(batch_buffer, x11::req::set_input_focus{ .window_id = (ui32)master.hWnd });
             x11::session_ptr->x11connection->send(batch_buffer);
             batch_buffer.clear();
