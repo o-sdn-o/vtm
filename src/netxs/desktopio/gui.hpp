@@ -5107,6 +5107,7 @@ namespace netxs::gui
             stream.intio.shut(); // Close link to server. Interrupt binary reading loop.
             base::dequeue(); // Clear task queue.
             winio.join();
+            bell::sensors.clear(); // Reset all subscriptions.
         }
     };
 }
