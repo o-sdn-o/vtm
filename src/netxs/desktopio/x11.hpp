@@ -1286,14 +1286,23 @@ namespace netxs::x11
         //todo ?multiple displays: std::vector<rect> workareas;
         rect workarea; // Actual _NET_WORKAREA value.
 
+        std::array<flag, 65536> received_replies;
+
         session_t() = default;
         ~session_t()
         {
             reset_shared_buffer();
         }
 
+        void sync_reply(ui16 sequence_number) const
+        {
+            while (received_replies[sequence_number].load(std::memory_order_acquire))
+            {
+                std::this_thread::yield();
+            }
+        }
         template<class R, class V = qiew, class P = noop>
-        void accumrq(text& batch_buffer, R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
+        auto accumrq(text& batch_buffer, R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
         {
             //auto lock = std::lock_guard{ mutex };
             sequence_counter++;
@@ -1310,9 +1319,10 @@ namespace netxs::x11
             {
                 reply_callbacks.push_back({ sequence_counter, std::move(callback) });
             }
+            return sequence_counter;
         }
         template<class R, class V = qiew, class P = noop>
-        void sendrq(R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
+        auto sendrq(R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
         {
             auto lock = std::lock_guard{ mutex };
             sequence_counter++;
@@ -1331,6 +1341,7 @@ namespace netxs::x11
             {
                 reply_callbacks.push_back({ sequence_counter, std::move(callback) });
             }
+            return sequence_counter;
         }
         auto parse_reply(x11::event::any& ev)
         {

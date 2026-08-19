@@ -6605,6 +6605,7 @@ namespace netxs::gui
                                               x11::req::configure_window::payload{ .x = (ui16)target_coor.x,
                                                                                    .y = (ui16)target_coor.y });
             }
+            auto seq_num = std::optional<ui16>{};
             for (auto r : s.sync)
             {
                 r.coor -= s.area.coor;
@@ -6615,7 +6616,7 @@ namespace netxs::gui
                     continue;
                 }
                 auto dirty_offset = (ui32)s.shm_offset + (r.coor.y * s.area.size.x * sizeof(ui32));
-                session.accumrq(batch_buffer, x11::req::shm::put_image
+                seq_num = session.accumrq(batch_buffer, x11::req::shm::put_image
                 {
                     .major_opcode = session.shm_major_opcode,
                     .drawable     = (ui32)s.hWnd,
@@ -6632,8 +6633,15 @@ namespace netxs::gui
                     .offset       = (ui32)dirty_offset, // New data start.
                 });
             }
+            if (seq_num.has_value())
+            {
+                //todo store seq_num in layer-related affected region buffer
+                session.received_replies[seq_num.value()].store(true, std::memory_order_release);
+                if constexpr (debugmode) log("Frame seq=%%", seq_num.value());
+            }
             if (visibility_changed && s.live) // Show window.
             {
+                //todo move to real coords
                 if constexpr (debugmode) log("Show window %%", utf::to_hex((ui32)s.hWnd));
                 session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.hWnd });
             }
@@ -6798,6 +6806,14 @@ namespace netxs::gui
                 auto ev = netxs::start_lifetime_as<x11::event::any>(read_buffer.data());
                 auto type = ev.type & 0x7F;
                 if constexpr (debugmode) if (type != x11::event::GenericEvent) log("%%seq=%% event=%% (%%)", prompt::x11, ev.sequence, session.event_str(type), type);
+                if constexpr (debugmode)
+                {
+                    if (session.received_replies[ev.sequence].load(std::memory_order_acquire))
+                    {
+                        log("%%Frame rendering is complete", prompt::x11);
+                    }
+                }
+                session.received_replies[ev.sequence].store(faux, std::memory_order_release);
                 switch (type)
                 {
                     case x11::event::Error:
