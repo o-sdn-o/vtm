@@ -231,7 +231,7 @@ namespace netxs::x11
                 byte type;        // Always 1 (Reply).
                 byte format;      // Bits in word.
                 ui16 sequence;
-                ui32 length;      // Payload length in 32-bit words.
+                ui32 length;      // Payload length in quads.
                 ui32 prop_type;   // Property type.
                 ui32 bytes_after; // Bytes remains.
                 ui32 value_len;   // Item size (array step).
@@ -242,10 +242,10 @@ namespace netxs::x11
             byte remove = 0;      // 1: Delete property after read, 0: Do nothing.
             ui16 length = 6;
             ui32 window_id;
-            ui32 property;        // Property atom.
-            ui32 prop_type;       // Property type, 0: for any. (e.g., XA_WINDOW=33)
-            ui32 long_offset = 0; // Offset from beginning in 32-bit words.
-            ui32 long_length = 1; // Read ammount in 32-bit words.
+            ui32 property;        // Atom for property.
+            ui32 prop_type;       // Atom for property type, 0: for any. (e.g., XA_WINDOW=33)
+            ui32 long_offset = 0; // Requested payload offset from beginning in quads.
+            ui32 long_length = 1; // Requested payload length in quads.
         };
         struct set_input_focus // Opcode 42 (set input focus)
         {
@@ -509,7 +509,7 @@ namespace netxs::x11
                     byte type;      // Always 35 (GenericEvent).
                     byte extension; // xi_major_opcode.
                     ui16 sequence;
-                    ui32 length;    // Payload length in 32-bit words.
+                    ui32 length;    // Payload length in quads.
                     ui16 evtype;    // Event type (e.g., 2: KeyPress, 3: KeyRelease).
                     ui16 deviceid;  // Physical or virtual device id.
                     ui32 time;      // Time stamp.
@@ -643,8 +643,8 @@ namespace netxs::x11
                     fx16 root_y;         //
                     fx16 event_x;        // Relative fixed point 16.16 coords.
                     fx16 event_y;        //
-                    ui16 buttons_len;    // Button mask array length in 32-bit words.
-                    ui16 valuators_len;  // Valuators axis mask array length in 32-bit words.
+                    ui16 buttons_len;    // Button mask array length in quads.
+                    ui16 valuators_len;  // Valuators axis mask array length in quads.
                     ui16 sourceid;       // Event source device id.
 
                     ui16 pad;
@@ -725,7 +725,7 @@ namespace netxs::x11
                 struct payload // device_mask
                 {
                     ui16 deviceid;     // xi_device_id (e.g., all_master_devices).
-                    ui16 mask_len = 2; // Mask length in 32-bit words.
+                    ui16 mask_len = 2; // Mask length in quads.
                     ui32 mask1 = 0;    // 1..31 Mask of required events (event_type).
                     ui32 mask2 = 0;    // 32...
                 };
@@ -1016,7 +1016,7 @@ namespace netxs::x11
             byte type; // Bit 7 may be set if the event is artificially generated (SendEvent).
             byte detail;
             ui16 sequence;
-            ui32 length; // Reply's payload length in 32-bit words.
+            ui32 length; // Reply's payload length in quads.
             ui32 pad[6];
         };
         struct error // Type 0
@@ -1221,6 +1221,7 @@ namespace netxs::x11
         ui32                                  argb_colormap_id = 0;
 
         ui32                                  atom_wm_hints = 35; // WM_HINTS
+        ui32                                  atom_wm_transient_for = 68; // WM_TRANSIENT_FOR
 
         ui32                                  atom_motif_wm_hints = 0; // Disable decoractions.
         ui32                                  atom_net_wm_name = 0;
@@ -1231,12 +1232,14 @@ namespace netxs::x11
         ui32                                  atom_net_wm_window_type_utility = 0;
         //ui32                                  atom_net_wm_window_type_combo = 0;
         //ui32                                  atom_compton_shadow = 0;
+        ui32                                  atom_atom = 0;
         ui32                                  atom_cardinal = 0;
         ui32                                  atom_utf8_string = 0;
-        ui32                                  atom_active_window = 0;
-        ui32                                  atom_number_of_desktops = 0;
-        ui32                                  atom_current_desktop = 0;
-        ui32                                  atom_workarea = 0; // workarea = desktop_area if is not set (atom_workarea=0).
+        ui32                                  atom_window = 0;
+        ui32                                  atom_net_active_window = 0;
+        ui32                                  atom_net_number_of_desktops = 0;
+        ui32                                  atom_net_current_desktop = 0;
+        ui32                                  atom_net_workarea = 0; // workarea = desktop_area if is not set (atom_net_workarea=0).
 
         byte                                  xfixes_major_opcode = 0;
         byte                                  xfixes_first_event = 0;
@@ -1279,6 +1282,9 @@ namespace netxs::x11
             std::vector<ui32> syms; // size = num_groups * width.
         };
         std::array<key_sym_map_t, 256> key_map = {};
+
+        //todo ?multiple displays: std::vector<rect> workareas;
+        rect workarea; // Actual _NET_WORKAREA value.
 
         session_t() = default;
         ~session_t()
@@ -1641,16 +1647,16 @@ namespace netxs::x11
                 // Make the window output only.
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                     .property  = atom_net_wm_window_type,
-                                                    .type      = 4 }, // XA_ATOM.
+                                                    .type      = atom_atom }, // XA_ATOM.
                                                 atom_net_wm_window_type_utility);
                 // Remove sub-layers from taskbar.
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
-                                                    .property  = 68,   // Atom WM_TRANSIENT_FOR=68.
-                                                    .type      = 33 }, // Atom XA_WINDOW=33.
+                                                    .property  = atom_wm_transient_for, // Atom WM_TRANSIENT_FOR=68.
+                                                    .type      = atom_window },         // Atom XA_WINDOW=33.
                                                 (ui32)master_window_id);
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                     .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
-                                                    .type      = 4 },               // Atom XA_ATOM=4.
+                                                    .type      = atom_atom },       // Atom XA_ATOM=4.
                                                 atom_net_wm_state_skip_taskbar);
                 // Make sub-layer transparent for mouse.
                 sendrq<x11::req::xfixes::set_window_shape_region>({ .major_opcode = xfixes_major_opcode,
@@ -1660,11 +1666,11 @@ namespace netxs::x11
             // Disable shadows.
             //sendrq<x11::req::change_property>({ .window_id = new_window_id,
             //                                    .property  = atom_net_wm_window_type, // Atom "_NET_WM_WINDOW_TYPE".
-            //                                    .type      = 4 },                     // Atom XA_ATOM=4.
+            //                                    .type      = atom_atom },             // Atom XA_ATOM=4.
             //                                atom_net_wm_window_type_combo);
             //sendrq<x11::req::change_property>({ .window_id = new_window_id,
             //                                    .property  = atom_compton_shadow,      // Atom "_COMPTON_SHADOW".
-            //                                    .type      = 6 },                      // Atom XA_CARDINAL=6.
+            //                                    .type      = atom_cardinal },          // Atom XA_CARDINAL=6.
             //                                0u); // 0: off, 1: on.
 
             sendrq<x11::req::create_gc>({ .gc_id = new_gc_id, .drawable = new_window_id });
@@ -1677,7 +1683,7 @@ namespace netxs::x11
             sendrq<x11::req::change_property>({ .window_id = (ui32)window_id,
                                                 .property  = atom_net_wm_name,
                                                 .type      = atom_utf8_string,
-                                                .format    = 8 },  // Format (8: 8-bit chars (string)).
+                                                .format    = sizeof(byte) * 8 },  // Format (8: 8-bit chars (string)).
                                             title);
         }
         bool resize_shared_buffer(size_t size)
@@ -1768,24 +1774,50 @@ namespace netxs::x11
             //atom_compton_shadow            = get_atom_id("_COMPTON_SHADOW", true); // Picom/Compton
 
             // Server related.
-            atom_wm_hints           = get_atom_id("WM_HINTS", faux);
-            atom_cardinal           = get_atom_id("CARDINAL", faux);
-            atom_utf8_string        = get_atom_id("UTF8_STRING", faux);
-            atom_active_window      = get_atom_id("_NET_ACTIVE_WINDOW", faux);
-            atom_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
-            atom_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP", faux);
-            atom_workarea           = get_atom_id("_NET_WORKAREA", faux);
+            atom_atom                   = get_atom_id("ATOM", faux);
+            atom_window                 = get_atom_id("WINDOW", faux);
+            atom_wm_transient_for       = get_atom_id("WM_TRANSIENT_FOR", faux);
+            atom_wm_hints               = get_atom_id("WM_HINTS", faux);
+            atom_cardinal               = get_atom_id("CARDINAL", faux);
+            atom_utf8_string            = get_atom_id("UTF8_STRING", faux);
+            atom_net_active_window      = get_atom_id("_NET_ACTIVE_WINDOW", faux);
+            atom_net_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
+            atom_net_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP", faux);
+            atom_net_workarea           = get_atom_id("_NET_WORKAREA", faux);
             return true;
+        }
+        auto get_props()
+        {
+            auto ok = true;
+            if (atom_net_workarea)
+            {
+                sendrq<x11::req::get_property>({ .window_id   = roots.front().s.root_window_id,
+                                                 .property    = atom_net_workarea,
+                                                 .prop_type   = atom_cardinal,
+                                                 .long_length = 4 });
+                auto reply = x11::req::get_property::reply{};
+                if (x11connection->recv((char*)&reply, sizeof(reply)).size() == 32 && reply.type == x11::event::Reply && reply.prop_type == atom_cardinal)
+                {
+                    //todo unify
+                    auto payload_size = reply.length * 4;
+                    auto buffer = text(payload_size, '\0');
+                    if (x11connection->recv(buffer.data(), buffer.size()).size() != buffer.size()) return faux;
+                    auto ptr = (si32*)buffer.data();
+                    auto x = netxs::start_lifetime_as<si32>(ptr + 0);
+                    auto y = netxs::start_lifetime_as<si32>(ptr + 1);
+                    auto w = netxs::start_lifetime_as<si32>(ptr + 2);
+                    auto h = netxs::start_lifetime_as<si32>(ptr + 3);
+                    workarea = rect{{ x, y }, { w, h }};
+                    if constexpr (debugmode) log("%%Received property for atom='_NET_WORKAREA' value=", prompt::x11, workarea);
+                }
+                else ok = faux;
+            }
+            return ok;
         }
         auto listen_root_events() // Subscribe on root's property change (to track some desktop window has received focus).
         {
             sendrq<x11::req::change_window_attrs>({ .window_id = roots.front().s.root_window_id },
                 x11::req::change_window_attrs::payload{ .event_mask = x11::event::mask::PropertyChange });
-        }
-        auto get_root_window_prop(ui32 /*atom_id*/)
-        {
-            //todo
-            return 0;
         }
         auto move_window(arch window_id, twod coor)
         {
@@ -2164,6 +2196,7 @@ namespace netxs::x11
                 if (session.detect_extension<x11::req::xi2::query_version   >("XInputExtension", session.xi2_major_opcode, byte{}, 2, 4)) // XInputExtension (XInput2) ver >= 2.4
                 if (session.detect_extension<x11::req::xkb::query_version   >("XKEYBOARD"      , session.xkb_major_opcode, session.xkb_first_event, 1, 0))
                 if (session.get_atoms())
+                if (session.get_props())
                 {
                     if constexpr (debugmode) log(session.str());
                     auto& x11screen = session.roots.front().s;
