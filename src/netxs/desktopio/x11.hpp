@@ -1226,11 +1226,12 @@ namespace netxs::x11
         ui32                                  atom_net_wm_name = 0;
         ui32                                  atom_net_wm_state_skip_taskbar = 0; // Hide from the taskbar.
         ui32                                  atom_net_wm_state = 0;              //
+        ui32                                  atom_net_wm_window_opacity = 0; // _NET_WM_WINDOW_OPACITY (doesn't work in wslg)
         ui32                                  atom_net_wm_window_type = 0;
         ui32                                  atom_net_wm_window_type_utility = 0;
         //ui32                                  atom_net_wm_window_type_combo = 0;
         //ui32                                  atom_compton_shadow = 0;
-
+        ui32                                  atom_cardinal = 0;
         ui32                                  atom_utf8_string = 0;
         ui32                                  atom_active_window = 0;
         ui32                                  atom_number_of_desktops = 0;
@@ -1756,17 +1757,19 @@ namespace netxs::x11
                 return 0u;
             };
             // Window related.
-            atom_motif_wm_hints            = get_atom_id("_MOTIF_WM_HINTS", true);
-            atom_net_wm_name               = get_atom_id("_NET_WM_NAME", true);
-            atom_net_wm_state              = get_atom_id("_NET_WM_STATE", true);
-            atom_net_wm_state_skip_taskbar = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR", true);
-            atom_net_wm_window_type        = get_atom_id("_NET_WM_WINDOW_TYPE", true);
+            atom_motif_wm_hints             = get_atom_id("_MOTIF_WM_HINTS", true);
+            atom_net_wm_name                = get_atom_id("_NET_WM_NAME", true);
+            atom_net_wm_state               = get_atom_id("_NET_WM_STATE", true);
+            atom_net_wm_state_skip_taskbar  = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR", true);
+            atom_net_wm_window_opacity      = get_atom_id("_NET_WM_WINDOW_OPACITY", true);
+            atom_net_wm_window_type         = get_atom_id("_NET_WM_WINDOW_TYPE", true);
             atom_net_wm_window_type_utility = get_atom_id("_NET_WM_WINDOW_TYPE_UTILITY", true);
             //atom_net_wm_window_type_combo  = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO", true);
             //atom_compton_shadow            = get_atom_id("_COMPTON_SHADOW", true); // Picom/Compton
 
             // Server related.
             atom_wm_hints           = get_atom_id("WM_HINTS", faux);
+            atom_cardinal           = get_atom_id("CARDINAL", faux);
             atom_utf8_string        = get_atom_id("UTF8_STRING", faux);
             atom_active_window      = get_atom_id("_NET_ACTIVE_WINDOW", faux);
             atom_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);

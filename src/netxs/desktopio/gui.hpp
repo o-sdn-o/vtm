@@ -6706,6 +6706,18 @@ namespace netxs::gui
             s.data.move(s.area.coor);
             return s.data;
         }
+        //todo this doesn't work in wslg
+        //void layer_opacity(ui32 window_id, fp64 alpha)
+        //{
+        //    auto& session = *x11::session_ptr;
+        //    alpha = std::clamp(alpha, 0.0, 1.0);
+        //    auto opacity_value = (ui32)(alpha * 4294967295.0);
+        //    session.sendrq(x11::req::change_property{ .window_id = window_id,
+        //                                              .property  = session.atom_net_wm_window_opacity,
+        //                                              .type      = session.atom_cardinal },
+        //                                            opacity_value);
+        //    if constexpr (debugmode) log("%% Window 0x%% opacity set to %%", prompt::x11, utf::to_hex(window_id), alpha);
+        //}
         void window_sync_taskbar(si32 /*new_state*/) {}
         rect window_get_fs_area(rect /*window_area*/)
         {
@@ -7086,6 +7098,11 @@ namespace netxs::gui
                             auto delta = std::exchange(axis_info.last_val, current_value) - current_value;
                             if (axis_info.is_scroll)
                             {
+                                //todo test
+                                //static auto kk = 1.0;
+                                //kk = std::clamp(kk + (delta > 0 ? 0.1 : -0.1), 0.0, 1.0);
+                                //layer_opacity((ui32)master.hWnd, kk);
+
                                 wdelta = axis_info.inc_step;
                                 if (os::dtvt::wheelrate) delta *= os::dtvt::wheelrate;
                                 axis_info.vertical ? mouse_wheel(delta, faux)
