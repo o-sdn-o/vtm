@@ -6521,17 +6521,13 @@ namespace netxs::gui
                 auto use_default_coor = win_coord == dot_mx;
                 if (use_default_coor)
                 {
-                    auto& screen = session.roots.front().s;
-                    win_coord = { (si32)(screen.width_in_pixels / 2 - 400), (si32)(screen.height_in_pixels / 2 - 300) };
+                    win_coord = session.default_window_area.coor;
                 }
                 if (use_default_size)
                 {
-                    grid_size = cell_size * twod{ 80, 25 };
+                    grid_size = session.default_window_area.size / cell_size + dot_11;
                 }
-                else
-                {
-                    grid_size *= cell_size;
-                }
+                grid_size *= cell_size;
             }
             auto new_window_id = session.new_resource_id();
             auto new_gc_id     = session.new_resource_id();
@@ -6837,8 +6833,9 @@ namespace netxs::gui
                     //}
                     case x11::event::ConfigureNotify: // WM_WINDOWPOSCHANGED
                     {
-                        //auto cfg = netxs::start_lifetime_as<x11::event::configure>(read_buffer.data());
-                        //check_window(twod{ cfg.x, cfg.y }); // Window move/resize.
+                        auto cn = netxs::start_lifetime_as<x11::event::configure_notify>(read_buffer.data());
+                        if constexpr (debugmode) log("Window reconfigured: window_id=%% event_window_id=%% area=%%", utf::to_hex(cn.window_id), utf::to_hex(cn.event_window_id), rect{{ cn.x, cn.y }, { cn.width, cn.height }});
+                        //check_window(twod{ cn.x, cn.y }); // Window move/resize.
                         break;
                     }
                     case x11::event::ClientMessage: // ?WM_CLOSE

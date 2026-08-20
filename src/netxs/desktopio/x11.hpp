@@ -81,6 +81,42 @@ namespace netxs::x11
             ui32 icon_mask     = 0;
             ui32 window_group  = 0;
         };
+        namespace win_gravity
+        {
+            static constexpr auto NorthWest = 1;
+            static constexpr auto North     = 2;
+            static constexpr auto NorthEast = 3;
+            static constexpr auto West      = 4;
+            static constexpr auto Center    = 5;
+            static constexpr auto East      = 6;
+            static constexpr auto SouthWest = 7;
+            static constexpr auto South     = 8;
+            static constexpr auto SouthEast = 9;
+        }
+        struct wm_size_hints
+        {
+            static constexpr auto USPosition  = 1u << 0; // User specified coor.
+            static constexpr auto USSize      = 1u << 1; // User specified size.
+            static constexpr auto PPosition   = 1u << 2; // Program specified coor.
+            static constexpr auto PSize       = 1u << 3; // Program specified size.
+            static constexpr auto PMinSize    = 1u << 4; // Program specified minimum size.
+            static constexpr auto PMaxSize    = 1u << 5; // Program specified maximum size.
+            static constexpr auto PResizeInc  = 1u << 6; // Program specified resize increments.
+            static constexpr auto PAspect     = 1u << 7; // Program specified min/max aspect ratios.
+            static constexpr auto PBaseSize   = 1u << 8; // Base size.
+            static constexpr auto PWinGravity = 1u << 9; // Window gravity.
+
+            ui32 flags;                          // Hint set.
+            si32 x, y;                           // Coor (unused).
+            si32 width, height;                  // Size (unused).
+            si32 min_width, min_height;          // Min size.
+            si32 max_width, max_height;          // Max size.
+            si32 width_inc, height_inc;          // Resize step.
+            si32 min_aspect_num, min_aspect_den; // Min aspect ratio.
+            si32 max_aspect_num, max_aspect_den; // Max aspect ratio.
+            si32 base_width, base_height;        // Initial size (default: Min size).
+            si32 win_gravity;                    // Window gravity (default: NorthWest).
+        };
     }
     namespace motif
     {
@@ -98,8 +134,12 @@ namespace netxs::x11
     {
         struct create_window // Opcode 1 (create window). This request generates a CreateNotify event.
         {
+            static constexpr auto CopyFromParent = 0;
+            static constexpr auto InputOutput    = 1;
+            static constexpr auto InputOnly      = 2;
+
             byte opcode = 1;
-            byte depth = 32;          // Color depth.
+            byte depth = 32;          // Color depth. Must be zero for InputOnly window.
             ui16 length;              // Packet size in 4-byte words.
             ui32 window_id;           // New Window ID.
             ui32 parent_id;           // root_window_id.
@@ -108,8 +148,8 @@ namespace netxs::x11
             ui16 width;               // Initial size in px (not including the border).
             ui16 height;              //
             ui16 border_width = 0;
-            ui16 window_class = 1;    // 0: CopyFromParent, 1: InputOutput, 2: InputOnly (input events and painting).
-            ui32 visual_id;           // 0: CopyFromParent.
+            ui16 window_class = InputOutput; // 0: CopyFromParent, 1: InputOutput (input events and painting), 2: InputOnly (input events).
+            ui32 visual_id;           // ID: 0: CopyFromParent.
             ui32 value_mask;          // Payload bits.
 
             struct payload
@@ -1029,6 +1069,18 @@ namespace netxs::x11
             byte major_opcode; // Request's major opcode.
             byte pad[21];
         };
+        //struct create_notify // Type 16 (create window notify)
+        //{
+        //    byte type;
+        //    byte pad0;
+        //    ui16 sequence;
+        //    ui32 parent_id; // Parent window id.
+        //    ui32 window_id; // Created window id.
+        //    si32 x, y;      // Window coor.
+        //    si32 width, height; // Window size.
+        //    si32 border_width;
+        //    byte override_redirect;
+        //};
         //struct map_notify // Type 19 (window map notify)
         //{
         //    byte type;
@@ -1039,13 +1091,13 @@ namespace netxs::x11
         //    byte override_redirect; // 0:..., 1:...
         //    byte pad2[19];
         //};
-        struct configure // Type 22 (configure notify) a-la WM_SIZE/WM_MOVE.
+        struct configure_notify // Type 22 (configure notify) a-la WM_SIZE/WM_MOVE.
         {
             byte type;
             byte pad;
             ui16 sequence;
-            ui32 event_window;
-            ui32 window;
+            ui32 event_window_id;
+            ui32 window_id;
             ui32 above_sibling;
             si16 x;
             si16 y;
@@ -1222,6 +1274,8 @@ namespace netxs::x11
 
         ui32                                  atom_wm_hints = 35; // WM_HINTS
         ui32                                  atom_wm_transient_for = 68; // WM_TRANSIENT_FOR
+        ui32                                  atom_wm_normal_hints = 0;
+        ui32                                  atom_wm_size_hints = 0;
 
         ui32                                  atom_motif_wm_hints = 0; // Disable decoractions.
         ui32                                  atom_net_wm_name = 0;
@@ -1229,6 +1283,7 @@ namespace netxs::x11
         ui32                                  atom_net_wm_state = 0;              //
         ui32                                  atom_net_wm_window_opacity = 0; // _NET_WM_WINDOW_OPACITY (doesn't work in wslg)
         ui32                                  atom_net_wm_window_type = 0;
+        ui32                                  atom_net_wm_window_type_normal = 0;
         ui32                                  atom_net_wm_window_type_utility = 0;
         //ui32                                  atom_net_wm_window_type_combo = 0;
         //ui32                                  atom_compton_shadow = 0;
@@ -1285,6 +1340,7 @@ namespace netxs::x11
 
         //todo ?multiple displays: std::vector<rect> workareas;
         rect workarea; // Actual _NET_WORKAREA value.
+        rect default_window_area; // Window area (? provided by the window manager).
 
         std::array<flag, 65536> received_replies;
 
@@ -1322,7 +1378,7 @@ namespace netxs::x11
             return sequence_counter;
         }
         template<class R, class V = qiew, class P = noop>
-        auto sendrq(R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
+        auto sendrq(R request = {}, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
         {
             auto lock = std::lock_guard{ mutex };
             sequence_counter++;
@@ -1629,9 +1685,10 @@ namespace netxs::x11
                                               .visual_id = argb_visual32_id },
                                             x11::req::create_window::payload{ .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
                                                                               .override_redirect = 0,       // 1: On.
-                                                                              .event_mask        = 0u,
+                                                                              .event_mask        = 0u
                                                                                                  //| x11::event::mask::Exposure
-                                                                                                 //| x11::event::mask::StructureNotify
+                                                                                                 | x11::event::mask::StructureNotify // For ConfigureNotify events.
+                                                                                                 ,
                                                                               .colormap_id       = argb_colormap_id });
             // Disable decorations.
             sendrq<x11::req::change_property>({ .window_id = new_window_id,
@@ -1780,6 +1837,7 @@ namespace netxs::x11
             atom_net_wm_state_skip_taskbar  = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR", true);
             atom_net_wm_window_opacity      = get_atom_id("_NET_WM_WINDOW_OPACITY", true);
             atom_net_wm_window_type         = get_atom_id("_NET_WM_WINDOW_TYPE", true);
+            atom_net_wm_window_type_normal  = get_atom_id("_NET_WM_WINDOW_TYPE_NORMAL", true);
             atom_net_wm_window_type_utility = get_atom_id("_NET_WM_WINDOW_TYPE_UTILITY", true);
             //atom_net_wm_window_type_combo  = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO", true);
             //atom_compton_shadow            = get_atom_id("_COMPTON_SHADOW", true); // Picom/Compton
@@ -1787,10 +1845,12 @@ namespace netxs::x11
             // Server related.
             atom_atom                   = get_atom_id("ATOM", faux);
             atom_window                 = get_atom_id("WINDOW", faux);
-            atom_wm_transient_for       = get_atom_id("WM_TRANSIENT_FOR", faux);
-            atom_wm_hints               = get_atom_id("WM_HINTS", faux);
             atom_cardinal               = get_atom_id("CARDINAL", faux);
             atom_utf8_string            = get_atom_id("UTF8_STRING", faux);
+            atom_wm_transient_for       = get_atom_id("WM_TRANSIENT_FOR", faux);
+            atom_wm_hints               = get_atom_id("WM_HINTS", faux);
+            atom_wm_normal_hints        = get_atom_id("WM_NORMAL_HINTS", faux);
+            atom_wm_size_hints          = get_atom_id("WM_SIZE_HINTS", faux);
             atom_net_active_window      = get_atom_id("_NET_ACTIVE_WINDOW", faux);
             atom_net_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
             atom_net_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP", faux);
@@ -1824,6 +1884,76 @@ namespace netxs::x11
                 else ok = faux;
             }
             return ok;
+        }
+        auto get_default_window_area()
+        {
+            auto default_area = workarea ? workarea : rect{ dot_00, { roots.front().s.width_in_pixels, roots.front().s.height_in_pixels }};
+            default_window_area.coor = default_area.coor + default_area.size * 1 / 8;
+            default_window_area.size = default_area.size * 3 / 4;
+            //todo it doesn't work
+            // Create default window.
+            //auto new_window_id = new_resource_id();
+            //default_window_area = rect{ dot_00, (workarea ? workarea.size : twod{ roots.front().s.width_in_pixels, roots.front().s.height_in_pixels }) * 3 / 4 };
+            //if constexpr (debugmode) log("Requested win area: %%", default_window_area);
+            //sendrq<x11::req::create_window>({ .window_id = new_window_id,
+            //                                  .parent_id = roots.front().s.root_window_id,
+            //                                  .x         = (si16)default_window_area.coor.x,
+            //                                  .y         = (si16)default_window_area.coor.y,
+            //                                  .width     = (ui16)default_window_area.size.x,
+            //                                  .height    = (ui16)default_window_area.size.y,
+            //                                  .visual_id = argb_visual32_id },
+            //                                x11::req::create_window::payload{ .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
+            //                                                                  .override_redirect = 0,       // 1: On.
+            //                                                                  .event_mask        = x11::event::mask::StructureNotify, // To force CreateNotify reply.
+            //                                                                  .colormap_id       = argb_colormap_id });
+            //// Disable decorations.
+            //sendrq<x11::req::change_property>({ .window_id = new_window_id,
+            //                                    .property  = atom_motif_wm_hints,   // Atom "_MOTIF_WM_HINTS".
+            //                                    .type      = atom_motif_wm_hints }, // Atom "_MOTIF_WM_HINTS".
+            //                                x11::motif::hints{ .flags = x11::motif::Decorations, .decorations = 0 });
+            //// Set WM hints.
+            ////sendrq<x11::req::change_property>({ .window_id = new_window_id,
+            ////                                    .property  = atom_wm_normal_hints, // WM_NORMAL_HINTS
+            ////                                    .type      = atom_wm_size_hints }, // WM_HINTS.
+            ////                                x11::icccm::wm_size_hints{}); // Empty hints: request window position and size from WM.=
+            ////                                //x11::icccm::wm_size_hints{ .flags = x11::icccm::wm_size_hints::USPosition
+            ////                                //                                  | x11::icccm::wm_size_hints::USSize
+            ////                                //                                  | x11::icccm::wm_size_hints::PMaxSize
+            ////                                //                                  | x11::icccm::wm_size_hints::PBaseSize }); // Empty hints: request window position and size from WM.
+            //sendrq(x11::req::map_window{ .window_id = new_window_id });
+            //auto buffer = std::array<char, 32>{};
+            //while (x11connection->recv(buffer.data(), buffer.size()).size() == 32) // Wait for ConfigureNotify.
+            //{
+            //    auto ev = netxs::start_lifetime_as<x11::event::any>(buffer.data());
+            //    if constexpr (debugmode) log("Next event: %%", event_str(ev.type));
+            //    if (ev.type == x11::event::Error)
+            //    {
+            //        if constexpr (debugmode) log("Request error: %%", get_error(ev));
+            //        break;
+            //    }
+            //    else if (ev.type == x11::event::ConfigureNotify)
+            //    {
+            //        auto cn = netxs::start_lifetime_as<x11::event::configure_notify>(buffer.data());
+            //        default_window_area = rect{{ cn.x, cn.y }, { cn.width, cn.height }};
+            //        if constexpr (debugmode) log("Default window area=%%", default_window_area);
+            //        break;
+            //    }
+            //    else if (ev.type == x11::event::MapNotify)
+            //    {
+            //        if constexpr (debugmode) log("Window mapped: area=%%", default_window_area);
+            //        break;
+            //    }
+            //}
+            //sendrq(x11::req::unmap_window{ .window_id = new_window_id });
+            //sendrq(x11::req::destroy_window{ .window_id = new_window_id });
+            //while (x11connection->recv(buffer.data(), buffer.size()).size() == 32) // Cleanup.
+            //{
+            //    auto ev = netxs::start_lifetime_as<x11::event::any>(buffer.data());
+            //    if constexpr (debugmode) log("Next event (cleanup stage): %%", event_str(ev.type));
+            //    if (ev.type == x11::event::Error || ev.type == x11::event::DestroyNotify) break;
+            //}
+            //free_resource_id(new_window_id);
+            return true;
         }
         auto listen_root_events() // Subscribe on root's property change (to track some desktop window has received focus).
         {
@@ -2208,6 +2338,7 @@ namespace netxs::x11
                 if (session.detect_extension<x11::req::xkb::query_version   >("XKEYBOARD"      , session.xkb_major_opcode, session.xkb_first_event, 1, 0))
                 if (session.get_atoms())
                 if (session.get_props())
+                if (session.get_default_window_area())
                 {
                     if constexpr (debugmode) log(session.str());
                     auto& x11screen = session.roots.front().s;
