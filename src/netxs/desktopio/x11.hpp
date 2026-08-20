@@ -1673,18 +1673,17 @@ namespace netxs::x11
                                             .shm_seg_id   = client_shmseg_xid });
             if constexpr (debugmode) log("%%Shared buffer segment XID %% is detached", prompt::x11, client_shmseg_xid);
         }
-        auto create_window(arch master_window_id, ui32 new_window_id, ui32 new_gc_id, rect area)
+        auto create_window(arch master_window_id, ui32 new_window_id, ui32 new_gc_id, bool is_master)
         {
-            if (!area) area = rect_11;
             sendrq<x11::req::create_window>({ .window_id = new_window_id,
                                               .parent_id = roots.front().s.root_window_id,
-                                              .x         = (si16)area.coor.x,
-                                              .y         = (si16)area.coor.y,
-                                              .width     = (ui16)area.size.x,
-                                              .height    = (ui16)area.size.y,
+                                              .x         = 0,
+                                              .y         = 0,
+                                              .width     = 1,
+                                              .height    = 1,
                                               .visual_id = argb_visual32_id },
                                             x11::req::create_window::payload{ .border_pixel = 0x00'000000u, // Own 32-bit ARGB border pixel value.
-                                                                              .override_redirect = 0,       // 1: On.
+                                                                              .override_redirect = 1,       // 1: On.
                                                                               .event_mask        = 0u
                                                                                                  //| x11::event::mask::Exposure
                                                                                                  | x11::event::mask::StructureNotify // For ConfigureNotify events.
@@ -1696,7 +1695,7 @@ namespace netxs::x11
                                                 .type      = atom_motif_wm_hints }, // Atom "_MOTIF_WM_HINTS".
                                             x11::motif::hints{ .flags = x11::motif::Decorations, .decorations = 0 });
 
-            if (area.size != dot_11)
+            if (is_master)
             {
                 //todo it doesn't work // Make the window available for input focus.
                 //sendrq<x11::req::change_property>({ .window_id = new_window_id,
@@ -1717,11 +1716,12 @@ namespace netxs::x11
                                                     .property  = atom_net_wm_window_type,
                                                     .type      = atom_atom }, // XA_ATOM.
                                                 atom_net_wm_window_type_utility);
+                // Group sub-layers.
+                //sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                //                                    .property  = atom_wm_transient_for, // Atom WM_TRANSIENT_FOR=68.
+                //                                    .type      = atom_window },         // Atom XA_WINDOW=33.
+                //                                (ui32)master_window_id);
                 // Remove sub-layers from taskbar.
-                sendrq<x11::req::change_property>({ .window_id = new_window_id,
-                                                    .property  = atom_wm_transient_for, // Atom WM_TRANSIENT_FOR=68.
-                                                    .type      = atom_window },         // Atom XA_WINDOW=33.
-                                                (ui32)master_window_id);
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                     .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
                                                     .type      = atom_atom },       // Atom XA_ATOM=4.
@@ -1743,8 +1743,8 @@ namespace netxs::x11
 
             sendrq<x11::req::create_gc>({ .gc_id = new_gc_id, .drawable = new_window_id });
 
-            if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% area=%% colormap_id=0x%%",
-                utf::to_hex(new_window_id), utf::to_hex(roots.front().s.root_window_id), 32, utf::to_hex(argb_visual32_id), area, utf::to_hex(argb_colormap_id));
+            if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% colormap_id=0x%%",
+                utf::to_hex(new_window_id), utf::to_hex(roots.front().s.root_window_id), 32, utf::to_hex(argb_visual32_id), utf::to_hex(argb_colormap_id));
         }
         void window_set_title(arch window_id, qiew title)
         {

@@ -83,16 +83,15 @@ namespace netxs::gui
         regs sync; // layer: Dirty region list.
         bool live; // layer: Should the layer be presented.
         tset klok; // layer: Active timer list.
+        si32 index;
 
-        //todo revise
-        size_t shm_offset = 0;
-
-        layer()
+        layer(si32 index)
             :  hdc{},
               hWnd{},
               prev{ .coor = dot_mx },
               area{ .size = dot_11 },
-              live{ faux }
+              live{ faux },
+              index{ index }
         { }
         void hide() { live = faux; }
         void show() { live = true; }
@@ -3441,11 +3440,11 @@ namespace netxs::gui
         cfg_t config; // winbase: User specified settings.
         title titles; // winbase: UI header/footer.
         focus wfocus; // winbase: UI focus.
-        layer master; // winbase: Layer for Client.
-        layer blinky; // winbase: Layer for blinking characters.
-        layer header; // winbase: Layer for Header.
-        layer footer; // winbase: Layer for Footer.
-        layer tooltip_layer; // winbase: Layer for Tooltip.
+        layer master{ 0 }; // winbase: Layer for Client.
+        layer blinky{ 1 }; // winbase: Layer for blinking characters.
+        layer header{ 2 }; // winbase: Layer for Header.
+        layer footer{ 3 }; // winbase: Layer for Footer.
+        layer tooltip_layer{ 4 }; // winbase: Layer for Tooltip.
         std::array<std::reference_wrapper<layer>, 5> layers = // gcc requires double braces on x32 platforms.
         {{
             master,
@@ -6491,10 +6490,33 @@ namespace netxs::gui
         fp2d current_mouse_pos;
         ui16 master_pointer_id{};
         ui16 captured_pointer_id{};
+        struct meta_data
+        {
+            twod prev_size;
+            size_t shm_offset = {};
+        };
+        std::array<meta_data, 5> layer_meta_data{};
 
         window(auto&& ...Args)
             : winbase{ Args... }
-        { }
+        {
+            //todo it is just a test
+            auto align = [](size_t offset){ return (size_t)(offset + 15) & ~15; };
+            auto& session = *x11::session_ptr;
+            auto large_step = (session.shm_buffer_len / 2) / 3;
+            auto small_step = (session.shm_buffer_len / 2) / 9;
+            layer_meta_data[0].shm_offset = 0;
+            layer_meta_data[1].shm_offset = align(large_step);
+            layer_meta_data[2].shm_offset = align(layer_meta_data[1].shm_offset + large_step);
+            layer_meta_data[3].shm_offset = align(layer_meta_data[2].shm_offset + small_step);
+            layer_meta_data[4].shm_offset = align(layer_meta_data[3].shm_offset + small_step);
+            if constexpr (debugmode) log("shm_size=%% l0=%% l1=%% l2=%% l3=%% l4=%%", session.shm_buffer_len,
+                layer_meta_data[0].shm_offset,
+                layer_meta_data[1].shm_offset,
+                layer_meta_data[2].shm_offset,
+                layer_meta_data[3].shm_offset,
+                layer_meta_data[4].shm_offset);
+        }
         bool keybd_test_pressed(si32 /*virtcod*/, si32 /*keycode*/ = 0) { return true; /*!!(vkstat[virtcod] & 0x80);*/ }
         bool keybd_test_toggled(si32 /*virtcod*/) { return faux; /*!!(vkstat[virtcod] & 0x01);*/ }
         bool keybd_read_pressed(si32 /*virtcod*/) { return faux; /*!!(::GetAsyncKeyState(virtcod) & 0x8000);*/ }
@@ -6515,7 +6537,8 @@ namespace netxs::gui
         bool layer_create(layer& s, twod win_coord = {}, twod grid_size = {}, dent border_dent = {}, twod cell_size = {})
         {
             auto& session = *x11::session_ptr;
-            if (cell_size)
+            auto is_master = s.index == 0;
+            if (is_master)
             {
                 auto use_default_size = grid_size == dot_mx;
                 auto use_default_coor = win_coord == dot_mx;
@@ -6533,12 +6556,12 @@ namespace netxs::gui
             auto new_gc_id     = session.new_resource_id();
             s.hWnd = (arch)new_window_id;
             s.hdc  = (arch)new_gc_id;
-            if (cell_size)
+            if (is_master)
             {
                 grid_size /= cell_size;
                 s.area = rect{ win_coord, grid_size * cell_size } + border_dent;
             }
-            session.create_window(master.hWnd, new_window_id, new_gc_id, s.area);
+            session.create_window(master.hWnd, new_window_id, new_gc_id, is_master);
             return true;
         }
         void layers_move()
@@ -6573,10 +6596,19 @@ namespace netxs::gui
         void layer_present(text& batch_buffer, layer& s)
         {
             if (!s.data.data() || s.area.size.x <= 0 || s.area.size.y <= 0) return;
+            auto& md = layer_meta_data[s.index];
             auto& session = *x11::session_ptr;
             auto target_coor = s.live ? s.area.coor : s.hidden;
             auto windowmoved = s.prev.coor != target_coor;
+            auto windowsized = std::exchange(md.prev_size, s.area.size) != s.area.size;
             auto visibility_changed = windowmoved && (s.prev.coor == s.hidden || target_coor == s.hidden);
+            if (windowsized)
+            {
+                windowmoved = true;
+                session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd, },
+                                              x11::req::configure_window::payload{ .width  = (ui16)s.area.size.x,
+                                                                                   .height = (ui16)s.area.size.y });
+            }
             if (visibility_changed)
             {
                 s.prev.coor = target_coor;
@@ -6584,6 +6616,9 @@ namespace netxs::gui
                 if (s.live)
                 {
                     s.sync.push_back(rect{ dot_00, s.area.size });
+                    //todo move to real coords
+                    if constexpr (debugmode) log("Show window %%", utf::to_hex((ui32)s.hWnd));
+                    session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.hWnd });
                 }
                 else
                 {
@@ -6595,11 +6630,14 @@ namespace netxs::gui
             }
             if (windowmoved)
             {
-                assert(target_coor != s.hidden);
+                //assert(target_coor != s.hidden);
                 s.prev.coor = target_coor;
-                session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd, },
-                                              x11::req::configure_window::payload{ .x = (ui16)target_coor.x,
-                                                                                   .y = (ui16)target_coor.y });
+                if (target_coor != s.hidden)
+                {
+                    session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd, },
+                                                  x11::req::configure_window::payload{ .x = (si16)target_coor.x,
+                                                                                       .y = (si16)target_coor.y });
+                }
             }
             auto seq_num = std::optional<ui16>{};
             for (auto r : s.sync)
@@ -6611,7 +6649,7 @@ namespace netxs::gui
                 {
                     continue;
                 }
-                auto dirty_offset = (ui32)s.shm_offset + (r.coor.y * s.area.size.x * sizeof(ui32));
+                auto dirty_offset = (ui32)md.shm_offset + (r.coor.y * s.area.size.x * sizeof(ui32));
                 seq_num = session.accumrq(batch_buffer, x11::req::shm::put_image
                 {
                     .major_opcode = session.shm_major_opcode,
@@ -6634,12 +6672,6 @@ namespace netxs::gui
                 //todo store seq_num in layer-related affected region buffer
                 session.received_replies[seq_num.value()].store(true, std::memory_order_release);
                 if constexpr (debugmode) log("Frame seq=%%", seq_num.value());
-            }
-            if (visibility_changed && s.live) // Show window.
-            {
-                //todo move to real coords
-                if constexpr (debugmode) log("Show window %%", utf::to_hex((ui32)s.hWnd));
-                session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.hWnd });
             }
             s.sync.clear();
         }
@@ -6691,16 +6723,18 @@ namespace netxs::gui
                     //}
                     //else log("%%Compatible bitmap creation error: %ec%", prompt::gui, ::GetLastError());
 
-                    auto required_bytes = (size_t)s.area.size.x * s.area.size.y * sizeof(argb);
-                    auto aligned_offset = (size_t)(session.shm_buffer_offset + 15) & ~15;
-                    auto current_buffer_half_size = session.shm_buffer_len / 2;
-                    if (aligned_offset + required_bytes > current_buffer_half_size)
-                    {
-                        aligned_offset = 0;
-                        log("%%X11 SHM local allocator wrapped around inside frame", prompt::gui);
-                    }
-                    auto base_ptr = session.shm_buffer_ptr + (session.current_frame_index * current_buffer_half_size);
-                    auto layer_shm_ptr = (argb*)(base_ptr + aligned_offset);
+                    //auto required_bytes = (size_t)s.area.size.x * s.area.size.y * sizeof(argb);
+                    //auto aligned_offset = (size_t)(session.shm_buffer_offset + 15) & ~15;
+                    //auto current_buffer_half_size = session.shm_buffer_len / 2;
+                    //if (aligned_offset + required_bytes > current_buffer_half_size)
+                    //{
+                    //    aligned_offset = 0;
+                    //    log("%%X11 SHM local allocator wrapped around inside frame", prompt::gui);
+                    //}
+                    //auto base_ptr = session.shm_buffer_ptr + session.current_frame_index * current_buffer_half_size;
+                    //auto layer_shm_ptr = (argb*)(base_ptr + aligned_offset);
+                    auto& md = layer_meta_data[s.index];
+                    auto layer_shm_ptr = (argb*)(session.shm_buffer_ptr + md.shm_offset);
                     s.prev.size = s.area.size;
                     auto bitmap_span = std::span<argb>{ layer_shm_ptr, (size_t)s.area.size.x * s.area.size.y };
                     s.data = bits{ bitmap_span, s.area };
