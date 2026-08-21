@@ -1737,7 +1737,7 @@ namespace netxs::x11
                                                     .property  = atom_net_wm_window_type,
                                                     .type      = atom_atom }, // XA_ATOM.
                                                 atom_net_wm_window_type_utility);
-                // Group sub-layers.
+                // Group sub-layers with master.
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                     .property  = atom_wm_transient_for, // Atom WM_TRANSIENT_FOR=68.
                                                     .type      = atom_window },         // Atom XA_WINDOW=33.
@@ -1937,11 +1937,11 @@ namespace netxs::x11
             ////sendrq<x11::req::change_property>({ .window_id = new_window_id,
             ////                                    .property  = atom_wm_normal_hints, // WM_NORMAL_HINTS
             ////                                    .type      = atom_wm_size_hints }, // WM_HINTS.
-            ////                                x11::icccm::wm_size_hints{}); // Empty hints: request window position and size from WM.=
+            ////                                x11::icccm::wm_size_hints{}); // Empty hints: request window position and size from WM.???
             ////                                //x11::icccm::wm_size_hints{ .flags = x11::icccm::wm_size_hints::USPosition
             ////                                //                                  | x11::icccm::wm_size_hints::USSize
             ////                                //                                  | x11::icccm::wm_size_hints::PMaxSize
-            ////                                //                                  | x11::icccm::wm_size_hints::PBaseSize }); // Empty hints: request window position and size from WM.
+            ////                                //                                  | x11::icccm::wm_size_hints::PBaseSize });
             //sendrq(x11::req::map_window{ .window_id = new_window_id });
             //auto buffer = std::array<char, 32>{};
             //while (x11connection->recv(buffer.data(), buffer.size()).size() == 32) // Wait for ConfigureNotify.

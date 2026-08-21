@@ -6489,9 +6489,11 @@ namespace netxs::gui
         fp2d current_mouse_pos;
         ui16 master_pointer_id{};
         ui16 captured_pointer_id{};
+        bool is_foreground_window{};
         struct meta_data
         {
             twod prev_size;
+            ui16 seq_num = 0xFFFF;
             size_t shm_offset = {};
         };
         std::array<meta_data, 5> layer_meta_data{};
@@ -6669,6 +6671,7 @@ namespace netxs::gui
             if (seq_num.has_value())
             {
                 //todo store seq_num in layer-related affected region buffer
+                md.seq_num = seq_num.value();;
                 session.received_replies[seq_num.value()].store(true, std::memory_order_release);
                 if constexpr (debugmode) log("Frame seq=%%", seq_num.value());
             }
@@ -6792,11 +6795,47 @@ namespace netxs::gui
             auto& session = *x11::session_ptr;
             if constexpr (debugmode) log("Try to make window foreground");
             auto lock = std::lock_guard{ session.mutex };
-            session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)master.hWnd },
-                                          x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
-            session.accumrq(batch_buffer, x11::req::set_input_focus{ .window_id = (ui32)master.hWnd });
+            //todo revise: this changes only logic Z-order (mouse input only), but keep visible order intact
+            //for (auto& l : layers)
+            //{
+            //    auto& p = l.get();
+            //    session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)p.hWnd },
+            //                                  x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
+            //}
+            ////session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)(ui32)master.hWnd },
+            ////                              x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
+
+            //todo all layers should be unmap/map/redrawn
+            session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = (ui32)master.hWnd });
+            session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)master.hWnd });
+            auto& md = layer_meta_data[master.index];
+            auto& s = master;
+            auto r = rect{ dot_00, s.area.size };
+            auto dirty_offset = (ui32)md.shm_offset;
+            auto seq_num = session.accumrq(batch_buffer, x11::req::shm::put_image
+            {
+                .major_opcode = session.shm_major_opcode,
+                .drawable     = (ui32)s.hWnd,
+                .gc_id        = (ui32)s.hdc,
+                .total_width  = (ui16)s.area.size.x,
+                .total_height = (ui16)s.area.size.y,
+                .src_x        = (ui16)r.coor.x,
+                .src_y        = (ui16)0,        // Use 0, because dirty_offset already points to the required line Y.
+                .src_width    = (ui16)r.size.x, // Dirty rect size.
+                .src_height   = (ui16)r.size.y, //
+                .dst_x        = (si16)r.coor.x, // Window dest coor.
+                .dst_y        = (si16)r.coor.y, //
+                .shm_seg_id   = session.shm_segment_xid,
+                .offset       = (ui32)dirty_offset, // New data start.
+            });
+            md.seq_num = seq_num;
+            session.received_replies[seq_num].store(true, std::memory_order_release);
+
+            //todo this makes window resizing be center-based (revise)
+            //session.accumrq(batch_buffer, x11::req::set_input_focus{ .window_id = (ui32)master.hWnd });
             session.x11connection->send(batch_buffer);
             batch_buffer.clear();
+            is_foreground_window = true;
         }
         void window_make_focused_impl()
         {
@@ -7035,6 +7074,14 @@ namespace netxs::gui
                                                                      .device_id    = captured_pointer_id });
         }
         void mouse_catch_outside() {}
+        void _mouse_press(si32 bttn, bool is_pressed)
+        {
+            if (is_pressed && !is_foreground_window) // Emulate win32 behavior (bring foreground on any click).
+            {
+                window_make_foreground();
+            }
+            mouse_press(bttn, is_pressed);
+        }
         bool input_read(view packet)
         {
             auto& session = *x11::session_ptr;
@@ -7166,15 +7213,15 @@ namespace netxs::gui
                     auto is_pressed = d.evtype == x11::req::xi2::event::ButtonPress;
                     auto button_id  = m.detail;
                     if constexpr (debugmode) log("  Mouse Button%%: bttn_id=%%", is_pressed ? "Press" : "Release", button_id);
-                         if (button_id == 1) mouse_press(bttn::left,   is_pressed);
-                    else if (button_id == 2) mouse_press(bttn::middle, is_pressed);
-                    else if (button_id == 3) mouse_press(bttn::right,  is_pressed);
-                    //else if (button_id == 4 && is_pressed) mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
-                    //else if (button_id == 5 && is_pressed) mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
-                    //else if (button_id == 6 && is_pressed) mouse_wheel(120, 1); // WheelLeft
-                    //else if (button_id == 7 && is_pressed) mouse_wheel(-120, 1);  // WheelRight
-                    else if (button_id == 8) mouse_press(bttn::xbutton1, is_pressed);
-                    else if (button_id == 9) mouse_press(bttn::xbutton2, is_pressed);
+                         if (button_id == 1) _mouse_press(bttn::left,   is_pressed);
+                    else if (button_id == 2) _mouse_press(bttn::middle, is_pressed);
+                    else if (button_id == 3) _mouse_press(bttn::right,  is_pressed);
+                    //else if (button_id == 4 && is_pressed) _mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
+                    //else if (button_id == 5 && is_pressed) _mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
+                    //else if (button_id == 6 && is_pressed) _mouse_wheel(120, 1); // WheelLeft
+                    //else if (button_id == 7 && is_pressed) _mouse_wheel(-120, 1);  // WheelRight
+                    else if (button_id == 8) _mouse_press(bttn::xbutton1, is_pressed);
+                    else if (button_id == 9) _mouse_press(bttn::xbutton2, is_pressed);
                 }
                 //else if (d.evtype == x11::req::xi2::event::Motion)
                 //{
@@ -7232,6 +7279,7 @@ namespace netxs::gui
                 auto focused = d.evtype == x11::req::xi2::event::FocusIn;
                 if constexpr (debugmode) log("%%Focus: sourceid=%% '%%' mods=0x%% focused=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, utf::to_hex(f.mods.effective), (si32)focused);
                 //todo window_toggle_redirect(focused);
+                if (!focused) is_foreground_window = faux;
                 focus_event(focused);
             }
             if constexpr (debugmode) log("End ----------------------------------------");
