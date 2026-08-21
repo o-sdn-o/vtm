@@ -534,23 +534,13 @@ namespace netxs::gui
                 sort_faces();
                 auto get = [&](si32 style_id) // Load first face from the sorted list.
                 {
-                    auto has_broken_fonts = faux;
                     auto& sorted_list = sorted_face_list[style_id];
                     for (auto& bare_face_rec : sorted_list)
                     {
-                        if (bare_face_rec.bare_face_ptr->valid
-                         && bare_face_rec.load_from_file(fcache, family_ref, style_id))
+                        if (bare_face_rec.bare_face_ptr->valid && bare_face_rec.load_from_file(fcache, family_ref, style_id))
                         {
                             break; // Load only the first available face (lazy).
                         }
-                        else
-                        {
-                            has_broken_fonts = true;
-                        }
-                    }
-                    if (has_broken_fonts) // Remove broken records from the sorted list.
-                    {
-                        std::erase_if(sorted_list, [](auto& bare_face_rec){ return !bare_face_rec.bare_face_ptr->valid; });
                     }
                 };
                 get(font_style::regular    );
@@ -784,50 +774,33 @@ namespace netxs::gui
             }
             auto& select_font_face(si32 style_id)
             {
-                auto has_broken_fonts = faux;
                 auto& sorted_list = sorted_face_list[style_id];
                 auto inst_face = std::reference_wrapper{ sorted_list.front() };
                 for (auto& bare_face_rec : sorted_list)
                 {
-                    if (!bare_face_rec.fthb_pair_cache[0].fthb_pair && !bare_face_rec.load_from_file(fcache, family_ref, style_id))
-                    {
-                        has_broken_fonts = true;
-                    }
-                    else
+                    if (bare_face_rec.bare_face_ptr->valid)
+                    if (bare_face_rec.fthb_pair_cache[0].fthb_pair || bare_face_rec.load_from_file(fcache, family_ref, style_id))
                     {
                         inst_face = bare_face_rec;
                         break;
                     }
                 }
-                if (has_broken_fonts) // Remove broken records from the sorted list.
-                {
-                    std::erase_if(sorted_list, [](auto& bare_face_rec){ return !bare_face_rec.bare_face_ptr->valid; });
-                }
                 return inst_face.get();
             }
             auto& select_font_face(std::span<const utfx> codepoints, si32 style_id)
             {
-                auto has_broken_fonts = faux;
                 auto& sorted_list = sorted_face_list[style_id];
                 auto inst_face = std::reference_wrapper{ sorted_list.front() };
                 for (auto& bare_face_rec : sorted_list)
                 {
-                    if (fonts::hittest(bare_face_rec.bare_face_ptr->unicode_ranges, codepoints))
+                    if (bare_face_rec.bare_face_ptr->valid && fonts::hittest(bare_face_rec.bare_face_ptr->unicode_ranges, codepoints))
                     {
-                        if (!bare_face_rec.fthb_pair_cache[0].fthb_pair && !bare_face_rec.load_from_file(fcache, family_ref, style_id))
-                        {
-                            has_broken_fonts = true;
-                        }
-                        else
+                        if (bare_face_rec.fthb_pair_cache[0].fthb_pair || bare_face_rec.load_from_file(fcache, family_ref, style_id))
                         {
                             inst_face = bare_face_rec;
                             break;
                         }
                     }
-                }
-                if (has_broken_fonts) // Remove broken records from the sorted list.
-                {
-                    std::erase_if(sorted_list, [](auto& bare_face_rec){ return !bare_face_rec.bare_face_ptr->valid; });
                 }
                 return inst_face.get();
             }
@@ -973,6 +946,33 @@ namespace netxs::gui
                 char_height = (std::remove_reference_t<decltype(char_height)>)tmp_value;
             }
         }
+        static auto is_valid(FT_Face face)
+        {
+            struct
+            {
+                si32 is_color;
+                bool is_valid;
+            } r{};
+            auto width = face->bbox.xMax - face->bbox.xMin;
+            auto height = face->bbox.yMax - face->bbox.yMin;
+            auto invalid = face->num_glyphs <= 0 || face->num_glyphs > 65535
+                        || face->units_per_EM < 16 || face->units_per_EM > 16384
+                        || width <= 0 || height <= 0
+                        || width > face->units_per_EM * 10 || height > face->units_per_EM * 10
+                        || face->height <= 0
+                        || face->ascender <= face->descender
+                        || face->max_advance_width <= 0;
+            if (!invalid)
+            {
+                auto has_outlines = FT_IS_SCALABLE(face);
+                auto has_colr = fonts::has_sfnt_table(face, FT_MAKE_TAG('C', 'O', 'L', 'R'));
+                auto has_cpal = fonts::has_sfnt_table(face, FT_MAKE_TAG('C', 'P', 'A', 'L'));
+                auto has_svg  = fonts::has_sfnt_table(face, FT_MAKE_TAG('S', 'V', 'G', ' '));
+                r.is_color = has_svg ? fonts::color_type::svg : (has_colr && has_cpal) ? fonts::color_type::colr : fonts::color_type::mono;
+                r.is_valid = r.is_color || has_outlines;
+            }
+            return r;
+        }
 
         void set_cellsz(si32 cell_height)
         {
@@ -1031,7 +1031,7 @@ namespace netxs::gui
                 }
                 else
                 {
-                    log("%%Font '%fontname%' is not found in the system", prompt::gui, family_utf8);
+                    log("%%Font '%fontname%' is not found in the system or invalid", prompt::gui, family_utf8);
                 }
             }
         }
@@ -1361,6 +1361,7 @@ namespace netxs::gui
                     auto index = 0;
                     while (FT_Err_Ok == ::FT_New_Face(ft_library.get(), item.data.c_str(), index++, &face)) // Read headers only (fast enough).
                     {
+                        if (auto face_state = fonts::is_valid(face); face_state.is_valid)
                         if (auto os2 = (TT_OS2*)::FT_Get_Sfnt_Table(face, FT_SFNT_OS2)) // We need OS/2 metadata.
                         {
                             auto family = qiew{ face->family_name };
@@ -1387,11 +1388,8 @@ namespace netxs::gui
                             rec.strikethroughPosition  = os2->yStrikeoutPosition;
                             rec.strikethroughThickness = os2->yStrikeoutSize;
                             rec.lineGap                = os2->sTypoLineGap;
-                            auto has_colr = has_sfnt_table(face, FT_MAKE_TAG('C', 'O', 'L', 'R'));
-                            auto has_cpal = has_sfnt_table(face, FT_MAKE_TAG('C', 'P', 'A', 'L'));
-                            auto has_svg  = has_sfnt_table(face, FT_MAKE_TAG('S', 'V', 'G', ' '));
-                            rec.is_color = has_svg ? fonts::color_type::svg : (has_colr && has_cpal) ? fonts::color_type::colr : fonts::color_type::mono;
-                            rec.valid = rec.num_glyphs && rec.units_per_EM && (rec.is_color || FT_IS_SCALABLE(face));
+                            rec.is_color               = face_state.is_color;
+                            rec.valid                  = true;
                             rec.is_monospaced          = FT_IS_FIXED_WIDTH(face);
                             rec.weight_value           = os2->usWeightClass;
                             rec.stretch_value          = os2->usWidthClass;
