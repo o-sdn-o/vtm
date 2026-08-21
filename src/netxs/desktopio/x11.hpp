@@ -449,17 +449,37 @@ namespace netxs::x11
                 ui32 client_major_version = 2; // Required 2.0+ (Window Shape(Input) Region).
                 ui32 client_minor_version = 0;
             };
+            struct create_region // XFixesCreateRegion (Minor opcode 5).
+            {
+                byte major_opcode;      // xfixes_major_opcode.
+                byte minor_opcode = 5;
+                ui16 length       = 4;
+                ui32 region_id;
+                // Payload (rectangle list)...
+                ui16 rect0[4] = {}; // Empty rect. ui16 x=0,y=0,w=300,h=200
+            };
+            struct destroy_region // XFixesDestroyRegion (Minor opcode 10).
+            {
+                byte major_opcode;      // xfixes_major_opcode.
+                byte minor_opcode = 10;
+                ui16 length       = 2;
+                ui32 region_id;
+            };
             struct set_window_shape_region // XFixesSetWindowShapeRegion (Minor opcode 21).
             {
+                static constexpr auto ShapeBounding = 0; // Visible boundary (painting geometry).
+                static constexpr auto ShapeClip     = 1; // Visible clip.
+                static constexpr auto ShapeInput    = 2; // Input hit-test.
+
                 byte major_opcode;      // xfixes_major_opcode.
                 byte minor_opcode = 21; // 21: XFixesSetWindowShapeRegion
                 ui16 length       = 5;
                 ui32 window_id;         // Dest window ID.
-                byte shape_kind   = 1;  // 1: ShapeInput (input region).
+                byte shape_kind   = ShapeInput;  // 2: ShapeInput (input region).
                 byte pad[3]       = {};
                 si16 x_offset     = 0;  // Region offset.
                 si16 y_offset     = 0;  //
-                ui32 region       = 0;  // 0 (None): empty region (make window transparent for mouse).
+                ui32 region_id;         // 0: None - Reset any filtering.
             };
         }
         namespace xi2
@@ -1271,6 +1291,7 @@ namespace netxs::x11
 
         ui32                                  argb_visual32_id = 0;
         ui32                                  argb_colormap_id = 0;
+        ui32                                  empty_region_id = 0; // XFixes empty region.
 
         ui32                                  atom_wm_hints = 35; // WM_HINTS
         ui32                                  atom_wm_transient_for = 68; // WM_TRANSIENT_FOR
@@ -1717,10 +1738,10 @@ namespace netxs::x11
                                                     .type      = atom_atom }, // XA_ATOM.
                                                 atom_net_wm_window_type_utility);
                 // Group sub-layers.
-                //sendrq<x11::req::change_property>({ .window_id = new_window_id,
-                //                                    .property  = atom_wm_transient_for, // Atom WM_TRANSIENT_FOR=68.
-                //                                    .type      = atom_window },         // Atom XA_WINDOW=33.
-                //                                (ui32)master_window_id);
+                sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                                                    .property  = atom_wm_transient_for, // Atom WM_TRANSIENT_FOR=68.
+                                                    .type      = atom_window },         // Atom XA_WINDOW=33.
+                                                (ui32)master_window_id);
                 // Remove sub-layers from taskbar.
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                     .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
@@ -1728,7 +1749,8 @@ namespace netxs::x11
                                                 atom_net_wm_state_skip_taskbar);
                 // Make sub-layer transparent for mouse.
                 sendrq<x11::req::xfixes::set_window_shape_region>({ .major_opcode = xfixes_major_opcode,
-                                                                    .window_id    = new_window_id });
+                                                                    .window_id    = new_window_id,
+                                                                    .region_id    = empty_region_id });
             }
 
             // Disable shadows.
@@ -1953,6 +1975,16 @@ namespace netxs::x11
             //    if (ev.type == x11::event::Error || ev.type == x11::event::DestroyNotify) break;
             //}
             //free_resource_id(new_window_id);
+            return true;
+        }
+        bool create_shared_objects()
+        {
+            empty_region_id = new_resource_id();
+            sendrq<x11::req::xfixes::create_region>({ .major_opcode = xfixes_major_opcode,
+                                                      .region_id    = empty_region_id });
+            //sendrq<x11::req::xfixes::destroy_region>({ .major_opcode = xfixes_major_opcode,
+            //                                           .region_id    = empty_region_id });
+            //free_resource_id(empty_region_id);
             return true;
         }
         auto listen_root_events() // Subscribe on root's property change (to track some desktop window has received focus).
@@ -2339,6 +2371,7 @@ namespace netxs::x11
                 if (session.get_atoms())
                 if (session.get_props())
                 if (session.get_default_window_area())
+                if (session.create_shared_objects())
                 {
                     if constexpr (debugmode) log(session.str());
                     auto& x11screen = session.roots.front().s;
