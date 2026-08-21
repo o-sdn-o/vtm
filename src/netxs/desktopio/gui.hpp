@@ -1227,13 +1227,14 @@ namespace netxs::gui
             #if defined(_WIN32)
                 { "sans-serif", "Arial"           },
                 { "serif",      "Times New Roman" },
+                { "monospace",  "Courier New"     },
             #else
                 { "sans-serif", "DejaVu Sans"     },
                 { "serif",      "DejaVu Serif"    },
+                { "monospace",  "DejaVu Sans Mono"},
             #endif
                 { "cursive",    "Comic Sans MS"   },
                 { "fantasy",    "Impact"          },
-                { "monospace",  "Courier New"     },
             });
             auto register_svg_font = [](auto&& family, auto& def_face)
             {
