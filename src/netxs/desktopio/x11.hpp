@@ -1427,9 +1427,8 @@ namespace netxs::x11
         byte                                  shm_completion_event = 0;
         fd_t                                  shm_buffer_fd = os::invalid_fd;
         byte*                                 shm_buffer_ptr = {};
-        size_t                                shm_buffer_len = {};
+        ui32                                  shm_buffer_len = {};
         ui32                                  shm_segment_xid = {};
-        size_t                                shm_buffer_offset = {};
 
         byte                                  xi2_major_opcode = 0;
 

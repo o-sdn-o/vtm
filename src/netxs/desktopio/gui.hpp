@@ -83,15 +83,33 @@ namespace netxs::gui
         regs sync; // layer: Dirty region list.
         bool live; // layer: Should the layer be presented.
         tset klok; // layer: Active timer list.
-        si32 index;
 
-        layer(si32 index)
+        #if !defined(_WIN32) && !defined(__APPLE__) // X11 only.
+            std::array<ui16, 2> seq_nums = { 0xFFFF, 0xFFFF };
+            ui32 shm_offset = {};
+            twod prev_size;
+            bool bank = {}; // Bank is switching offset segment on every resize iteration.
+
+            auto get_offset(auto& session, bool toggle_bank = faux)
+            {
+                bank ^= toggle_bank;
+                session.sync_reply(seq_nums[bank]);
+                return (ui32)((session.shm_buffer_len / 2) * bank + shm_offset);
+            }
+            void set_seq_num(auto& session, ui16 seq_num)
+            {
+                seq_nums[bank] = seq_num;
+                session.received_replies[seq_num].store(true, std::memory_order_release);
+                if constexpr (debugmode) log("Frame seq=%%", seq_num);
+            }
+        #endif
+
+        layer()
             :  hdc{},
               hWnd{},
               prev{ .coor = dot_mx },
               area{ .size = dot_11 },
-              live{ faux },
-              index{ index }
+              live{ faux }
         { }
         void hide() { live = faux; }
         void show() { live = true; }
@@ -3439,11 +3457,11 @@ namespace netxs::gui
         cfg_t config; // winbase: User specified settings.
         title titles; // winbase: UI header/footer.
         focus wfocus; // winbase: UI focus.
-        layer master{ 0 }; // winbase: Layer for Client.
-        layer blinky{ 1 }; // winbase: Layer for blinking characters.
-        layer header{ 2 }; // winbase: Layer for Header.
-        layer footer{ 3 }; // winbase: Layer for Footer.
-        layer tooltip_layer{ 4 }; // winbase: Layer for Tooltip.
+        layer master; // winbase: Layer for Client.
+        layer blinky; // winbase: Layer for blinking characters.
+        layer header; // winbase: Layer for Header.
+        layer footer; // winbase: Layer for Footer.
+        layer tooltip_layer; // winbase: Layer for Tooltip.
         std::array<std::reference_wrapper<layer>, 5> layers = // gcc requires double braces on x32 platforms.
         {{
             master,
@@ -6490,33 +6508,26 @@ namespace netxs::gui
         ui16 master_pointer_id{};
         ui16 captured_pointer_id{};
         bool is_foreground_window{};
-        struct meta_data
-        {
-            twod prev_size;
-            ui16 seq_num = 0xFFFF;
-            size_t shm_offset = {};
-        };
-        std::array<meta_data, 5> layer_meta_data{};
 
         window(auto&& ...Args)
             : winbase{ Args... }
         {
             //todo it is just a test
-            auto align = [](size_t offset){ return (size_t)(offset + 15) & ~15; };
+            auto align = [](ui32 offset){ return (ui32)(offset + 15) & ~15; };
             auto& session = *x11::session_ptr;
             auto large_step = (session.shm_buffer_len / 2) / 3;
             auto small_step = (session.shm_buffer_len / 2) / 9;
-            layer_meta_data[0].shm_offset = 0;
-            layer_meta_data[1].shm_offset = align(large_step);
-            layer_meta_data[2].shm_offset = align(layer_meta_data[1].shm_offset + large_step);
-            layer_meta_data[3].shm_offset = align(layer_meta_data[2].shm_offset + small_step);
-            layer_meta_data[4].shm_offset = align(layer_meta_data[3].shm_offset + small_step);
+            layers[0].get().shm_offset = 0;
+            layers[1].get().shm_offset = align(large_step);
+            layers[2].get().shm_offset = align(layers[1].get().shm_offset + large_step);
+            layers[3].get().shm_offset = align(layers[2].get().shm_offset + small_step);
+            layers[4].get().shm_offset = align(layers[3].get().shm_offset + small_step);
             if constexpr (debugmode) log("shm_size=%% l0=%% l1=%% l2=%% l3=%% l4=%%", session.shm_buffer_len,
-                layer_meta_data[0].shm_offset,
-                layer_meta_data[1].shm_offset,
-                layer_meta_data[2].shm_offset,
-                layer_meta_data[3].shm_offset,
-                layer_meta_data[4].shm_offset);
+                layers[0].get().shm_offset,
+                layers[1].get().shm_offset,
+                layers[2].get().shm_offset,
+                layers[3].get().shm_offset,
+                layers[4].get().shm_offset);
         }
         bool keybd_test_pressed(si32 /*virtcod*/, si32 /*keycode*/ = 0) { return true; /*!!(vkstat[virtcod] & 0x80);*/ }
         bool keybd_test_toggled(si32 /*virtcod*/) { return faux; /*!!(vkstat[virtcod] & 0x01);*/ }
@@ -6538,7 +6549,7 @@ namespace netxs::gui
         bool layer_create(layer& s, twod win_coord = {}, twod grid_size = {}, dent border_dent = {}, twod cell_size = {})
         {
             auto& session = *x11::session_ptr;
-            auto is_master = s.index == 0;
+            auto is_master = &s == &master;
             if (is_master)
             {
                 auto use_default_size = grid_size == dot_mx;
@@ -6602,11 +6613,10 @@ namespace netxs::gui
         void layer_present(text& batch_buffer, layer& s)
         {
             if (!s.data.data() || s.area.size.x <= 0 || s.area.size.y <= 0) return;
-            auto& md = layer_meta_data[s.index];
             auto& session = *x11::session_ptr;
             auto target_coor = s.live ? s.area.coor : s.hidden;
             auto windowmoved = s.prev.coor != target_coor;
-            auto windowsized = std::exchange(md.prev_size, s.area.size) != s.area.size;
+            auto windowsized = std::exchange(s.prev_size, s.area.size) != s.area.size;
             auto visibility_changed = windowmoved && (s.prev.coor == s.hidden || target_coor == s.hidden);
             if (windowmoved && windowsized && target_coor != s.hidden)
             {
@@ -6668,7 +6678,7 @@ namespace netxs::gui
                 {
                     continue;
                 }
-                auto dirty_offset = (ui32)md.shm_offset + (r.coor.y * s.area.size.x * sizeof(ui32));
+                auto dirty_offset = s.get_offset(session) + (r.coor.y * s.area.size.x * sizeof(ui32));
                 seq_num = session.accumrq(batch_buffer, x11::req::shm::put_image
                 {
                     .major_opcode = session.shm_major_opcode,
@@ -6688,10 +6698,7 @@ namespace netxs::gui
             }
             if (seq_num.has_value())
             {
-                //todo store seq_num in layer-related affected region buffer
-                md.seq_num = seq_num.value();
-                session.received_replies[seq_num.value()].store(true, std::memory_order_release);
-                if constexpr (debugmode) log("Frame seq=%%", seq_num.value());
+                s.set_seq_num(session, seq_num.value());
             }
             s.sync.clear();
         }
@@ -6717,48 +6724,12 @@ namespace netxs::gui
         void layer_timer_stop(layer& /*s*/, ui32 /*eventid*/) {}
         bits layer_get_bits(layer& s, bool zeroize = faux)
         {
-            //auto bitmap = std::span{ (argb*)shm_addr, (argb*)shm_addr + (grid_size.x * grid_size.y) };
-            //s.data = netxs::raster{ bitmap, rect{ win_coord, grid_size }};
             if (s.hdc && s.area)
             {
                 if (s.resized())
                 {
                     auto& session = *x11::session_ptr;
-                    //auto& x11screen = session.roots.front().s;
-
-                    //todo implement allocation logic inside shared memory (+double buffering)
-                    //auto ptr = (void*)nullptr;
-                    //auto bmi = BITMAPINFO{ .bmiHeader = { .biSize        = sizeof(BITMAPINFOHEADER),
-                    //                                      .biWidth       = s.area.size.x,
-                    //                                      .biHeight      = -s.area.size.y,
-                    //                                      .biPlanes      = 1,
-                    //                                      .biBitCount    = 32,
-                    //                                      .biCompression = BI_RGB }};
-                    //if (auto hbm = ::CreateDIBSection((HDC)s.hdc, &bmi, DIB_RGB_COLORS, &ptr, 0, 0)) // 0.050 ms
-                    //{
-                    //    ::DeleteObject(::SelectObject((HDC)s.hdc, hbm));
-                    //    zeroize = faux;
-                    //    s.prev.size = s.area.size;
-                    //    s.data = bits{ std::span<argb>{ (argb*)ptr, (sz_t)s.area.size.x * s.area.size.y }, s.area };
-                    //
-                    //Sync resize:
-                    //send noop
-                    //wait reply
-                    //}
-                    //else log("%%Compatible bitmap creation error: %ec%", prompt::gui, ::GetLastError());
-
-                    //auto required_bytes = (size_t)s.area.size.x * s.area.size.y * sizeof(argb);
-                    //auto aligned_offset = (size_t)(session.shm_buffer_offset + 15) & ~15;
-                    //auto current_buffer_half_size = session.shm_buffer_len / 2;
-                    //if (aligned_offset + required_bytes > current_buffer_half_size)
-                    //{
-                    //    aligned_offset = 0;
-                    //    log("%%X11 SHM local allocator wrapped around inside frame", prompt::gui);
-                    //}
-                    //auto base_ptr = session.shm_buffer_ptr + session.current_frame_index * current_buffer_half_size;
-                    //auto layer_shm_ptr = (argb*)(base_ptr + aligned_offset);
-                    auto& md = layer_meta_data[s.index];
-                    auto layer_shm_ptr = (argb*)(session.shm_buffer_ptr + md.shm_offset);
+                    auto layer_shm_ptr = (argb*)(session.shm_buffer_ptr + s.get_offset(session, true));
                     s.prev.size = s.area.size;
                     auto bitmap_span = std::span<argb>{ layer_shm_ptr, (size_t)s.area.size.x * s.area.size.y };
                     s.data = bits{ bitmap_span, s.area };
@@ -6836,9 +6807,8 @@ namespace netxs::gui
             //    if (!s.live) continue;
             //    session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = (ui32)s.hWnd });
             //    session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.hWnd });
-            //    auto& md = layer_meta_data[s.index];
             //    auto r = rect{ dot_00, s.area.size };
-            //    auto dirty_offset = (ui32)md.shm_offset;
+            //    auto dirty_offset = s.get_offset(session);
             //    auto seq_num = session.accumrq(batch_buffer, x11::req::shm::put_image
             //    {
             //        .major_opcode = session.shm_major_opcode,
@@ -6855,8 +6825,7 @@ namespace netxs::gui
             //        .shm_seg_id   = session.shm_segment_xid,
             //        .offset       = (ui32)dirty_offset, // New data start.
             //    });
-            //    md.seq_num = seq_num;
-            //    session.received_replies[seq_num].store(true, std::memory_order_release);
+            //    s.set_seq_num(session, seq_num);
             //}
             //session.sync_server(batch_buffer, faux);
 
