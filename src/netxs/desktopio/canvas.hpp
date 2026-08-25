@@ -3737,13 +3737,14 @@ namespace netxs
             static constexpr auto safe = "text/protected"sv;
         }
 
-        auto meta(twod size, si32 form) // mime: Return clipdata's meta data.
+        auto meta([[maybe_unused]] twod size, [[maybe_unused]] si32 form) // mime: Return clipdata's meta data.
         {
-            return utf::concat(form == htmltext ? tag::html
-                             : form == richtext ? tag::rich
-                             : form == ansitext ? tag::ansi
-                             : form == safetext ? tag::safe
-                                                : tag::text, "/", size.x, "/", size.y);
+            return "c"s; //todo Make it compatible with any terminals.
+            //return utf::concat(form == htmltext ? tag::html
+            //                 : form == richtext ? tag::rich
+            //                 : form == ansitext ? tag::ansi
+            //                 : form == safetext ? tag::safe
+            //                                    : tag::text, "/", size.x, "/", size.y);
         }
     }
 

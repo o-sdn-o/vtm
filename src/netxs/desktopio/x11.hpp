@@ -338,6 +338,16 @@ namespace netxs::x11
             byte pad    = 0;
             ui16 length = 1;
         };
+        //struct create_pixmap // Opcode 53 (create pixmap).
+        //{
+        //    byte opcode = 53; // CreatePixmap.
+        //    byte depth  = 32;
+        //    ui16 length = 4;
+        //    ui32 pixmap_id;   // Our side generated id.
+        //    ui32 drawable_id; // root_window_id
+        //    ui16 width;       // Pixmap size
+        //    ui16 height;      //
+        //};
         struct create_gc // Opcode 55 (create graphical context).
         {
             byte opcode = 55;
@@ -347,6 +357,18 @@ namespace netxs::x11
             ui32 drawable;       // Our window ID (or root window)
             ui32 value_mask = 0; // No additional attributes
         };
+        //struct get_image // Opcode 73 (get image).
+        //{
+        //    byte reqType = 73;     // X_GetImage.
+        //    byte format  = 2;      // 1: XYPixmap, 2: ZPixmap.
+        //    ui16 length  = 5;
+        //    ui32 drawable_id;      // session.root_window_id
+        //    si16 x       = 0;
+        //    si16 y       = 0;
+        //    ui16 width   = 1;
+        //    ui16 height  = 1;
+        //    ui32 plane_mask = 0xFFFFFFFF;
+        //};
         struct create_colormap // Opcode 78 (create colormap)
         {
             byte opcode = 78;
@@ -998,6 +1020,163 @@ namespace netxs::x11
                 //ui16 pad1               = 0;
             };
         }
+//        namespace xpresent
+//        {
+//            static constexpr auto ConfigureNotifyMask = 1 << 0;
+//            static constexpr auto CompleteNotifyMask  = 1 << 1;
+//            static constexpr auto IdleNotifyMask      = 1 << 2;
+//            //static constexpr auto RedirectNotifyMask  = 1 << 3;
+//
+//            static constexpr auto ConfigureNotify = 0;
+//            static constexpr auto CompleteNotify  = 1;
+//            static constexpr auto IdleNotify      = 2;
+//            //static constexpr auto RedirectNotify  = 3;
+//
+//            struct query_version
+//            {
+//                struct reply
+//                {
+//                    byte status;
+//                    byte pad1;
+//                    ui16 sequence;
+//                    ui32 length;
+//                    ui32 server_major_version;
+//                    ui32 server_minor_version;
+//                    ui32 pad2[4];
+//                };
+//                byte major_opcode;     // xpresent_major_opcode.
+//                byte minor_opcode = 0; // 0: PresentQueryVersion.
+//                ui16 length = 3;
+//                ui32 client_major_version;
+//                ui32 client_minor_version;
+//            };
+//            struct present_pixmap
+//            {
+//                static constexpr auto PresentOptionNone         = 0;
+//                static constexpr auto PresentOptionAsync        = 1 << 0; // Don't wait for VBlank.
+//                static constexpr auto PresentOptionCopy         = 1 << 1;
+//                static constexpr auto PresentOptionUST          = 1 << 2;
+//                static constexpr auto PresentOptionSuboptimal   = 1 << 3;
+//                static constexpr auto PresentOptionAsyncMayTear = 1 << 4;
+//
+//                byte major_opcode;       // xpresent_major_opcode
+//                byte minor_opcode  = 1;  // 1: PresentPixmap.
+//                ui16 length        = 18;
+//                ui32 window_id;          // s.back_hWnd
+//                ui32 pixmap_id;          // Virtual pixmap id (1x1).
+//                ui32 serial;             // Our frame id (seq_num_any).
+//                ui32 valid_region  = 0;  // 0: Update a whole window.
+//                ui32 update_region = 0;  //
+//
+//                si16 x_offset      = 0;
+//                si16 y_offset      = 0;
+//                ui32 target_crtc   = 0;
+//
+//                ui32 wait_fence    = 0;
+//                ui32 idle_fence    = 0;
+//
+//                ui32 options       = 0;//PresentOptionCopy;//PresentOptionAsync;
+//                ui32 pad           = {};
+//                ui64 target_msc    = 0;  // 0: Make it fast as possible (don't wait for VBlank).
+//                ui64 divisor       = 0;
+//                ui64 remainder     = 0;
+//                // Payload: LISTofPRESENTNOTIFY
+//            };
+//            struct notify_msc
+//            {
+//                byte major_opcode;       // session.xpresent_major_opcode
+//                byte minor_opcode = 2;   // 2: PresentNotifyMSC
+//                ui16 length       = 10;
+//                ui32 window_id;          // master.hWnd
+//                ui32 serial;
+//                ui32 pad          = 0;
+//                ui64 target_msc   = 0;   // (current_msc + 1 or +2)
+//                ui64 divisor      = 0;
+//                ui64 remainder    = 0;
+//            };
+//            struct select_input // Subscribe window on xpresent events.
+//            {
+//
+//                byte major_opcode;     // xpresent_major_opcode.
+//                byte minor_opcode = 3; // 3: PresentSelectInput.
+//                ui16 length       = 4;
+//                ui32 event_id;         // Our subscription ID (=session.new_resource_id()).
+//                ui32 window_id;        // Target window id.
+//                ui32 event_mask = (1 << 3) - 1;//CompleteNotifyMask;
+//            };
+//            struct base // notify_event header.
+//            {
+//                byte type;       // =GenericEvent (35).
+//                byte extension;  // =xpresent_major_opcode.
+//                ui16 sequence;
+//                ui32 length;
+//                ui16 evtype;
+//            };
+//            struct complete_notify // xpresent_complete_notify_event
+//            {
+//                static constexpr auto CompleteNotify = 0;
+//
+//                base header;
+//                byte kind;       // =PresentCompleteKindPixmap (0).
+//                byte mode;       // =PresentCompleteModeCopy (0) or Flip (1).
+//                ui32 event_id;
+//                ui32 window_id;  // Our window id.
+//                ui32 serial;     // Our cookies.
+//                ui64 ust;        // Unadjusted System Time.
+//                ui64 msc;        // Media Stream Counter.
+//            };
+//            struct configure_notify
+//            {
+//                base header;
+//                ui16 pad2;
+//                ui32 event_id;
+//                ui32 window_id;
+//                si16 x;
+//                si16 y;
+//                ui16 width;
+//                ui16 height;
+//                si16 off_x;
+//                si16 off_y;
+//                ui16 pixmap_width;
+//                ui16 pixmap_height;
+//                ui32 pixmap_flags;
+//            };
+//            struct idle_notify
+//            {
+//                base header;
+//                ui16 pad2;
+//                ui32 event_id;
+//                ui32 window_id;
+//                ui32 serial;
+//                ui32 pixmap_id;
+//                ui32 idle_fence;
+//            };
+//            //struct redirect_notify
+//            //{
+//            //    base header;
+//            //    byte update_window;
+//            //    byte pad1;
+//            //    ui32 event_id;
+//            //    ui32 event_window_id;
+//            //    ui32 window_id;
+//            //    ui32 pixmap_id;
+//            //    ui32 serial;
+//            //    ui32 valid_region;
+//            //    ui32 update_region;
+//            //    ui32 valid_rect;
+//            //    ui32 update_rect;
+//            //    si16 x_off;
+//            //    si16 y_off;
+//            //    ui32 target_crtc;
+//            //    ui32 wait_fence;
+//            //    ui32 idle_fence;
+//            //    ui32 options;
+//            //    ui32 pad2;
+//            //    ui64 target_msc;
+//            //    ui64 divisor;
+//            //    ui64 remainder;
+//            //};
+//        }
         //namespace xsync
         //{
         //    struct query_version // xSyncInitialize
@@ -1385,12 +1564,16 @@ namespace netxs::x11
         text                                  vendor_str;     // buffer[32..32+vendor_length] = vendor_str
         std::vector<format>                   pixmap_formats; // format * number_of_formats = pixmap_formats
         std::vector<screen>                   roots;          // screen * number_of_screens = roots (always a multiple of 4)
+        ui32                                  root_window_id = 0;
 
         ui32                                  argb_visual32_id = 0;
         ui32                                  argb_colormap_id = 0;
         ui32                                  empty_region_id = 0; // XFixes empty region.
         //ui32                                  xsync_counter_id = 0; // XSync counter.
         //ui32                                  xsync_fence_id = 0; // XSync fence.
+        //ui32                                  virtual_pixmap_id = 0; // Fake Pixmap for XPresent triggering.
+
+        //ui32                                  atom_my_ping = 0; // _MY_PING
 
         ui32                                  atom_wm_hints = 35; // WM_HINTS
         ui32                                  atom_wm_transient_for = 68; // WM_TRANSIENT_FOR
@@ -1401,9 +1584,9 @@ namespace netxs::x11
         ui32                                  atom_net_wm_name = 0;
         ui32                                  atom_net_wm_state_skip_taskbar = 0; // Hide from the taskbar.
         ui32                                  atom_net_wm_state = 0;              //
-        ui32                                  atom_net_wm_window_opacity = 0; // _NET_WM_WINDOW_OPACITY (doesn't work in wslg)
+        //ui32                                  atom_net_wm_window_opacity = 0; // _NET_WM_WINDOW_OPACITY (doesn't work in wslg)
         ui32                                  atom_net_wm_window_type = 0;
-        ui32                                  atom_net_wm_window_type_normal = 0;
+        //ui32                                  atom_net_wm_window_type_normal = 0;
         ui32                                  atom_net_wm_window_type_utility = 0;
         //ui32                                  atom_net_wm_window_type_combo = 0;
         //ui32                                  atom_compton_shadow = 0;
@@ -1434,6 +1617,9 @@ namespace netxs::x11
 
         byte                                  xkb_major_opcode = 0;
         byte                                  xkb_first_event = 0;
+
+        //byte                                  xpresent_major_opcode = 0;
+        //byte                                  xpresent_first_event = 0;
 
         //byte                                  xsync_major_opcode = 0;
         //ui64                                  xsync_current_value = 1;
@@ -1480,9 +1666,20 @@ namespace netxs::x11
         {
             while (received_replies[sequence_number].load(std::memory_order_acquire))
             {
+                //if constexpr (debugmode) log(ansi::clr(tint::yellowlt, "wait sync_reply %%..."), sequence_number);
                 std::this_thread::yield();
             }
         }
+        //void sync_reply(ui16 sequence_number, span timeout) const
+        //{
+        //    auto current_time = datetime::now();
+        //    while (received_replies[sequence_number].load(std::memory_order_acquire))
+        //    {
+        //        //if constexpr (debugmode) log(ansi::clr(tint::yellowlt, "wait sync_reply %%..."), sequence_number);
+        //        if (datetime::now() - current_time >= timeout) break;
+        //        std::this_thread::yield();
+        //    }
+        //}
         template<class R, class V = qiew, class P = noop>
         auto accumrq(text& batch_buffer, R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
         {
@@ -1536,20 +1733,20 @@ namespace netxs::x11
                     reply_callbacks.pop_front();
                 }
             }
-            if (!r.callback)
+            auto extra_data = std::vector<char>{};
+            if (ev.type == x11::event::Reply && ev.length > 0)
             {
-                if constexpr (debugmode) log("%%unexpected Reply with empty queue", prompt::x11);
+                extra_data.resize(ev.length * sizeof(ui32));
+                x11connection->recv(extra_data.data(), extra_data.size()); // Blocking call.
+            }
+            if constexpr (debugmode) log("%%seq=%%", prompt::x11, r.sequence);
+            if (r.callback)
+            {
+                r.callback(ev, extra_data);
             }
             else
             {
-                auto extra_data = std::vector<char>{};
-                if (ev.type == x11::event::Reply && ev.length > 0)
-                {
-                    extra_data.resize(ev.length * sizeof(ui32));
-                    x11connection->recv(extra_data.data(), extra_data.size()); // Blocking call.
-                }
-                if constexpr (debugmode) log("%%seq=%%", prompt::x11, r.sequence);
-                r.callback(ev, extra_data);
+                if constexpr (debugmode) log("      Unexpected reply with an empty callback queue");
             }
         }
         auto get_error(x11::event::any const& ev)
@@ -1576,12 +1773,13 @@ namespace netxs::x11
                 case 16: err_str = "Bad Length";         break;
                 case 17: err_str = "Bad Implementation"; break;
             }
-                 if (err.major_opcode == shm_major_opcode   ) err_str += " (MIT-SHM Extension Error)";
-            else if (err.major_opcode == xfixes_major_opcode) err_str += " (XFIXES Extension Error)";
-            else if (err.major_opcode == xi2_major_opcode   ) err_str += " (XInput2 Extension Error)";
-            else if (err.major_opcode == xkb_major_opcode   ) err_str += " (XKB Extension Error)";
+                 if (err.major_opcode == shm_major_opcode     ) err_str += " (MIT-SHM Extension Error)";
+            else if (err.major_opcode == xfixes_major_opcode  ) err_str += " (XFIXES Extension Error)";
+            else if (err.major_opcode == xi2_major_opcode     ) err_str += " (XInput2 Extension Error)";
+            else if (err.major_opcode == xkb_major_opcode     ) err_str += " (XKB Extension Error)";
+            //else if (err.major_opcode == xpresent_major_opcode) err_str += " (XPresent Extension Error)";
             //else if (err.major_opcode == xsync_major_opcode ) err_str += " ('SYNC' Extension Error)";
-            return utf::fprint("%%Error: code=%%, seq=%%, bad_resource_id=0x%%, major=%%, minor=%% desc: %%", prompt::x11,
+            return utf::fprint(ansi::err("%%Error: code=%%, seq=%%, bad_resource_id=0x%%, major=%%, minor=%% desc: %%"), prompt::x11,
                             (ui32)err.error_code, (ui32)err.sequence, utf::to_hex(err.bad_value),
                             (ui32)err.major_opcode, (ui32)err.minor_opcode, err_str);
         }
@@ -1705,7 +1903,7 @@ namespace netxs::x11
                     argb_visual32_id = v.visual_id;
                     argb_colormap_id = new_resource_id();
                     sendrq<x11::req::create_colormap>({ .colormap_id = argb_colormap_id,
-                                                        .window_id   = roots.front().s.root_window_id,
+                                                        .window_id   = root_window_id,
                                                         .visual_id   = argb_visual32_id });
                     if constexpr (debugmode) log("%%ARGB visual id found: argb_visual32_id=0x%%", prompt::x11, utf::to_hex(argb_visual32_id));
                     return true;
@@ -1802,10 +2000,10 @@ namespace netxs::x11
                                             .shm_seg_id   = client_shmseg_xid });
             if constexpr (debugmode) log("%%Shared buffer segment XID %% is detached", prompt::x11, client_shmseg_xid);
         }
-        auto create_window(arch master_window_id, ui32 new_window_id, ui32 new_gc_id, bool is_master)
+        auto create_window(ui32 new_window_id, ui32 new_gc_id, bool is_master, bool override_redirect)
         {
             sendrq<x11::req::create_window>({ .window_id = new_window_id,
-                                              .parent_id = roots.front().s.root_window_id,
+                                              .parent_id = root_window_id,
                                               .x         = 0,
                                               .y         = 0,
                                               .width     = 1,
@@ -1816,7 +2014,7 @@ namespace netxs::x11
                                                                               //.bit_gravity = x11::req::create_window::BitGravityStatic,//BitGravityForget,//BitGravityNorthWest,
                                                                               //.win_gravity  = StaticGravity,
                                                                               //todo WSLg does not show any windows with override_redirect=1 if none with override_redirect=0 were shown previously after wsl boot (bug)
-                                                                              .override_redirect = 1,       // 1: On.
+                                                                              .override_redirect = override_redirect, // 1: On.
                                                                               .event_mask        = 0u
                                                                                                  //| x11::event::mask::Exposure
                                                                                                  | x11::event::mask::StructureNotify // For ConfigureNotify events.
@@ -1849,6 +2047,11 @@ namespace netxs::x11
                 //                                    .property  = atom_wm_hints,   // WM_HINTS.
                 //                                    .type      = atom_wm_hints }, // WM_HINTS.
                 //                                x11::icccm::wm_hints{ .flags = x11::icccm::InputHint, .input = 1 });
+                // Init XPresent event subscription.
+                //auto new_event_id = new_resource_id();
+                //sendrq<x11::req::xpresent::select_input>({ .major_opcode = xpresent_major_opcode,
+                //                                           .event_id     = new_event_id,
+                //                                           .window_id    = new_window_id });
             }
             else
             {
@@ -1865,10 +2068,10 @@ namespace netxs::x11
                                                 atom_net_wm_window_type_utility);
                 //todo wslg places all transient windows inside the master if override_redirect=0
                 // Group sub-layers with master.
-                sendrq<x11::req::change_property>({ .window_id = new_window_id,
-                                                    .property  = atom_wm_transient_for, // Atom WM_TRANSIENT_FOR=68.
-                                                    .type      = atom_window },         // Atom XA_WINDOW=33.
-                                                (ui32)master_window_id);
+                //sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                //                                    .property  = atom_wm_transient_for, // Atom WM_TRANSIENT_FOR=68.
+                //                                    .type      = atom_window },         // Atom XA_WINDOW=33.
+                //                                (ui32)master_window_id);
                 // Remove sub-layers from taskbar.
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                     .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
@@ -1893,7 +2096,7 @@ namespace netxs::x11
             sendrq<x11::req::create_gc>({ .gc_id = new_gc_id, .drawable = new_window_id });
 
             if constexpr (debugmode) log("create window: window_id=%% parent_id=%% depth=%% visual_id=0x%% colormap_id=0x%%",
-                utf::to_hex(new_window_id), utf::to_hex(roots.front().s.root_window_id), 32, utf::to_hex(argb_visual32_id), utf::to_hex(argb_colormap_id));
+                utf::to_hex(new_window_id), utf::to_hex(root_window_id), 32, utf::to_hex(argb_visual32_id), utf::to_hex(argb_colormap_id));
         }
         void window_set_title(arch window_id, qiew title)
         {
@@ -1980,15 +2183,16 @@ namespace netxs::x11
                 return 0u;
             };
             // Window related.
+            //atom_my_ping                     = get_atom_id("_MY_PING", true);
             atom_motif_wm_hints              = get_atom_id("_MOTIF_WM_HINTS", true);
             atom_net_wm_name                 = get_atom_id("_NET_WM_NAME", true);
             atom_net_wm_state                = get_atom_id("_NET_WM_STATE", true);
             atom_net_wm_state_skip_taskbar   = get_atom_id("_NET_WM_STATE_SKIP_TASKBAR", true);
-            atom_net_wm_window_opacity       = get_atom_id("_NET_WM_WINDOW_OPACITY", true);
             atom_net_wm_window_type          = get_atom_id("_NET_WM_WINDOW_TYPE", true);
-            atom_net_wm_window_type_normal   = get_atom_id("_NET_WM_WINDOW_TYPE_NORMAL", true);
             atom_net_wm_window_type_utility  = get_atom_id("_NET_WM_WINDOW_TYPE_UTILITY", true);
+            //atom_net_wm_window_type_normal   = get_atom_id("_NET_WM_WINDOW_TYPE_NORMAL", true);
             //atom_net_wm_window_type_combo    = get_atom_id("_NET_WM_WINDOW_TYPE_COMBO", true);
+            //atom_net_wm_window_opacity       = get_atom_id("_NET_WM_WINDOW_OPACITY", true);
             //atom_compton_shadow              = get_atom_id("_COMPTON_SHADOW", true); // Picom/Compton
             //atom_net_wm_ping                 = get_atom_id("_NET_WM_PING", true);
             //atom_net_wm_sync_request         = get_atom_id("_NET_WM_SYNC_REQUEST", true);
@@ -2015,7 +2219,7 @@ namespace netxs::x11
             auto ok = true;
             if (atom_net_workarea)
             {
-                sendrq<x11::req::get_property>({ .window_id   = roots.front().s.root_window_id,
+                sendrq<x11::req::get_property>({ .window_id   = root_window_id,
                                                  .property    = atom_net_workarea,
                                                  .prop_type   = atom_cardinal,
                                                  .long_length = 4 });
@@ -2049,7 +2253,7 @@ namespace netxs::x11
             //default_window_area = rect{ dot_00, (workarea ? workarea.size : twod{ roots.front().s.width_in_pixels, roots.front().s.height_in_pixels }) * 3 / 4 };
             //if constexpr (debugmode) log("Requested win area: %%", default_window_area);
             //sendrq<x11::req::create_window>({ .window_id = new_window_id,
-            //                                  .parent_id = roots.front().s.root_window_id,
+            //                                  .parent_id = root_window_id,
             //                                  .x         = (si16)default_window_area.coor.x,
             //                                  .y         = (si16)default_window_area.coor.y,
             //                                  .width     = (ui16)default_window_area.size.x,
@@ -2122,6 +2326,12 @@ namespace netxs::x11
             //                                          .counter_id   = xsync_counter_id });
             //xsync_fence_id = new_resource_id();
             //if constexpr (debugmode) log("Allocated fence_id: 0x%%", utf::to_hex(xsync_fence_id));
+
+            //virtual_pixmap_id = new_resource_id();
+            //sendrq<x11::req::create_pixmap>({ .pixmap_id   = virtual_pixmap_id,
+            //                                  .drawable_id = root_window_id,
+            //                                  .width       = 1,
+            //                                  .height      = 1 });
             return true;
         }
         //void sync_server(auto& batch_buffer, bool block = true)
@@ -2146,7 +2356,7 @@ namespace netxs::x11
         //}
         auto listen_root_events() // Subscribe on root's property change (to track some desktop window has received focus).
         {
-            sendrq<x11::req::change_window_attrs>({ .window_id = roots.front().s.root_window_id },
+            sendrq<x11::req::change_window_attrs>({ .window_id = root_window_id },
                 x11::req::change_window_attrs::payload{ .event_mask = x11::event::mask::PropertyChange });
         }
         auto sync_device_classes(ui16 num_classes, view& q)
@@ -2299,7 +2509,6 @@ namespace netxs::x11
         }
         void activate_xinput2(arch master_window_id)
         {
-            query_device(x11::req::xi2::dev_type::all_devices);
             auto event_mask_bits = 0u;
             event_mask_bits |= 1u << x11::req::xi2::event::KeyPress;
             event_mask_bits |= 1u << x11::req::xi2::event::KeyRelease;
@@ -2490,7 +2699,14 @@ namespace netxs::x11
                     }
                 }
                 if (failed) session_ptr.reset();
-                else        session_ptr->x11connection = x11connection;
+                else
+                {
+                    session.x11connection = x11connection;
+                    if (session.roots.size())
+                    {
+                        session.root_window_id = session.roots.front().s.root_window_id;
+                    }
+                }
             }
         }
         else
@@ -2515,11 +2731,12 @@ namespace netxs::x11
             {
                 auto& session = *session_ptr;
                 if (session.detect_argb_32bit())
-                if (session.detect_extension<x11::req::shm   ::query_version>("MIT-SHM"        , session.shm_major_opcode, session.shm_completion_event, 1, 2)) // MIT-SHM ver >= 1.2
-                if (session.detect_extension<x11::req::xfixes::query_version>("XFIXES"         , session.xfixes_major_opcode, session.xfixes_first_event, 2, 0)) // XFIXES ver >= 2.0
-                if (session.detect_extension<x11::req::xi2   ::query_version>("XInputExtension", session.xi2_major_opcode, byte{}, 2, 4)) // XInputExtension (XInput2) ver >= 2.4
-                if (session.detect_extension<x11::req::xkb   ::query_version>("XKEYBOARD"      , session.xkb_major_opcode, session.xkb_first_event, 1, 0))
-                //if (session.detect_extension<x11::req::xsync ::query_version>("SYNC"           , session.xsync_major_opcode, byte{}, 3, 1))
+                if (session.detect_extension<x11::req::shm     ::query_version>("MIT-SHM"        , session.shm_major_opcode, session.shm_completion_event, 1, 2)) // MIT-SHM ver >= 1.2
+                if (session.detect_extension<x11::req::xfixes  ::query_version>("XFIXES"         , session.xfixes_major_opcode, session.xfixes_first_event, 2, 0)) // XFIXES ver >= 2.0
+                if (session.detect_extension<x11::req::xi2     ::query_version>("XInputExtension", session.xi2_major_opcode, byte{}, 2, 4)) // XInputExtension (XInput2) ver >= 2.4
+                if (session.detect_extension<x11::req::xkb     ::query_version>("XKEYBOARD"      , session.xkb_major_opcode, session.xkb_first_event, 1, 0))
+                //if (session.detect_extension<x11::req::xsync   ::query_version>("SYNC"           , session.xsync_major_opcode, byte{}, 3, 1))
+                //if (session.detect_extension<x11::req::xpresent::query_version>("Present"        , session.xpresent_major_opcode, byte{}, 1, 0))
                 if (session.get_atoms())
                 if (session.get_props())
                 if (session.get_default_window_area())
