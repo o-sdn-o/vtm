@@ -6605,8 +6605,6 @@ namespace netxs::gui
                                                                                        .y = (ui32)(si16)s.prev.coor.y, });
                 }
             }
-            //session.accumrq(batch_buffer, x11::req::ungrab_server{});
-            //session.sync_server(batch_buffer, faux);
             if (batch_buffer.size())
             {
                 session.x11connection->send(batch_buffer);
@@ -6614,7 +6612,6 @@ namespace netxs::gui
                 batch_buffer.clear();
             }
         }
-        //void layer_present(text& batch_buffer, layer& s, bool& some_resized)
         void layer_present(text& batch_buffer, layer& s, auto& seq_num_any)
         {
             if (!s.data.data() || s.area.size.x <= 0 || s.area.size.y <= 0) return;
@@ -6624,7 +6621,6 @@ namespace netxs::gui
             s.windowsized = s.live && std::exchange(s.prev_size, s.area.size) != s.area.size;
             if (s.windowsized)
             {
-                //some_resized = true;
                 session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.back_hWnd, },
                                               x11::req::configure_window::payload{ .width  = (ui16)s.area.size.x,
                                                                                    .height = (ui16)s.area.size.y });
@@ -6677,13 +6673,11 @@ namespace netxs::gui
         void layers_present()
         {
             auto seq_num_any = std::optional<ui16>{};
-            auto some_resized = faux;
             auto& session = *x11::session_ptr;
             {
                 auto lock = std::lock_guard{ session.mutex };
                 for (auto& l : layers)
                 {
-                    //layer_present(batch_buffer, l, some_resized);
                     layer_present(batch_buffer, l, seq_num_any);
                 }
                 if (batch_buffer.size())
@@ -6692,189 +6686,10 @@ namespace netxs::gui
                     batch_buffer.clear();
                 }
             }
-            //if (some_resized)// && seq_num_any.has_value())
-            if (seq_num_any.has_value())
+            if (seq_num_any.has_value()) // Wait shm_complete_event + wait 17ms.
             {
-                //auto n = ui16{};
-
-                // Wait shm_complete_event + wait 17ms.
                 session.sync_reply(seq_num_any.value());
                 std::this_thread::sleep_for(17ms); // Absolutely smooth resizing on 60Hz monitors.
-
-                // Doesn't work as a barrier. Returns immediately.
-                //{
-                //    auto lock = std::lock_guard{ session.mutex };
-                //    n = session.accumrq(batch_buffer, x11::req::get_image{ .drawable_id = session.root_window_id });
-                //    session.received_replies[n].store(true, std::memory_order_release);
-                //    if (batch_buffer.size())
-                //    {
-                //        session.x11connection->send(batch_buffer);
-                //        batch_buffer.clear();
-                //    }
-                //}
-                //session.sync_reply(n);
-
-                // Good! Send present_pixmal to the next msc.
-                //{
-                //    auto lock = std::lock_guard{ session.mutex };
-                //    n = session.sequence_counter + 1;
-                //    session.accumrq(batch_buffer, x11::req::xpresent::present_pixmap{ .major_opcode = session.xpresent_major_opcode,
-                //                                                                      .window_id    = (ui32)master.hWnd,
-                //                                                                      .pixmap_id    = session.virtual_pixmap_id,
-                //                                                                      .serial       = n,
-                //                                                                      .target_msc   = 0 });
-                //    session.received_replies[n].store(true, std::memory_order_release);
-                //    if (batch_buffer.size())
-                //    {
-                //        session.x11connection->send(batch_buffer);
-                //        batch_buffer.clear();
-                //    }
-                //}
-                //session.sync_reply(n);
-                //std::this_thread::sleep_for(17ms); // 100% smooth resize on 60Hz monitor.
-
-                // Get current msc.
-                //{
-                //    auto lock = std::lock_guard{ session.mutex };
-                //    n = session.sequence_counter + 1;
-                //    session.accumrq(batch_buffer, x11::req::xpresent::notify_msc{ .major_opcode  = session.xpresent_major_opcode,
-                //                                                                  .window_id     = (ui32)master.hWnd,
-                //                                                                  .serial        = n,
-                //                                                                  .target_msc    = 0 });
-                //    session.received_replies[n].store(true, std::memory_order_release);
-                //    if (batch_buffer.size())
-                //    {
-                //        session.x11connection->send(batch_buffer);
-                //        batch_buffer.clear();
-                //    }
-                //}
-                //auto k0 = datetime::now();
-                //if constexpr (debugmode) log(ansi::clr(tint::greenlt, "start synchronization (serial=%%): current_time=%%"), n, k0);
-                //session.sync_reply(n);
-                //auto k1 = datetime::now();
-                //if constexpr (debugmode) log(ansi::clr(tint::greenlt, "got current msc (serial=%%): current_time=%% spent=%%ms current_msc=%%"), n, k1, datetime::round<si32>(k1 - k0), current_msc);
-
-                // Send present_pixmal to the next msc.
-                //auto target_msc = current_msc + 1;
-                //{
-                //    auto lock = std::lock_guard{ session.mutex };
-                //    //session.sync_reply(seq_num_any.value());
-                //    //todo figure out how to wait WM renders out bitmaps (?XPresent) (they always wait the next frame to render)
-                //    //std::this_thread::sleep_for(25ms);
-                //    //session.accumrq(batch_buffer, x11::req::change_property{ .window_id = (ui32)master.hWnd,
-                //    //                                                         .property  = session.atom_my_ping,
-                //    //                                                         .type      = session.atom_cardinal },
-                //    //                                                    (ui32)seq_num_any.value());
-                //    //n = session.accumrq(batch_buffer, x11::req::get_property{ .window_id = (ui32)master.hWnd,
-                //    //                                                          .property  = session.atom_my_ping,
-                //    //                                                          .prop_type = session.atom_cardinal });
-                //    //n = session.accumrq(batch_buffer, x11::req::req_send_event_ping{
-                //    //    .destination_window = session.roots.front().s.root_window_id,
-                //    //    .window_id = (ui32)master.hWnd,
-                //    //    .type_atom = session.atom_wm_protocols,
-                //    //    .wm_ping = session.atom_net_wm_ping,
-                //    //    .window_id2 = (ui32)master.hWnd });
-                //    //session.received_replies[n].store(true, std::memory_order_release);
-                //    n = session.sequence_counter + 1;
-                //    session.accumrq(batch_buffer, x11::req::xpresent::present_pixmap{ .major_opcode = session.xpresent_major_opcode,
-                //                                                                      .window_id    = (ui32)master.hWnd,
-                //                                                                      .pixmap_id    = session.virtual_pixmap_id,
-                //                                                                      .serial       = n,
-                //                                                                      .target_msc   = target_msc });
-                //    session.received_replies[n].store(true, std::memory_order_release);
-                //    if (batch_buffer.size())
-                //    {
-                //        session.x11connection->send(batch_buffer);
-                //        batch_buffer.clear();
-                //    }
-                //}
-                ////session.sync_reply(n, 17ms); // Wait reply (this is exactly vblank event, skip the first frame).
-                //if constexpr (debugmode) log(ansi::clr(tint::greenlt, "wait present_pixmap (serial=%%)"), n);
-                //session.sync_reply(n); // Wait reply (this is exactly vblank event, skip the first frame).
-                //auto k2 = datetime::now();
-                //if constexpr (debugmode) log(ansi::clr(tint::greenlt, "got present_pixmap (serial=%%): current_time=%% spent=%%ms current_msc=%% (expected_msc=%%)"), n, k2, datetime::round<si32>(k2 - k0), current_msc, target_msc);
-
-                //std::this_thread::sleep_for(17ms); // 100% smooth resize on 60Hz monitor.
-                //std::this_thread::sleep_for(8ms); // ~50% smooth resize on 60Hz monitor.
-
-                // Skip exactly one next frame (skip the second frame).
-                //{
-                //    auto lock = std::lock_guard{ session.mutex };
-                //    n = session.sequence_counter + 1;
-                //    auto target_msc = current_msc + 10; // Next vblank.
-                //    session.accumrq(batch_buffer, x11::req::xpresent::present_pixmap{ .major_opcode = session.xpresent_major_opcode,
-                //                                                                      .window_id    = (ui32)master.hWnd,
-                //                                                                      .pixmap_id    = session.virtual_pixmap_id,
-                //                                                                      .serial       = n,
-                //                                                                      //.options      = 0, // 0: Wait vblank.
-                //                                                                      .target_msc    = target_msc });
-                //    //session.accumrq(batch_buffer, x11::req::xpresent::notify_msc{ .major_opcode  = session.xpresent_major_opcode,
-                //    //                                                              .window_id     = (ui32)master.hWnd,
-                //    //                                                              .serial        = n,
-                //    //                                                              .target_msc    = target_msc });
-                //    session.received_replies[n].store(true, std::memory_order_release);
-                //    if (batch_buffer.size())
-                //    {
-                //        session.x11connection->send(batch_buffer);
-                //        batch_buffer.clear();
-                //    }
-                //}
-                ////session.sync_reply(n, 17ms); // Wait second frame.
-                //session.sync_reply(n); // Wait second frame.
-
-            //    // Try to peek the msc every 1ms.
-            //    auto target_msc = current_msc + 4; // Wait next vblanks.
-            //    //auto current_time = datetime::now();
-            //    while (true)
-            //    {
-            //        {
-            //            auto lock = std::lock_guard{ session.mutex };
-            //            n = session.sequence_counter + 1;
-            //            session.accumrq(batch_buffer, x11::req::xpresent::notify_msc{ .major_opcode  = session.xpresent_major_opcode,
-            //                                                                          .window_id     = (ui32)master.hWnd,
-            //                                                                          .serial        = n,
-            //                                                                          .target_msc    = target_msc });
-            //            session.received_replies[n].store(true, std::memory_order_release);
-            //            if (batch_buffer.size())
-            //            {
-            //                session.x11connection->send(batch_buffer);
-            //                batch_buffer.clear();
-            //            }
-            //        }
-            //        //session.sync_reply(n, 17ms); // Wait the second frame.
-            //        session.sync_reply(n); // Wait the second frame.
-            //        if (current_msc >= target_msc)// || datetime::now() - current_time >= 17ms)
-            //        {
-            //            break;
-            //        }
-            //        else
-            //        {
-            //            if constexpr (debugmode) log(ansi::clr(tint::magentalt, "skip 1ms..."));
-            //            std::this_thread::sleep_for(1ms);
-            //        }
-            //    }
-            //    auto k3 = datetime::now();
-            //    if constexpr (debugmode) log(ansi::clr(tint::greenlt, "stop skipping vblanks: %% spent=%%ms current_msc=%% expected_msc=%%"), k3, datetime::round<si32>(k3 - k1), current_msc, target_msc);
-
-                // Make a final ping-pong.
-                //{
-                //    auto lock = std::lock_guard{ session.mutex };
-                //    n = session.sequence_counter + 1;
-                //    session.accumrq(batch_buffer, x11::req::xpresent::present_pixmap{ .major_opcode = session.xpresent_major_opcode,
-                //                                                                      .window_id    = (ui32)master.hWnd,
-                //                                                                      .pixmap_id    = session.virtual_pixmap_id,
-                //                                                                      .serial       = n });
-                //    session.received_replies[n].store(true, std::memory_order_release);
-                //    if (batch_buffer.size())
-                //    {
-                //        session.x11connection->send(batch_buffer);
-                //        batch_buffer.clear();
-                //    }
-                //}
-                //session.sync_reply(n); // Wait reply (this is exactly vblank event).
-                //auto k4 = datetime::now();
-                //if constexpr (debugmode) log(ansi::clr(tint::greenlt, "stop waiting final pong (we got present_pixmap complete): %% %%ms current_msc=%%"), k4, datetime::round<si32>(k4 - k1), current_msc);
-
                 // Make visual swap.
                 {
                     auto lock = std::lock_guard{ session.mutex };
@@ -6931,26 +6746,6 @@ namespace netxs::gui
         //                                              .type      = session.atom_cardinal },
         //                                            opacity_value);
         //    if constexpr (debugmode) log("%% Window 0x%% opacity set to %%", prompt::x11, utf::to_hex(window_id), alpha);
-        //}
-        //void _layer_toggle_redirect(ui32 window_id, bool enable_override)
-        //{
-        //    auto& session = *x11::session_ptr;
-        //    session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = window_id });
-        //    session.accumrq(batch_buffer, x11::req::change_window_attrs{ .window_id = window_id, },
-        //                                  x11::req::change_window_attrs::payload{ .override_redirect = enable_override ? 1 : 0 });
-        //    session.accumrq(batch_buffer, x11::req::map_window{ .window_id = window_id });
-        //}
-        //void window_toggle_redirect(bool enable_override)
-        //{
-        //    auto& session = *x11::session_ptr;
-        //    auto lock = std::lock_guard{ session.mutex };
-        //    for (auto& l : layers)
-        //    {
-        //        auto& p = l.get();
-        //        _layer_toggle_redirect((ui32)p.hWnd, enable_override);
-        //    }
-        //    session.x11connection->send(batch_buffer);
-        //    batch_buffer.clear();
         //}
         void window_sync_taskbar(si32 /*new_state*/) {}
         rect window_get_fs_area(rect /*window_area*/)
@@ -7185,85 +6980,6 @@ namespace netxs::gui
                             }
                             read_buffer.resize(32); // Restore classic read_buffer size.
                         }
-                        //else if (ev.detail == session.xpresent_major_opcode) // XPresent.
-                        //{
-                        //    auto tail_size = ev.length * 4;
-                        //    read_buffer.resize(32 + tail_size); // Read a whole XI2 packet.
-                        //    if (session.x11connection->recv(read_buffer.data() + 32, tail_size).size() == tail_size)
-                        //    {
-                        //        auto be = netxs::start_lifetime_as<x11::req::xpresent::base>(read_buffer.data());
-                        //        if constexpr (debugmode) log(ansi::hi("XPresent Notify evtype=%% length=%%"), be.evtype, be.length);
-                        //        if (be.evtype == x11::req::xpresent::ConfigureNotify)
-                        //        {
-                        //            auto cf = netxs::start_lifetime_as<x11::req::xpresent::configure_notify>(read_buffer.data());
-                        //            if constexpr (debugmode) log(ansi::hi("PresentConfigureNotify:"),
-                        //                "\n\t event_id      = 0x", utf::to_hex(cf.event_id),
-                        //                "\n\t window_id     = 0x", utf::to_hex(cf.window_id),
-                        //                "\n\t x             = ", cf.x,
-                        //                "\n\t y             = ", cf.y,
-                        //                "\n\t width         = ", cf.width,
-                        //                "\n\t height        = ", cf.height,
-                        //                "\n\t off_x         = ", cf.off_x,
-                        //                "\n\t off_y         = ", cf.off_y,
-                        //                "\n\t pixmap_width  = ", cf.pixmap_width,
-                        //                "\n\t pixmap_height = ", cf.pixmap_height,
-                        //                "\n\t pixmap_flags  = ", cf.pixmap_flags);
-                        //        }
-                        //        else if (be.evtype == x11::req::xpresent::CompleteNotify)
-                        //        {
-                        //            auto cm = netxs::start_lifetime_as<x11::req::xpresent::complete_notify>(read_buffer.data());
-                        //            if constexpr (debugmode) log(ansi::hi("PresentCompleteNotify:"),
-                        //                "\n\t serial    = ",   (ui32)cm.serial,
-                        //                "\n\t kind      = ",   (ui32)cm.kind,
-                        //                "\n\t mode      = ",   (ui32)cm.mode,
-                        //                "\n\t event_id  = 0x", utf::to_hex(cm.event_id),
-                        //                "\n\t window_id = 0x", utf::to_hex(cm.window_id),
-                        //                "\n\t ust       = ",   cm.ust,
-                        //                "\n\t msc       = ",   cm.msc);
-                        //            //std::this_thread::sleep_for(16ms);
-                        //            current_msc = cm.msc;
-                        //            session.received_replies[cm.serial & 0xFFFF].store(faux, std::memory_order_release);
-                        //        }
-                        //        else if (be.evtype == x11::req::xpresent::IdleNotify)
-                        //        {
-                        //            auto in = netxs::start_lifetime_as<x11::req::xpresent::idle_notify>(read_buffer.data());
-                        //            if constexpr (debugmode) log(ansi::hi("PresentIdleNotify:"),
-                        //                "\n\t event_id     = 0x", utf::to_hex(in.event_id),
-                        //                "\n\t window_id    = 0x", utf::to_hex(in.window_id),
-                        //                "\n\t serial       = ",   (ui32)in.serial,
-                        //                "\n\t pixmap_id    = 0x", utf::to_hex(in.pixmap_id),
-                        //                "\n\t idle_fence   = 0x", utf::to_hex(in.idle_fence));
-                        //            //session.received_replies[in.serial & 0xFFFF].store(faux, std::memory_order_release);
-                        //        }
-                        //        //else if (be.evtype == x11::req::xpresent::RedirectNotify)
-                        //        //{
-                        //        //    auto rn = netxs::start_lifetime_as<x11::req::xpresent::redirect_notify>(read_buffer.data());
-                        //        //    if constexpr (debugmode) log(ansi::hi("PresentRedirectNotify:"),
-                        //        //        "\n\t update_window   = ", (si32)rn.update_window,
-                        //        //        "\n\t event_id        = ", (si32)rn.event_id,
-                        //        //        "\n\t event_window_id = 0x", utf::to_hex(rn.event_window_id),
-                        //        //        "\n\t window_id       = 0x", utf::to_hex(rn.window_id),
-                        //        //        "\n\t pixmap_id       = 0x", utf::to_hex(rn.pixmap_id),
-                        //        //        "\n\t serial          = ", rn.serial,
-                        //        //        "\n\t valid_region    = ", rn.valid_region,
-                        //        //        "\n\t update_region   = ", rn.update_region,
-                        //        //        "\n\t valid_rect      = ", rn.valid_rect,
-                        //        //        "\n\t update_rect     = ", rn.update_rect,
-                        //        //        "\n\t x_off           = ", rn.x_off,
-                        //        //        "\n\t y_off           = ", rn.y_off,
-                        //        //        "\n\t target_crtc     = ", rn.target_crtc,
-                        //        //        "\n\t wait_fence      = 0x", utf::to_hex(rn.wait_fence),
-                        //        //        "\n\t idle_fence      = 0x", utf::to_hex(rn.idle_fence),
-                        //        //        "\n\t options         = ", rn.options,
-                        //        //        "\n\t target_msc      = ", rn.target_msc,
-                        //        //        "\n\t divisor         = ", rn.divisor,
-                        //        //        "\n\t remainder       = ", rn.remainder;
-                        //        //    current_msc = rn.target_msc;
-                        //        //    session.received_replies[rn.serial & 0xFFFF].store(faux, std::memory_order_release);
-                        //        //}
-                        //    }
-                        //    read_buffer.resize(32); // Restore classic read_buffer size.
-                        //}
                         break;
                 }
                 sys_command(syscmd::update);
@@ -7283,7 +6999,7 @@ namespace netxs::gui
             for (auto& l : layers)
             {
                 auto& s = l.get();
-                // Move backing_window outside the screen.
+                // Move backing_window off screen.
                 session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.back_hWnd, },
                                               x11::req::configure_window::payload{ .x = (si16)s.hidden.x,
                                                                                    .y = (si16)s.hidden.y });
