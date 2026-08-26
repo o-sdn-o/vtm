@@ -6519,7 +6519,7 @@ namespace netxs::gui
         ui16 master_pointer_id{};
         ui16 captured_pointer_id{};
         bool is_foreground_window{};
-        //std::atomic<ui64> current_msc = 0;
+        twod hidden_coor;
 
         window(auto&& ...Args)
             : winbase{ Args... }
@@ -6597,7 +6597,7 @@ namespace netxs::gui
             for (auto& l : layers)
             {
                 auto& s = l.get();
-                auto target_coor = s.live ? s.area.coor : s.hidden;
+                auto target_coor = s.live ? s.area.coor : hidden_coor;
                 if (s.prev.coor(target_coor))
                 {
                     session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd },
@@ -6616,7 +6616,7 @@ namespace netxs::gui
         {
             if (!s.data.data() || s.area.size.x <= 0 || s.area.size.y <= 0) return;
             auto& session = *x11::session_ptr;
-            auto target_coor = s.live ? s.area.coor : s.hidden;
+            auto target_coor = s.live ? s.area.coor : hidden_coor;
             auto windowmoved = s.prev.coor != target_coor;
             s.windowsized = s.live && std::exchange(s.prev_size, s.area.size) != s.area.size;
             if (s.windowsized)
@@ -6700,11 +6700,14 @@ namespace netxs::gui
                         {
                             s.windowsized = faux;
                             session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.back_hWnd, },
-                                                        x11::req::configure_window::payload{ .x = (ui16)s.hidden.x,
-                                                                                             .y = (ui16)s.hidden.y });
+                                                        x11::req::configure_window::payload{ .x = (ui16)hidden_coor.x,
+                                                                                             .y = (ui16)hidden_coor.y });
                             session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd, },
                                                         x11::req::configure_window::payload{ .x = (ui16)s.area.coor.x,
                                                                                              .y = (ui16)s.area.coor.y });
+                            // Put transparent pixel to the upper-left corner (the one visible window dot at hidden_coor).
+                            session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.back_hWnd,
+                                                                                .gc_id       = (ui32)s.back_hdc });
                         }
                     }
                     if (batch_buffer.size())
@@ -6995,16 +6998,20 @@ namespace netxs::gui
             session.query_device(x11::req::xi2::dev_type::all_devices);
             session.activate_xinput2(master.hWnd);
             session.activate_xinput2(master.back_hWnd);
+            hidden_coor = session.x11_display_size - dot_11;
             auto lock = std::lock_guard{ session.mutex };
             for (auto& l : layers)
             {
                 auto& s = l.get();
                 // Move backing_window off screen.
                 session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.back_hWnd, },
-                                              x11::req::configure_window::payload{ .x = (si16)s.hidden.x,
-                                                                                   .y = (si16)s.hidden.y });
+                                              x11::req::configure_window::payload{ .x = (si16)hidden_coor.x,
+                                                                                   .y = (si16)hidden_coor.y });
                 session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.hWnd });
                 session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.back_hWnd });
+                // Put transparent pixel to the upper-left corner (the one visible window dot at hidden_coor).
+                session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.back_hWnd,
+                                                                    .gc_id       = (ui32)s.back_hdc });
             }
             if (batch_buffer.size())
             {
@@ -7185,10 +7192,22 @@ namespace netxs::gui
                 auto mouse_coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
                 //auto xi_mods = m.mods.effective;
                 auto emulated = !!(m.flags & x11::req::xi2::event::km::PointerEmulated);
-                auto moved = current_mouse_pos(mouse_coor);
+                auto moved = current_mouse_pos != mouse_coor;
+                if (moved) //todo just a test. // Filter mouse jitter bug on window resizing (a sort of).
+                {
+                    if (stream.m.buttons // Any buttons pressed.
+                        && ((mouse_coor == dot_00 && current_mouse_pos.x != 0
+                                                  && current_mouse_pos.y != 0)
+                            || (mouse_coor == hidden_coor && current_mouse_pos.x != hidden_coor.x
+                                                          && current_mouse_pos.y != hidden_coor.y)))
+                    {
+                        moved = faux;
+                    }
+                }
                 if constexpr (debugmode) log("%%Mouse: sourceid=%% '%%' coor=%% mods=0x%% flags=0x%% emulated=%%", prompt::x11, m.sourceid, session.input_devices[m.sourceid].name, moved ? ansi::clr(tint::greenlt, mouse_coor) : utf::concat(mouse_coor), utf::to_hex(m.mods.effective), utf::to_hex(m.flags), (si32)emulated);
                 if (moved)
                 {
+                    current_mouse_pos = mouse_coor;
                     mouse_moved();
                 }
                 if (d.evtype != x11::req::xi2::event::Motion && !emulated) // ButtonPress or ButtonRelease.
@@ -7196,15 +7215,19 @@ namespace netxs::gui
                     auto is_pressed = d.evtype == x11::req::xi2::event::ButtonPress;
                     auto button_id  = m.detail;
                     if constexpr (debugmode) log("  Mouse Button%%: bttn_id=%%", is_pressed ? "Press" : "Release", button_id);
-                         if (button_id == 1) _mouse_press(bttn::left,   is_pressed);
-                    else if (button_id == 2) return faux;//todo _mouse_press(bttn::middle, is_pressed);
-                    else if (button_id == 3) _mouse_press(bttn::right,  is_pressed);
-                    //else if (button_id == 4 && is_pressed) _mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
-                    //else if (button_id == 5 && is_pressed) _mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
-                    //else if (button_id == 6 && is_pressed) _mouse_wheel(120, 1); // WheelLeft
-                    //else if (button_id == 7 && is_pressed) _mouse_wheel(-120, 1);  // WheelRight
-                    else if (button_id == 8) _mouse_press(bttn::xbutton1, is_pressed);
-                    else if (button_id == 9) _mouse_press(bttn::xbutton2, is_pressed);
+                    // Fix bug with pressed buttons right after startup.
+                    if (is_pressed || stream.m.buttons) // Filter fake button release.
+                    {
+                             if (button_id == 1) _mouse_press(bttn::left,   is_pressed);
+                        else if (button_id == 2) return faux;//todo _mouse_press(bttn::middle, is_pressed);
+                        else if (button_id == 3) _mouse_press(bttn::right,  is_pressed);
+                        //else if (button_id == 4 && is_pressed) _mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
+                        //else if (button_id == 5 && is_pressed) _mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
+                        //else if (button_id == 6 && is_pressed) _mouse_wheel(120, 1); // WheelLeft
+                        //else if (button_id == 7 && is_pressed) _mouse_wheel(-120, 1);  // WheelRight
+                        else if (button_id == 8) _mouse_press(bttn::xbutton1, is_pressed);
+                        else if (button_id == 9) _mouse_press(bttn::xbutton2, is_pressed);
+                    }
                 }
                 //else if (d.evtype == x11::req::xi2::event::Motion)
                 //{

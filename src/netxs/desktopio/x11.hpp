@@ -357,6 +357,17 @@ namespace netxs::x11
             ui32 drawable;       // Our window ID (or root window)
             ui32 value_mask = 0; // No additional attributes
         };
+        struct poly_point // Opcode 64 (PolyPoint).
+        {
+            byte opcode = 64;
+            byte coordinate_mode = 0; // 0: CoordModeOrigin (absolute coords).
+            ui16 length = 4;
+            ui32 drawable_id;
+            ui32 gc_id;
+            // Payload:
+            si16 x = 0;
+            si16 y = 0;
+        };
         //struct get_image // Opcode 73 (get image).
         //{
         //    byte reqType = 73;     // X_GetImage.
@@ -1423,6 +1434,7 @@ namespace netxs::x11
         //todo ?multiple displays: std::vector<rect> workareas;
         rect workarea; // Actual _NET_WORKAREA value.
         rect default_window_area; // Window area (? provided by the window manager).
+        twod x11_display_size;
 
         std::array<flag, 65536> received_replies;
 
@@ -2494,6 +2506,7 @@ namespace netxs::x11
                 {
                     if constexpr (debugmode) log(session.str());
                     auto& x11screen = session.roots.front().s;
+                    session.x11_display_size = { x11screen.width_in_pixels, x11screen.height_in_pixels };
                     auto max_grid_size = x11screen.width_in_pixels * x11screen.height_in_pixels;
                     auto required_buffer_size = 2 * 3 * max_grid_size * sizeof(argb); // 2: Double buffer, 3: master+blinks+header/footer/tooltip.
                     if (session.resize_shared_buffer(required_buffer_size))
