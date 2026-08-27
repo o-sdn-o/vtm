@@ -311,6 +311,28 @@ namespace netxs::x11
         //    byte pad    = 0;
         //    ui16 length = 1;
         //};
+        //struct query_pointer // Opcode 38 (query pointer)
+        //{
+        //    struct reply
+        //    {
+        //        byte status;
+        //        byte same_screen;
+        //        ui16 sequence_number;
+        //        ui32 length;
+        //        ui32 root_window_id;
+        //        ui32 child_window_id;
+        //        si16 root_x;
+        //        si16 root_y;
+        //        si16 win_x;
+        //        si16 win_y;
+        //        ui16 mask;
+        //        ui16 pad2;
+        //    };
+        //    byte opcode = 38; // 38: QueryPointer.
+        //    byte pad    = 0;
+        //    ui16 length = 2;
+        //    ui32 window_id;
+        //};
         struct set_input_focus // Opcode 42 (set input focus)
         {
             static constexpr auto RevertToNone   = 0;
@@ -1803,10 +1825,13 @@ namespace netxs::x11
                                                                                                  ,
                                                                               .colormap_id       = argb_colormap_id }); // Mandatory: own colormap.
             // Disable decorations.
-            sendrq<x11::req::change_property>({ .window_id = new_window_id,
-                                                .property  = atom_motif_wm_hints,   // Atom "_MOTIF_WM_HINTS".
-                                                .type      = atom_motif_wm_hints }, // Atom "_MOTIF_WM_HINTS".
-                                            x11::motif::hints{ .flags = x11::motif::Decorations, .decorations = 0 });
+            if (!override_redirect)
+            {
+                sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                                                    .property  = atom_motif_wm_hints,
+                                                    .type      = atom_motif_wm_hints },
+                                                x11::motif::hints{ .flags = x11::motif::Decorations, .decorations = 0 });
+            }
             //todo it doesn't work // Set WM_PROTOCOLS.
             //sendrq<x11::req::change_property>({ .window_id = (ui32)new_window_id,
             //                                    .property  = atom_wm_protocols,
@@ -1826,8 +1851,8 @@ namespace netxs::x11
                 //if constexpr (debugmode) log("Attached fence_id: 0x%% to window_id=0x%% seq=%%", utf::to_hex(xsync_fence_id), utf::to_hex(new_window_id), seq);
                 //todo it doesn't work // Make the window available for input focus.
                 //sendrq<x11::req::change_property>({ .window_id = new_window_id,
-                //                                    .property  = atom_wm_hints,   // WM_HINTS.
-                //                                    .type      = atom_wm_hints }, // WM_HINTS.
+                //                                    .property  = atom_wm_hints,
+                //                                    .type      = atom_wm_hints },
                 //                                x11::icccm::wm_hints{ .flags = x11::icccm::InputHint, .input = 1 });
                 // Init XPresent event subscription.
                 //auto new_event_id = new_resource_id();
@@ -1839,26 +1864,29 @@ namespace netxs::x11
             {
                 //todo it doesn't work // Make the window output only.
                 //sendrq<x11::req::change_property>({ .window_id = new_window_id,
-                //                                    .property  = atom_wm_hints,   // WM_HINTS.
-                //                                    .type      = atom_wm_hints }, // WM_HINTS.
+                //                                    .property  = atom_wm_hints,
+                //                                    .type      = atom_wm_hints },
                 //                                x11::icccm::wm_hints{ .flags = x11::icccm::InputHint, .input = 0 });
 
                 // Make the window output only.
                 sendrq<x11::req::change_property>({ .window_id = new_window_id,
                                                     .property  = atom_net_wm_window_type,
-                                                    .type      = atom_atom }, // XA_ATOM.
+                                                    .type      = atom_atom },
                                                 atom_net_wm_window_type_utility);
                 //todo wslg places all transient windows inside the master if override_redirect=0
                 // Group sub-layers with master.
                 //sendrq<x11::req::change_property>({ .window_id = new_window_id,
-                //                                    .property  = atom_wm_transient_for, // Atom WM_TRANSIENT_FOR=68.
-                //                                    .type      = atom_window },         // Atom XA_WINDOW=33.
+                //                                    .property  = atom_wm_transient_for,
+                //                                    .type      = atom_window },
                 //                                (ui32)master_window_id);
                 // Remove sub-layers from taskbar.
-                sendrq<x11::req::change_property>({ .window_id = new_window_id,
-                                                    .property  = atom_net_wm_state, // Atom "_NET_WM_STATE".
-                                                    .type      = atom_atom },       // Atom XA_ATOM=4.
-                                                atom_net_wm_state_skip_taskbar);
+                if (!override_redirect)
+                {
+                    sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                                                        .property  = atom_net_wm_state,
+                                                        .type      = atom_atom },
+                                                    atom_net_wm_state_skip_taskbar);
+                }
                 // Make sub-layer transparent for mouse.
                 sendrq<x11::req::xfixes::set_window_shape_region>({ .major_opcode = xfixes_major_opcode,
                                                                     .window_id    = new_window_id,

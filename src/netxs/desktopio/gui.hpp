@@ -6514,6 +6514,53 @@ namespace netxs::gui
 {
     struct window : winbase
     {
+        struct mouse_state_t
+        {
+            fp2d last_coor{};
+            time last_time{};
+            fp64 last_pace{};
+            bool was_faked{};
+
+            auto _filter_x11_mouse_bug(twod max_coor, fp2d coor, bool active)
+            {
+                auto now = datetime::now();
+                if (!active || last_time == time{})
+                {
+                    was_faked = faux;
+                    last_coor = coor;
+                    last_time = now;
+                    last_pace = 0.0;
+                    return faux;
+                }
+                auto dt = std::max(1.0, datetime::round<fp64, std::chrono::microseconds>(now - std::exchange(last_time, now)));
+                auto dc = coor - last_coor;
+                auto ds = std::sqrt(dc.x * dc.x + dc.y * dc.y);
+                auto speed = ds / dt;
+                //auto accel = std::abs(speed - last_pace) / dt;
+                auto is_on_edge = (coor.x <= 0.0
+                                || coor.y <= 0.0 || coor.x >= max_coor.x
+                                                 || coor.y >= max_coor.y);
+                //auto temp_faked = was_faked;
+                was_faked = !was_faked && is_on_edge && speed > 0.016; // || accel > 3.0e-06
+                //if (!was_faked && (coor == dot_00 || coor == max_coor))
+                //{
+                //    log(ansi::err(utf::fprint("Missed fake: last_was_faked=%% last_coor=%% last_speed=%% coor=%% speed=%% accel=%%",
+                //    (si32)temp_faked, last_coor, last_pace, coor, speed, accel)));
+                //}
+                if (was_faked)
+                {
+                    log(ansi::err("%%Fake pointer movement detected: coor=%% speed=%%"), prompt::x11, coor, speed);
+                }
+                else
+                {
+                    last_coor = coor;
+                    last_pace = speed;
+                }
+                return was_faked;
+            }
+        };
+
+        mouse_state_t mouse_state;
         text batch_buffer;
         fp2d current_mouse_pos;
         ui16 master_pointer_id{};
@@ -6541,7 +6588,7 @@ namespace netxs::gui
                 layers[3].get().shm_offset,
                 layers[4].get().shm_offset);
         }
-        bool keybd_test_pressed(si32 /*virtcod*/, si32 /*keycode*/ = 0) { return true; /*!!(vkstat[virtcod] & 0x80);*/ }
+        bool keybd_test_pressed(si32 /*virtcod*/, si32 /*keycode*/ = 0) { return faux; /*!!(vkstat[virtcod] & 0x80);*/ }
         bool keybd_test_toggled(si32 /*virtcod*/) { return faux; /*!!(vkstat[virtcod] & 0x01);*/ }
         bool keybd_read_pressed(si32 /*virtcod*/) { return faux; /*!!(::GetAsyncKeyState(virtcod) & 0x8000);*/ }
         bool keybd_read_toggled(si32 /*virtcod*/) { return faux; /*!!(::GetAsyncKeyState(virtcod) & 0x0001);*/ }
@@ -6579,15 +6626,18 @@ namespace netxs::gui
 
             s.hWnd = (arch)session.new_resource_id();
             s.hdc  = (arch)session.new_resource_id();
-            s.back_hWnd = session.new_resource_id();
-            s.back_hdc  = session.new_resource_id();
+            s.back_hWnd  = session.new_resource_id();
+            s.back_hdc   = session.new_resource_id();
+            s.wm_hWnd    = session.new_resource_id();
+            s.wm_hdc     = session.new_resource_id();
             if (is_master)
             {
                 grid_size /= cell_size;
                 s.area = rect{ win_coord, grid_size * cell_size } + border_dent;
             }
-            session.create_window(s.hWnd, s.hdc, is_master, true);
+            session.create_window(s.hWnd,      s.hdc,      is_master, true);
             session.create_window(s.back_hWnd, s.back_hdc, is_master, true);
+            session.create_window(s.wm_hWnd,   s.wm_hdc,   is_master, faux);
             return true;
         }
         void layers_move()
@@ -6688,6 +6738,10 @@ namespace netxs::gui
             }
             if (seq_num_any.has_value()) // Wait shm_complete_event + wait 17ms.
             {
+                //todo It is a workaround for mouse reporting bugs.
+                //auto last_mouse_coor = current_mouse_pos; //todo make it thread safe
+                //ignore_mouse_moves = true;
+
                 session.sync_reply(seq_num_any.value());
                 std::this_thread::sleep_for(17ms); // Absolutely smooth resizing on 60Hz monitors.
                 // Make visual swap.
@@ -6710,6 +6764,28 @@ namespace netxs::gui
                                                                                 .gc_id       = (ui32)s.back_hdc });
                         }
                     }
+                    //todo It is a workaround for mouse reporting bugs.
+                    // Sync mouse movements.
+                    //session.accumrq(batch_buffer, x11::req::query_pointer{ .window_id = (ui32)master.wm_hWnd }, {},
+                    //[&, last_mouse_coor](auto& ev, qiew /*q*/)
+                    //{
+                    //    ignore_mouse_moves.store(faux, std::memory_order_release);
+                    //    if (ev.type == x11::event::Error)
+                    //    {
+                    //        log("%%Failed to query pointer: %%", prompt::x11, session.get_error(ev));
+                    //    }
+                    //    else
+                    //    {
+                    //        auto r = netxs::start_lifetime_as<x11::req::query_pointer::reply>(ev);
+                    //        if constexpr (debugmode) log("Unlock mouse movement: current_mouse_pos=%% root_xy=%%", current_mouse_pos, twod{ r.root_x, r.root_y });
+                    //        current_mouse_pos = { r.root_x, r.root_y };
+                    //        if (last_mouse_coor != current_mouse_pos)
+                    //        {
+                    //            mouse_moved();
+                    //            sys_command(syscmd::update);
+                    //        }
+                    //    }
+                    //});
                     if (batch_buffer.size())
                     {
                         session.x11connection->send(batch_buffer);
@@ -6755,8 +6831,7 @@ namespace netxs::gui
         {
             //todo multi-monitor setup
             auto& session = *x11::session_ptr;
-            auto& x11screen = session.roots.front().s;
-            return rect{ dot_00, { x11screen.width_in_pixels, x11screen.height_in_pixels }};
+            return rect{ dot_00, session.x11_display_size };
         }
         void window_send_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         void window_post_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
@@ -6821,7 +6896,7 @@ namespace netxs::gui
             if constexpr (debugmode)
             {
                 log("Try to set input focus");
-                x11::session_ptr->sendrq<x11::req::set_input_focus>({ .window_id = (ui32)master.hWnd }, {},
+                x11::session_ptr->sendrq<x11::req::set_input_focus>({ .window_id = (ui32)master.wm_hWnd }, {},
                     [&](auto& ev, view /*payload*/)
                     {
                         if (ev.type == x11::event::Error)
@@ -6832,9 +6907,9 @@ namespace netxs::gui
             }
             else
             {
-                x11::session_ptr->sendrq<x11::req::set_input_focus>({ .window_id = (ui32)master.hWnd });
+                x11::session_ptr->sendrq<x11::req::set_input_focus>({ .window_id = (ui32)master.wm_hWnd });
                 //x11::session_ptr->sendrq<x11::req::xi2::set_focus>({ .major_opcode = x11::session_ptr->xi2_major_opcode,
-                //                                                     .window_id    = (ui32)master.hWnd,
+                //                                                     .window_id    = (ui32)master.wm_hWnd,
                 //                                                     .device_id    = 3 });//master_keybd_id });
             }
         }
@@ -6998,6 +7073,7 @@ namespace netxs::gui
             session.query_device(x11::req::xi2::dev_type::all_devices);
             session.activate_xinput2(master.hWnd);
             session.activate_xinput2(master.back_hWnd);
+            session.activate_xinput2(master.wm_hWnd);
             hidden_coor = session.x11_display_size - dot_11;
             auto lock = std::lock_guard{ session.mutex };
             for (auto& l : layers)
@@ -7009,9 +7085,12 @@ namespace netxs::gui
                                                                                    .y = (si16)hidden_coor.y });
                 session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.hWnd });
                 session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.back_hWnd });
+                session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.wm_hWnd });
                 // Put transparent pixel to the upper-left corner (the one visible window dot at hidden_coor).
                 session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.back_hWnd,
                                                                     .gc_id       = (ui32)s.back_hdc });
+                session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.wm_hWnd,
+                                                                    .gc_id       = (ui32)s.wm_hdc });
             }
             if (batch_buffer.size())
             {
@@ -7023,7 +7102,7 @@ namespace netxs::gui
         void window_cleanup() {}
         void window_set_title(view utf8)
         {
-            x11::session_ptr->window_set_title(master.hWnd, utf8);
+            x11::session_ptr->window_set_title(master.wm_hWnd, utf8);
         }
         fp2d mouse_get_pos()
         {
@@ -7035,7 +7114,7 @@ namespace netxs::gui
             if constexpr (debugmode)
             {
                 x11::session_ptr->sendrq<x11::req::xi2::grab_device>({ .major_opcode = x11::session_ptr->xi2_major_opcode,
-                                                                       .window_id    = (ui32)master.hWnd,
+                                                                       .window_id    = (ui32)master.wm_hWnd,
                                                                        .device_id    = master_pointer_id }, {},
                 [&](auto& ev, view /*payload*/)
                 {
@@ -7054,7 +7133,7 @@ namespace netxs::gui
             else
             {
                 x11::session_ptr->sendrq<x11::req::xi2::grab_device>({ .major_opcode = x11::session_ptr->xi2_major_opcode,
-                                                                       .window_id    = (ui32)master.hWnd,
+                                                                       .window_id    = (ui32)master.wm_hWnd,
                                                                        .device_id    = master_pointer_id });
             }
         }
@@ -7189,26 +7268,26 @@ namespace netxs::gui
                 master_pointer_id = device_id;
                 auto m = netxs::start_lifetime_as<x11::req::xi2::event::km>(packet.data());
                 auto& dev = session.input_devices[m.sourceid];
-                auto mouse_coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
-                //auto xi_mods = m.mods.effective;
                 auto emulated = !!(m.flags & x11::req::xi2::event::km::PointerEmulated);
-                auto moved = current_mouse_pos != mouse_coor;
-                if (moved) //todo just a test. // Filter mouse jitter bug on window resizing (a sort of).
-                {
-                    if (stream.m.buttons // Any buttons pressed.
-                        && ((mouse_coor == dot_00 && current_mouse_pos.x != 0
-                                                  && current_mouse_pos.y != 0)
-                            || (mouse_coor == hidden_coor && current_mouse_pos.x != hidden_coor.x
-                                                          && current_mouse_pos.y != hidden_coor.y)))
-                    {
-                        moved = faux;
-                    }
-                }
-                if constexpr (debugmode) log("%%Mouse: sourceid=%% '%%' coor=%% mods=0x%% flags=0x%% emulated=%%", prompt::x11, m.sourceid, session.input_devices[m.sourceid].name, moved ? ansi::clr(tint::greenlt, mouse_coor) : utf::concat(mouse_coor), utf::to_hex(m.mods.effective), utf::to_hex(m.flags), (si32)emulated);
+                //auto xi_mods = m.mods.effective;
+                auto mouse_coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
+                auto moved = current_mouse_pos != mouse_coor && !mouse_state._filter_x11_mouse_bug(session.x11_display_size - dot_11, mouse_coor, stream.m.buttons); //todo: Workaround: Master's root coords are broken when windows are intensively moved in the most of linux distributions.
+                //if (moved && !ignore_mouse_moves.load(std::memory_order_acquire)) //todo: ignore_mouse_moves: Workaround: Master's root coords are broken when windows are intensively moved in the most of linux distributions.
                 if (moved)
                 {
                     current_mouse_pos = mouse_coor;
                     mouse_moved();
+                }
+                if constexpr (debugmode)
+                {
+                    static auto start_time = datetime::now();
+                    auto rel_mouse_coor = fp2d{ m.event_x.to_fp32(), m.event_y.to_fp32() };
+                    log("%%Mouse: %% sourceid=%% '%%' coor=%% rel_coor=%% wincoor=%% mods=0x%% flags=0x%% emulated=%%", prompt::x11,
+                        ansi::clr(yellowlt, datetime::round<si32>(datetime::now() - start_time), "ms"), m.sourceid, session.input_devices[m.sourceid].name,
+                        moved ? ansi::clr(tint::greenlt, mouse_coor) : utf::concat(mouse_coor),
+                        moved ? ansi::clr(tint::greenlt, rel_mouse_coor) : utf::concat(rel_mouse_coor),
+                        mouse_coor - rel_mouse_coor,
+                        utf::to_hex(m.mods.effective), utf::to_hex(m.flags), (si32)emulated);
                 }
                 if (d.evtype != x11::req::xi2::event::Motion && !emulated) // ButtonPress or ButtonRelease.
                 {
@@ -7275,8 +7354,8 @@ namespace netxs::gui
                 master_pointer_id = device_id;
                 auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
                 auto hover = d.evtype == x11::req::xi2::event::Enter;
-                if constexpr (debugmode) log("%%Hover: sourceid=%% '%%' mods=0x%% hover=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, utf::to_hex(f.mods.effective), (si32)hover);
-                if (!hover) mouse_leave();
+                if constexpr (debugmode) log("%%Hover: sourceid=%% '%%' mode=%% mods=0x%% hover=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, (si32)f.mode, utf::to_hex(f.mods.effective), (si32)hover);
+                if (!hover && f.mode == 0/*Normal*/) mouse_leave();
             }
             else if (d.evtype == x11::req::xi2::event::FocusIn || d.evtype == x11::req::xi2::event::FocusOut)
             {
