@@ -6738,10 +6738,6 @@ namespace netxs::gui
             }
             if (seq_num_any.has_value()) // Wait shm_complete_event + wait 17ms.
             {
-                //todo It is a workaround for mouse reporting bugs.
-                //auto last_mouse_coor = current_mouse_pos; //todo make it thread safe
-                //ignore_mouse_moves = true;
-
                 session.sync_reply(seq_num_any.value());
                 std::this_thread::sleep_for(17ms); // Absolutely smooth resizing on 60Hz monitors.
                 // Make visual swap.
@@ -6764,28 +6760,6 @@ namespace netxs::gui
                                                                                 .gc_id       = (ui32)s.back_hdc });
                         }
                     }
-                    //todo It is a workaround for mouse reporting bugs.
-                    // Sync mouse movements.
-                    //session.accumrq(batch_buffer, x11::req::query_pointer{ .window_id = (ui32)master.wm_hWnd }, {},
-                    //[&, last_mouse_coor](auto& ev, qiew /*q*/)
-                    //{
-                    //    ignore_mouse_moves.store(faux, std::memory_order_release);
-                    //    if (ev.type == x11::event::Error)
-                    //    {
-                    //        log("%%Failed to query pointer: %%", prompt::x11, session.get_error(ev));
-                    //    }
-                    //    else
-                    //    {
-                    //        auto r = netxs::start_lifetime_as<x11::req::query_pointer::reply>(ev);
-                    //        if constexpr (debugmode) log("Unlock mouse movement: current_mouse_pos=%% root_xy=%%", current_mouse_pos, twod{ r.root_x, r.root_y });
-                    //        current_mouse_pos = { r.root_x, r.root_y };
-                    //        if (last_mouse_coor != current_mouse_pos)
-                    //        {
-                    //            mouse_moved();
-                    //            sys_command(syscmd::update);
-                    //        }
-                    //    }
-                    //});
                     if (batch_buffer.size())
                     {
                         session.x11connection->send(batch_buffer);
@@ -7272,7 +7246,6 @@ namespace netxs::gui
                 //auto xi_mods = m.mods.effective;
                 auto mouse_coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
                 auto moved = current_mouse_pos != mouse_coor && !mouse_state._filter_x11_mouse_bug(session.x11_display_size - dot_11, mouse_coor, stream.m.buttons); //todo: Workaround: Master's root coords are broken when windows are intensively moved in the most of linux distributions.
-                //if (moved && !ignore_mouse_moves.load(std::memory_order_acquire)) //todo: ignore_mouse_moves: Workaround: Master's root coords are broken when windows are intensively moved in the most of linux distributions.
                 if (moved)
                 {
                     current_mouse_pos = mouse_coor;
