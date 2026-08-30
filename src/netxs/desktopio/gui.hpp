@@ -6516,37 +6516,43 @@ namespace netxs::gui
     {
         struct mouse_state_t
         {
-            fp2d last_coor{};
-            fp32 last_step{};
+            fp2d prev_coor{};
+            fp32 prev_step{};
+            bool prev_edge{};
 
-            auto _filter_x11_mouse_bug(twod max_coor, fp2d coor, si32 max_diagonal, bool active)
+            auto _filter_x11_mouse_bug(twod max_coor, fp2d next_coor, si32 max_diagonal, bool active)
             {
-                auto dc = coor - last_coor;
-                auto step = dc.x * dc.x + dc.y * dc.y;
+                auto dc = next_coor - prev_coor;
+                auto next_step = dc.x * dc.x + dc.y * dc.y;
+                auto next_edge = (next_coor.x <= 0.0
+                               || next_coor.y <= 0.0 || next_coor.x >= max_coor.x
+                                                     || next_coor.y >= max_coor.y);
                 if (!active)
                 {
-                    last_step = step;
-                    last_coor = coor;
+                    //log(ansi::clr(cyanlt, utf::fprint("%%Free movement: prev_coor=%% prev_step=%% next_coor=%% next_step=%% ratio=%%", prompt::x11,
+                    //    prev_coor, prev_step, next_coor, next_step, next_step * next_step / prev_step)));
+                    prev_step = next_step;
+                    prev_coor = next_coor;
+                    prev_edge = next_edge;
                     return faux;
                 }
-                auto is_on_edge = (coor.x <= 0.0
-                                || coor.y <= 0.0 || coor.x >= max_coor.x
-                                                 || coor.y >= max_coor.y);
-                auto fake_step = is_on_edge && step * step / last_step > max_diagonal;
-                //if (!fake_step && is_on_edge)
+                auto k = !prev_edge && next_edge ? 0.1f : 10.0f;
+                auto fake_step = next_step * next_step > k * max_diagonal * prev_step;
+                //if (!fake_step && next_edge)
                 //{
-                //    log(ansi::clr(tint::yellowlt, utf::fprint("Missed fake: last_coor=%% last_step=%% coor=%% step=%%",
-                //    last_coor, last_step, coor, step)));
+                //    log(ansi::clr(tint::yellowlt, utf::fprint("%%  Missed fake: prev_coor=%% prev_step=%% next_coor=%% next_step=%%  %% < %%", prompt::x11,
+                //    prev_coor, prev_step, next_coor, next_step, next_step * next_step, k * max_diagonal * prev_step)));
                 //}
                 if (fake_step)
                 {
-                    log(ansi::err("%%Fake pointer movement detected: coor=%% step=%%"), prompt::x11, coor, step);
+                    //log(ansi::err("%%Fake movement: prev_coor=%% prev_step=%% next_coor=%% next_step=%%  %% > %%"), prompt::x11, prev_coor, prev_step, next_coor, next_step, next_step * next_step, k * max_diagonal * prev_step);
                 }
                 else
                 {
-                    //log("%%Pointer movement: coor=%% step=%%", prompt::x11, coor, step);
-                    last_coor = coor;
-                    last_step = step;
+                    //log("%%Fair movement: prev_coor=%% prev_step=%% next_coor=%% next_step=%%  %% < %%", prompt::x11, prev_coor, prev_step, next_coor, next_step, next_step * next_step, k * max_diagonal * prev_step);
+                    prev_coor = next_coor;
+                    prev_step = next_step;
+                    prev_edge = next_edge;
                 }
                 return fake_step;
             }
@@ -6710,15 +6716,19 @@ namespace netxs::gui
             }
             s.sync.clear();
         }
-        auto _check_if_mouse_moved(fp2d coor, bool forced)
+        auto _check_if_mouse_moved(fp2d coor, bool forced) //todo: Workaround: Master's root coords are broken when windows are intensively moved in the most of linux distributions (even query_pointer affected).
         {
-            auto moved = current_mouse_pos != coor && (forced || !block_mouse_movement.load(std::memory_order_acquire)) && !mouse_state._filter_x11_mouse_bug(session.x11_display_size - dot_11, coor, session.x11_diagonal, forced || stream.m.buttons); //todo: Workaround: Master's root coords are broken when windows are intensively moved in the most of linux distributions.
-            if (moved)
+            if (current_mouse_pos != coor && (forced || !block_mouse_movement.load(std::memory_order_acquire)))
             {
-                current_mouse_pos = coor;
-                mouse_moved();
+                mouse_state._filter_x11_mouse_bug(session.x11_display_size - dot_11, coor, session.x11_diagonal, stream.m.buttons);
+                if (current_mouse_pos != mouse_state.prev_coor)
+                {
+                    current_mouse_pos = mouse_state.prev_coor;
+                    mouse_moved();
+                    return true;
+                }
             }
-            return moved;
+            return faux;
         }
         void layers_present()
         {
@@ -6768,7 +6778,8 @@ namespace netxs::gui
                         {
                             auto m = netxs::start_lifetime_as<x11::req::query_pointer::reply>(ev);
                             auto coor = fp2d{ m.root_x, m.root_y };
-                            if constexpr (debugmode) log("mouse sync at ", coor);
+                            //if (coor == dot_00 || coor == hidden_coor) log(ansi::clr(tint::redlt, "mouse sync at ", coor));
+                            //else                                       log("mouse sync at ", coor);
                             _check_if_mouse_moved(coor, true);
                         }
                         block_mouse_movement.store(faux, std::memory_order_release);
