@@ -311,28 +311,28 @@ namespace netxs::x11
         //    byte pad    = 0;
         //    ui16 length = 1;
         //};
-        //struct query_pointer // Opcode 38 (query pointer)
-        //{
-        //    struct reply
-        //    {
-        //        byte status;
-        //        byte same_screen;
-        //        ui16 sequence_number;
-        //        ui32 length;
-        //        ui32 root_window_id;
-        //        ui32 child_window_id;
-        //        si16 root_x;
-        //        si16 root_y;
-        //        si16 win_x;
-        //        si16 win_y;
-        //        ui16 mask;
-        //        ui16 pad2;
-        //    };
-        //    byte opcode = 38; // 38: QueryPointer.
-        //    byte pad    = 0;
-        //    ui16 length = 2;
-        //    ui32 window_id;
-        //};
+        struct query_pointer // Opcode 38 (query pointer)
+        {
+            struct reply
+            {
+                byte status;
+                byte same_screen;
+                ui16 sequence_number;
+                ui32 length;
+                ui32 root_window_id;
+                ui32 child_window_id;
+                si16 root_x;
+                si16 root_y;
+                si16 win_x;
+                si16 win_y;
+                ui16 mask;
+                ui16 pad2;
+            };
+            byte opcode = 38; // 38: QueryPointer.
+            byte pad    = 0;
+            ui16 length = 2;
+            ui32 window_id;
+        };
         struct set_input_focus // Opcode 42 (set input focus)
         {
             static constexpr auto RevertToNone   = 0;
@@ -1397,6 +1397,7 @@ namespace netxs::x11
         //ui32                                  atom_net_wm_sync_request = 0;
         //ui32                                  atom_net_wm_sync_request_counter = 0;
         //ui32                                  atom_wm_protocols = 0;
+        //ui32                                  atom_net_wm_bypass_compositor = 0; //_XWAYLAND_ALLOW_FRACTIONAL_SCALE
         ui32                                  atom_atom = 0;
         ui32                                  atom_cardinal = 0;
         ui32                                  atom_utf8_string = 0;
@@ -1457,6 +1458,7 @@ namespace netxs::x11
         rect workarea; // Actual _NET_WORKAREA value.
         rect default_window_area; // Window area (? provided by the window manager).
         twod x11_display_size;
+        si32 x11_diagonal{};
 
         std::array<flag, 65536> received_replies;
 
@@ -1484,6 +1486,22 @@ namespace netxs::x11
         //        std::this_thread::yield();
         //    }
         //}
+
+        // Callback usage example.
+        //    session.sendrq<x11::req::map_window>({ .window_id = 0 }, {},
+        //    [&](auto& ev, view payload)
+        //    {
+        //        if (ev.type == x11::event::Error)
+        //        {
+        //            if constexpr (debugmode) log("message");
+        //        }
+        //        else
+        //        {
+        //            if constexpr (debugmode) log("Recieved reply...");
+        //            auto reply = netxs::start_lifetime_as<x11::req::...::reply>(ev);
+        //            ...
+        //        }
+        //    });
         template<class R, class V = qiew, class P = noop>
         auto accumrq(text& batch_buffer, R request, V payload = {}, P callback = {}) // Note: callbacks must check reply errors on their side: ev.type == x11::event::Error.
         {
@@ -1842,6 +1860,11 @@ namespace netxs::x11
             //                                    .property  = atom_net_wm_sync_request_counter,
             //                                    .type      = atom_cardinal },
             //                                xsync_counter_id);
+            // Try to make it DPI-aware.
+            //sendrq<x11::req::change_property>({ .window_id = (ui32)new_window_id,
+            //                                    .property  = atom_net_wm_bypass_compositor, //_XWAYLAND_ALLOW_FRACTIONAL_SCALE
+            //                                    .type      = atom_cardinal },
+            //                                1);
             if (is_master)
             {
                 //todo it doesn't work // Set XSync fence.
@@ -2007,21 +2030,22 @@ namespace netxs::x11
             //atom_net_wm_ping                 = get_atom_id("_NET_WM_PING", true);
             //atom_net_wm_sync_request         = get_atom_id("_NET_WM_SYNC_REQUEST", true);
             //atom_net_wm_sync_request_counter = get_atom_id("_NET_WM_SYNC_REQUEST_COUNTER", true);
+            //atom_net_wm_bypass_compositor = get_atom_id("_NET_WM_BYPASS_COMPOSITOR", true);
+            atom_utf8_string              = get_atom_id("UTF8_STRING", true);
 
             // Server related.
-            atom_atom                   = get_atom_id("ATOM", faux);
-            atom_window                 = get_atom_id("WINDOW", faux);
-            atom_cardinal               = get_atom_id("CARDINAL", faux);
-            atom_utf8_string            = get_atom_id("UTF8_STRING", faux);
+            atom_atom                   = get_atom_id("ATOM",             faux);
+            atom_window                 = get_atom_id("WINDOW",           faux);
+            atom_cardinal               = get_atom_id("CARDINAL",         faux);
             atom_wm_transient_for       = get_atom_id("WM_TRANSIENT_FOR", faux);
-            atom_wm_hints               = get_atom_id("WM_HINTS", faux);
-            atom_wm_normal_hints        = get_atom_id("WM_NORMAL_HINTS", faux);
-            atom_wm_size_hints          = get_atom_id("WM_SIZE_HINTS", faux);
-            //atom_wm_protocols           = get_atom_id("WM_PROTOCOLS", faux);
-            atom_net_active_window      = get_atom_id("_NET_ACTIVE_WINDOW", faux);
-            atom_net_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", faux);
-            atom_net_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP", faux);
-            atom_net_workarea           = get_atom_id("_NET_WORKAREA", faux);
+            atom_wm_hints               = get_atom_id("WM_HINTS",         faux);
+            atom_wm_normal_hints        = get_atom_id("WM_NORMAL_HINTS",  faux);
+            atom_wm_size_hints          = get_atom_id("WM_SIZE_HINTS",    faux);
+            //atom_wm_protocols           = get_atom_id("WM_PROTOCOLS",     faux);
+            atom_net_workarea           = get_atom_id("_NET_WORKAREA",    faux);
+            atom_net_active_window      = get_atom_id("_NET_ACTIVE_WINDOW",      true);
+            atom_net_number_of_desktops = get_atom_id("_NET_NUMBER_OF_DESKTOPS", true);
+            atom_net_current_desktop    = get_atom_id("_NET_CURRENT_DESKTOP",    true);
             return true;
         }
         auto get_props()
@@ -2147,7 +2171,8 @@ namespace netxs::x11
         auto listen_root_events() // Subscribe on root's property change (to track some desktop window has received focus).
         {
             sendrq<x11::req::change_window_attrs>({ .window_id = root_window_id },
-                x11::req::change_window_attrs::payload{ .event_mask = x11::event::mask::PropertyChange });
+                x11::req::change_window_attrs::payload{ .event_mask = x11::event::mask::PropertyChange      // Track global input focus changes.
+                                                                    | x11::event::mask::StructureNotify }); // Track root window size changes.
         }
         auto sync_device_classes(ui16 num_classes, view& q)
         {
@@ -2356,6 +2381,11 @@ namespace netxs::x11
             }
             return faux;
         }
+        void set_x11_display_size(twod size)
+        {
+            x11_display_size = size;
+            x11_diagonal = size.x * size.x + size.y * size.y;
+        }
     };
 
     auto get_cookie(view target_display_num)
@@ -2534,7 +2564,7 @@ namespace netxs::x11
                 {
                     if constexpr (debugmode) log(session.str());
                     auto& x11screen = session.roots.front().s;
-                    session.x11_display_size = { x11screen.width_in_pixels, x11screen.height_in_pixels };
+                    session.set_x11_display_size(twod{ x11screen.width_in_pixels, x11screen.height_in_pixels });
                     auto max_grid_size = x11screen.width_in_pixels * x11screen.height_in_pixels;
                     auto required_buffer_size = 2 * 3 * max_grid_size * sizeof(argb); // 2: Double buffer, 3: master+blinks+header/footer/tooltip.
                     if (session.resize_shared_buffer(required_buffer_size))

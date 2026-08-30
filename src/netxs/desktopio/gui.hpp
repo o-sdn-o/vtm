@@ -99,7 +99,7 @@ namespace netxs::gui
             {
                 //if (toggle_bank)
                 bank ^= toggle_bank;
-                session.sync_reply(seq_nums[bank]);
+                //session.sync_reply(seq_nums[bank]); // It is already synced in layers_present()
                 return (ui32)((session.shm_buffer_len / 2) * bank + shm_offset);
             }
             void set_seq_num(auto& session, ui16 seq_num)
@@ -6517,46 +6517,38 @@ namespace netxs::gui
         struct mouse_state_t
         {
             fp2d last_coor{};
-            time last_time{};
-            fp64 last_pace{};
-            bool was_faked{};
+            fp32 last_step{};
 
-            auto _filter_x11_mouse_bug(twod max_coor, fp2d coor, bool active)
+            auto _filter_x11_mouse_bug(twod max_coor, fp2d coor, si32 max_diagonal, bool active)
             {
-                auto now = datetime::now();
-                if (!active || last_time == time{})
+                auto dc = coor - last_coor;
+                auto step = dc.x * dc.x + dc.y * dc.y;
+                if (!active)
                 {
-                    was_faked = faux;
+                    last_step = step;
                     last_coor = coor;
-                    last_time = now;
-                    last_pace = 0.0;
                     return faux;
                 }
-                auto dt = std::max(1.0, datetime::round<fp64, std::chrono::microseconds>(now - std::exchange(last_time, now)));
-                auto dc = coor - last_coor;
-                auto ds = std::sqrt(dc.x * dc.x + dc.y * dc.y);
-                auto speed = ds / dt;
-                //auto accel = std::abs(speed - last_pace) / dt;
                 auto is_on_edge = (coor.x <= 0.0
                                 || coor.y <= 0.0 || coor.x >= max_coor.x
                                                  || coor.y >= max_coor.y);
-                //auto temp_faked = was_faked;
-                was_faked = !was_faked && is_on_edge && speed > 0.016; // || accel > 3.0e-06
-                //if (!was_faked && (coor == dot_00 || coor == max_coor))
+                auto fake_step = is_on_edge && step * step / last_step > max_diagonal;
+                //if (!fake_step && is_on_edge)
                 //{
-                //    log(ansi::err(utf::fprint("Missed fake: last_was_faked=%% last_coor=%% last_speed=%% coor=%% speed=%% accel=%%",
-                //    (si32)temp_faked, last_coor, last_pace, coor, speed, accel)));
+                //    log(ansi::clr(tint::yellowlt, utf::fprint("Missed fake: last_coor=%% last_step=%% coor=%% step=%%",
+                //    last_coor, last_step, coor, step)));
                 //}
-                if (was_faked)
+                if (fake_step)
                 {
-                    log(ansi::err("%%Fake pointer movement detected: coor=%% speed=%%"), prompt::x11, coor, speed);
+                    log(ansi::err("%%Fake pointer movement detected: coor=%% step=%%"), prompt::x11, coor, step);
                 }
                 else
                 {
+                    //log("%%Pointer movement: coor=%% step=%%", prompt::x11, coor, step);
                     last_coor = coor;
-                    last_pace = speed;
+                    last_step = step;
                 }
-                return was_faked;
+                return fake_step;
             }
         };
 
@@ -6567,13 +6559,14 @@ namespace netxs::gui
         ui16 captured_pointer_id{};
         bool is_foreground_window{};
         twod hidden_coor;
+        flag block_mouse_movement{};
+        x11::session_t& session = *x11::session_ptr;
 
         window(auto&& ...Args)
             : winbase{ Args... }
         {
             //todo it is just a test
             auto align = [](ui32 offset){ return (ui32)(offset + 15) & ~15; };
-            auto& session = *x11::session_ptr;
             auto large_step = (session.shm_buffer_len / 2) / 3;
             auto small_step = (session.shm_buffer_len / 2) / 9;
             layers[0].get().shm_offset = 0;
@@ -6607,7 +6600,6 @@ namespace netxs::gui
         void keybd_reset_deadkey(arch /*hkl*/ = {}) {}
         bool layer_create(layer& s, twod win_coord = {}, twod grid_size = {}, dent border_dent = {}, twod cell_size = {})
         {
-            auto& session = *x11::session_ptr;
             auto is_master = &s == &master;
             if (is_master)
             {
@@ -6642,7 +6634,6 @@ namespace netxs::gui
         }
         void layers_move()
         {
-            auto& session = *x11::session_ptr;
             auto lock = std::lock_guard{ session.mutex };
             for (auto& l : layers)
             {
@@ -6651,8 +6642,8 @@ namespace netxs::gui
                 if (s.prev.coor(target_coor))
                 {
                     session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd },
-                                                  x11::req::configure_window::payload{ .x = (ui32)(si16)s.prev.coor.x,
-                                                                                       .y = (ui32)(si16)s.prev.coor.y, });
+                                                  x11::req::configure_window::payload{ .x = (ui32)(si16)target_coor.x,
+                                                                                       .y = (ui32)(si16)target_coor.y, });
                 }
             }
             if (batch_buffer.size())
@@ -6665,7 +6656,6 @@ namespace netxs::gui
         void layer_present(text& batch_buffer, layer& s, auto& seq_num_any)
         {
             if (!s.data.data() || s.area.size.x <= 0 || s.area.size.y <= 0) return;
-            auto& session = *x11::session_ptr;
             auto target_coor = s.live ? s.area.coor : hidden_coor;
             auto windowmoved = s.prev.coor != target_coor;
             s.windowsized = s.live && std::exchange(s.prev_size, s.area.size) != s.area.size;
@@ -6720,10 +6710,19 @@ namespace netxs::gui
             }
             s.sync.clear();
         }
+        auto _check_if_mouse_moved(fp2d coor, bool forced)
+        {
+            auto moved = current_mouse_pos != coor && (forced || !block_mouse_movement.load(std::memory_order_acquire)) && !mouse_state._filter_x11_mouse_bug(session.x11_display_size - dot_11, coor, session.x11_diagonal, forced || stream.m.buttons); //todo: Workaround: Master's root coords are broken when windows are intensively moved in the most of linux distributions.
+            if (moved)
+            {
+                current_mouse_pos = coor;
+                mouse_moved();
+            }
+            return moved;
+        }
         void layers_present()
         {
             auto seq_num_any = std::optional<ui16>{};
-            auto& session = *x11::session_ptr;
             {
                 auto lock = std::lock_guard{ session.mutex };
                 for (auto& l : layers)
@@ -6738,6 +6737,7 @@ namespace netxs::gui
             }
             if (seq_num_any.has_value()) // Wait shm_complete_event + wait 17ms.
             {
+                block_mouse_movement.store(true, std::memory_order_release);
                 session.sync_reply(seq_num_any.value());
                 std::this_thread::sleep_for(17ms); // Absolutely smooth resizing on 60Hz monitors.
                 // Make visual swap.
@@ -6760,6 +6760,19 @@ namespace netxs::gui
                                                                                 .gc_id       = (ui32)s.back_hdc });
                         }
                     }
+                    // Sync accumulated mouse movement.
+                    session.accumrq(batch_buffer, x11::req::query_pointer{ .window_id = session.root_window_id }, {},
+                    [&](auto& ev, view payload)
+                    {
+                        if (ev.type != x11::event::Error)
+                        {
+                            auto m = netxs::start_lifetime_as<x11::req::query_pointer::reply>(ev);
+                            auto coor = fp2d{ m.root_x, m.root_y };
+                            if constexpr (debugmode) log("mouse sync at ", coor);
+                            _check_if_mouse_moved(coor, true);
+                        }
+                        block_mouse_movement.store(faux, std::memory_order_release);
+                    });
                     if (batch_buffer.size())
                     {
                         session.x11connection->send(batch_buffer);
@@ -6776,7 +6789,6 @@ namespace netxs::gui
             {
                 if (s.resized())
                 {
-                    auto& session = *x11::session_ptr;
                     auto layer_shm_ptr = (argb*)(session.shm_buffer_ptr + s.get_offset(session, true));
                     s.prev.size = s.area.size;
                     auto bitmap_span = std::span<argb>{ layer_shm_ptr, (size_t)s.area.size.x * s.area.size.y };
@@ -6791,7 +6803,6 @@ namespace netxs::gui
         //todo this doesn't work in wslg
         //void layer_opacity(ui32 window_id, fp64 alpha)
         //{
-        //    auto& session = *x11::session_ptr;
         //    alpha = std::clamp(alpha, 0.0, 1.0);
         //    auto opacity_value = (ui32)(alpha * 4294967295.0);
         //    session.sendrq(x11::req::change_property{ .window_id = window_id,
@@ -6804,7 +6815,6 @@ namespace netxs::gui
         rect window_get_fs_area(rect /*window_area*/)
         {
             //todo multi-monitor setup
-            auto& session = *x11::session_ptr;
             return rect{ dot_00, session.x11_display_size };
         }
         void window_send_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
@@ -6814,7 +6824,6 @@ namespace netxs::gui
         {
             //todo
             return;
-            auto& session = *x11::session_ptr;
             if constexpr (debugmode) log("Try to make window foreground");
             auto lock = std::lock_guard{ session.mutex };
             //todo revise: this changes only logic Z-order (mouse input only), but keep visible order intact
@@ -6889,10 +6898,44 @@ namespace netxs::gui
         }
         void window_make_exposed() {}
         void window_make_topmost(bool) {}
+        void _update_hidden_layers_size_and_position()
+        {
+            auto lock = std::lock_guard{ session.mutex };
+            if (true || is_foreground_window)//todo baking // Update or=1 layers.
+            {
+                for (auto& l : layers)
+                {
+                    auto& s = l.get();
+                    session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.back_hWnd, },
+                                                x11::req::configure_window::payload{ .x = (ui16)hidden_coor.x,
+                                                                                     .y = (ui16)hidden_coor.y });
+                    if (!s.live)
+                    {
+                        session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd, },
+                                                    x11::req::configure_window::payload{ .x = (ui16)hidden_coor.x,
+                                                                                         .y = (ui16)hidden_coor.y });
+                    }
+                }
+            }
+            else // Update or=0 layers.
+            {
+                //todo clip & resize or=0
+                for (auto& l : layers) if (auto& s = l.get(); s.live)
+                {
+                    session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.wm_hWnd, },
+                                                x11::req::configure_window::payload{ .x = (ui16)s.area.coor.x,
+                                                                                     .y = (ui16)s.area.coor.y });
+                }
+            }
+            if (batch_buffer.size())
+            {
+                session.x11connection->send(batch_buffer);
+                batch_buffer.clear();
+            }
+        }
         void window_message_pump()
         {
             if constexpr (debugmode) log("window_message_pump started");
-            auto& session = *x11::session_ptr;
             auto atom_wm_delete_window = ui32{};
             auto read_buffer = text(256, '\0'); // 256: Avoid SSO.
             read_buffer.resize(32); // Classic read_buffer size.
@@ -6935,7 +6978,30 @@ namespace netxs::gui
                     {
                         auto cn = netxs::start_lifetime_as<x11::event::configure_notify>(read_buffer.data());
                         if constexpr (debugmode) log("Window reconfigured: window_id=%% event_window_id=%% area=%%", utf::to_hex(cn.window_id), utf::to_hex(cn.event_window_id), rect{{ cn.x, cn.y }, { cn.width, cn.height }});
-                        //check_window(twod{ cn.x, cn.y }); // Window move/resize.
+                        auto size = twod{ cn.width, cn.height };
+                        if (cn.window_id == session.root_window_id && session.x11_display_size != size)
+                        {
+                            base::enqueue([&, size](auto& /*boss*/)
+                            {
+                                session.set_x11_display_size(size);
+                                hidden_coor = session.x11_display_size - dot_11;
+                                if (fsmode == winstate::maximized) set_state(winstate::normal);
+                                _update_hidden_layers_size_and_position();
+                                if (!master.area.trim(rect{ dot_00, hidden_coor })) // Move window to the display center if out.
+                                {
+                                    auto delta = hidden_coor / 2 - (master.area.coor + master.area.size / 2);
+                                    move_window(delta);
+                                }
+                                //sync_pixel_layout(); // Align grips and shadow.
+                                netxs::set_flag<task::all>(reload); // Refill all layers to trigger WM rescaling.
+                                update_gui();
+                            });
+                            if constexpr (debugmode) log("    Root window reconfigured: area=%%", rect{{ cn.x, cn.y }, { cn.width, cn.height }});
+                        }
+                        else
+                        {
+                            //check_window(twod{ cn.x, cn.y }); // Window move/resize.
+                        }
                         break;
                     }
                     case x11::event::ClientMessage: // ?WM_CLOSE
@@ -6951,7 +7017,7 @@ namespace netxs::gui
                     {
                         auto e = netxs::start_lifetime_as<x11::event::property_notify>(read_buffer.data());
                         if constexpr (debugmode) log("%%PropertyNotify atom=%%", prompt::x11, e.atom);
-                        if (e.window_id == session.roots.front().s.root_window_id)
+                        if (e.window_id == session.root_window_id)
                         {
                             if (e.atom == session.atom_net_active_window)
                             {
@@ -6986,7 +7052,7 @@ namespace netxs::gui
                             else if (session.atom_net_workarea && e.atom == session.atom_net_workarea)
                             {
                                 if constexpr (debugmode) log("Request atom_net_workarea value");
-                                session.sendrq<x11::req::get_property>({ .window_id   = session.roots.front().s.root_window_id,
+                                session.sendrq<x11::req::get_property>({ .window_id   = session.root_window_id,
                                                                          .property    = session.atom_net_workarea,
                                                                          .prop_type   = session.atom_cardinal,
                                                                          .long_length = 4 }, {},
@@ -7042,7 +7108,6 @@ namespace netxs::gui
         }
         void window_initilize()
         {
-            auto& session = *x11::session_ptr;
             session.listen_root_events();
             session.query_device(x11::req::xi2::dev_type::all_devices);
             session.activate_xinput2(master.hWnd);
@@ -7050,6 +7115,7 @@ namespace netxs::gui
             session.activate_xinput2(master.wm_hWnd);
             hidden_coor = session.x11_display_size - dot_11;
             auto lock = std::lock_guard{ session.mutex };
+            //todo this is for the is_foreground_window=true state
             for (auto& l : layers)
             {
                 auto& s = l.get();
@@ -7127,7 +7193,6 @@ namespace netxs::gui
         }
         bool input_read(view packet)
         {
-            auto& session = *x11::session_ptr;
             if constexpr (debugmode) log("Beg ----------------------------------------");//, "Packet in hex:\n", utf::buffer_to_hex(packet, true));
             auto d = netxs::start_lifetime_as<x11::req::xi2::event::base>(packet.data());
             auto device_id = d.deviceid;
@@ -7245,12 +7310,7 @@ namespace netxs::gui
                 auto emulated = !!(m.flags & x11::req::xi2::event::km::PointerEmulated);
                 //auto xi_mods = m.mods.effective;
                 auto mouse_coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
-                auto moved = current_mouse_pos != mouse_coor && !mouse_state._filter_x11_mouse_bug(session.x11_display_size - dot_11, mouse_coor, stream.m.buttons); //todo: Workaround: Master's root coords are broken when windows are intensively moved in the most of linux distributions.
-                if (moved)
-                {
-                    current_mouse_pos = mouse_coor;
-                    mouse_moved();
-                }
+                auto moved = _check_if_mouse_moved(mouse_coor, faux);
                 if constexpr (debugmode)
                 {
                     static auto start_time = datetime::now();
