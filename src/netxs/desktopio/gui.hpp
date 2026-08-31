@@ -6760,8 +6760,10 @@ namespace netxs::gui
                         {
                             s.windowsized = faux;
                             session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.back_hWnd, },
-                                                        x11::req::configure_window::payload{ .x = (ui16)hidden_coor.x,
-                                                                                             .y = (ui16)hidden_coor.y });
+                                                        x11::req::configure_window::payload{ .x      = (ui16)hidden_coor.x,
+                                                                                             .y      = (ui16)hidden_coor.y,
+                                                                                             .width  = 1,
+                                                                                             .height = 1 });
                             session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd, },
                                                         x11::req::configure_window::payload{ .x = (ui16)s.area.coor.x,
                                                                                              .y = (ui16)s.area.coor.y });
