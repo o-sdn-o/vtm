@@ -587,6 +587,20 @@ namespace netxs::x11
                 ui16 client_major_version = 2; // Required version 2.2 of the input stack for smooth scroll and touchpad.
                 ui16 client_minor_version = 2; //
             };
+            struct kbmods // Keybd modifiers (bitfields).
+            {
+                ui32 pressed;   // Pressed modifiers (Shift, Ctrl, ...).
+                ui32 latched;   // Sticky keys.
+                ui32 locked;    // Locks (CapsLock, NumLock).
+                ui32 effective; // All mods.
+            };
+            struct kblayout // Keybd layout state (XKB Groups).
+            {
+                byte base_group;
+                byte latched;
+                byte locked;
+                byte effective; // 0: EN, 1: RU etc.
+            };
             namespace mods
             {
                 static constexpr auto Shift    = 1u << 0; // Shift.
@@ -653,21 +667,6 @@ namespace netxs::x11
                     ui16 deviceid;  // Physical or virtual device id.
                     ui32 time;      // Time stamp.
                 };
-                struct kbmods // Keybd modifiers (bitfields).
-                {
-                    ui32 pressed;   // Pressed modifiers (Shift, Ctrl, ...).
-                    ui32 latched;   // Sticky keys.
-                    ui32 locked;    // Locks (CapsLock, NumLock).
-                    ui32 effective; // All mods.
-                };
-                struct kblayout // Keybd layout state (XKB Groups).
-                {
-                    byte base_group;
-                    byte latched;
-                    byte locked;
-                    byte effective; // 0: EN, 1: RU etc.
-                };
-
                 struct device_changed // 1.
                 {
                     static constexpr auto KeyClass      = 0;
@@ -859,6 +858,33 @@ namespace netxs::x11
                 static constexpr auto all_devices        = 0; // All system devices.
                 static constexpr auto all_master_devices = 1; // Virtual generic master devices (keybd/mouse).
             }
+            struct query_pointer
+            {
+                struct reply
+                {
+                    byte     type;      // xi2_major_opcode.
+                    byte     extension; // query_pointer.
+                    ui16     sequence;
+                    ui32     length;
+                    ui32     root_id;
+                    ui32     child_id;
+                    fx16     root_x;
+                    fx16     root_y;
+                    fx16     win_x;
+                    fx16     win_y;
+                    byte     same_screen;
+                    byte     pad0;
+                    ui16     buttons_len;
+                    kbmods   mods;
+                    kblayout group;
+                };
+                byte major_opcode;
+                byte minor_opcode = 40; // 40: QueryPointer.
+                ui16 length       = 3;
+                ui32 window_id;
+                ui16 device_id;
+                ui16 pad1 = {};
+            };
             struct select_events // Minor opcode 46.
             {
                 struct payload // device_mask
@@ -1489,7 +1515,7 @@ namespace netxs::x11
 
         // Callback usage example.
         //    session.sendrq<x11::req::map_window>({ .window_id = 0 }, {},
-        //    [&](auto& ev, view payload)
+        //    [&](auto& ev, view payload) // ev stored in payload.
         //    {
         //        if (ev.type == x11::event::Error)
         //        {
@@ -1498,7 +1524,7 @@ namespace netxs::x11
         //        else
         //        {
         //            if constexpr (debugmode) log("Recieved reply...");
-        //            auto reply = netxs::start_lifetime_as<x11::req::...::reply>(ev);
+        //            auto reply = netxs::start_lifetime_as<x11::req::...::reply>(payload.data());
         //            ...
         //        }
         //    });
@@ -1544,7 +1570,7 @@ namespace netxs::x11
             }
             return sequence_counter;
         }
-        auto parse_reply(x11::event::any& ev)
+        auto parse_reply(x11::event::any& ev, text& read_buffer)
         {
             auto r = std::decay_t<decltype(reply_callbacks.front())>{};
             {
@@ -1555,16 +1581,16 @@ namespace netxs::x11
                     reply_callbacks.pop_front();
                 }
             }
-            auto extra_data = std::vector<char>{};
             if (ev.type == x11::event::Reply && ev.length > 0)
             {
-                extra_data.resize(ev.length * sizeof(ui32));
-                x11connection->recv(extra_data.data(), extra_data.size()); // Blocking call.
+                auto extra_data_size = ev.length * sizeof(ui32);
+                read_buffer.resize(32 + extra_data_size);
+                x11connection->recv(read_buffer.data() + 32, extra_data_size); // Blocking call.
             }
             if constexpr (debugmode) log("%%seq=%%", prompt::x11, r.sequence);
             if (r.callback)
             {
-                r.callback(ev, extra_data);
+                r.callback(ev, read_buffer);
             }
             else
             {
@@ -1605,7 +1631,7 @@ namespace netxs::x11
                             (ui32)err.error_code, (ui32)err.sequence, utf::to_hex(err.bad_value),
                             (ui32)err.major_opcode, (ui32)err.minor_opcode, err_str);
         }
-        auto parse_error(x11::event::any& ev)
+        auto parse_error(x11::event::any& ev, text& read_buffer)
         {
             log(get_error(ev));
             auto is_reply = faux;
@@ -1615,7 +1641,7 @@ namespace netxs::x11
             }
             if (is_reply) // Forward broken request reply to handler.
             {
-                parse_reply(ev);
+                parse_reply(ev, read_buffer);
             }
         }
         auto event_str(si32 e)
@@ -2290,7 +2316,8 @@ namespace netxs::x11
                     }
                     else
                     {
-                        auto reply = netxs::start_lifetime_as<x11::req::xi2::query_device::reply>(ev);
+                        auto reply = netxs::start_lifetime_as<x11::req::xi2::query_device::reply>(q.data());
+                        q.remove_prefix(sizeof(ev));
                         if constexpr (debugmode) log("Connected input devices: %%", reply.num_devices);
                         if (reply.num_devices)
                         while (q)

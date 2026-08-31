@@ -6797,7 +6797,7 @@ namespace netxs::gui
                     {
                         if (ev.type != x11::event::Error)
                         {
-                            auto m = netxs::start_lifetime_as<x11::req::query_pointer::reply>(ev);
+                            auto m = netxs::start_lifetime_as<x11::req::query_pointer::reply>(payload.data());
                             auto coor = fp2d{ m.root_x, m.root_y };
                             //if (coor == dot_00 || coor == hidden_coor) log(ansi::clr(tint::redlt, "mouse sync at ", coor));
                             //else                                       log("mouse sync at ", coor);
@@ -6988,10 +6988,12 @@ namespace netxs::gui
                 switch (type)
                 {
                     case x11::event::Error:
-                        session.parse_error(ev);
+                        session.parse_error(ev, read_buffer);
+                        read_buffer.resize(32); // Restore classic read_buffer size.
                         continue;
                     case x11::event::Reply:
-                        session.parse_reply(ev);
+                        session.parse_reply(ev, read_buffer);
+                        read_buffer.resize(32); // Restore classic read_buffer size.
                         break;
                     case x11::event::CreateNotify:
                         if constexpr (debugmode) log("Window created");
@@ -7064,6 +7066,7 @@ namespace netxs::gui
                                         if constexpr (debugmode) log("get_property error");
                                         return;
                                     }
+                                    payload.remove_prefix(sizeof(ev));
                                     auto reply = netxs::start_lifetime_as<x11::req::get_property::reply>(ev);
                                     if (reply.format == sizeof(ui32) * 8 && reply.prop_type == session.atom_window && reply.value_len > 0 && payload.size() >= 4)
                                     {
@@ -7096,6 +7099,7 @@ namespace netxs::gui
                                     }
                                     else
                                     {
+                                        payload.remove_prefix(sizeof(ev));
                                         if constexpr (debugmode) log("Recieved reply for atom_net_workarea value");
                                         auto reply = netxs::start_lifetime_as<x11::req::get_property::reply>(ev);
                                         if (reply.format == sizeof(ui32) * 8 && reply.prop_type == session.atom_cardinal && payload.size() >= 16)
@@ -7188,11 +7192,11 @@ namespace netxs::gui
                 x11::session_ptr->sendrq<x11::req::xi2::grab_device>({ .major_opcode = x11::session_ptr->xi2_major_opcode,
                                                                        .window_id    = (ui32)master.wm_hWnd,
                                                                        .device_id    = master_pointer_id }, {},
-                [&](auto& ev, view /*payload*/)
+                [&](auto& ev, view payload)
                 {
                     if (ev.type != x11::event::Error)
                     {
-                        auto reply = netxs::start_lifetime_as<x11::req::xi2::grab_device::reply>(ev);
+                        auto reply = netxs::start_lifetime_as<x11::req::xi2::grab_device::reply>(payload.data());
                         log("%%  Grab device reply: status=%% (%%)", prompt::x11, (si32)reply.status,
                             reply.status == x11::req::xi2::grab_device::StatusGrabSuccess     ? "StatusGrabSuccess"     :
                             reply.status == x11::req::xi2::grab_device::StatusAlreadyGrabbed  ? "StatusAlreadyGrabbed"  :
@@ -7420,7 +7424,38 @@ namespace netxs::gui
                 auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
                 auto hover = d.evtype == x11::req::xi2::event::Enter;
                 if constexpr (debugmode) log("%%Hover: sourceid=%% '%%' mode=%% mods=0x%% hover=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, (si32)f.mode, utf::to_hex(f.mods.effective), (si32)hover);
-                if (!hover && f.mode == 0/*Normal*/) mouse_leave();
+                if (!hover && f.mode == 0/*Normal*/)
+                {
+                    mouse_leave();
+                }
+                else if (!hover) // Sometimes, system reports nothing when mouse leaving (mouse moved +/- 1px w/o reporting).
+                {
+                    //todo They sometime (after drag) also return broken coords (+/- 1px):
+                    //session.accumrq(batch_buffer, x11::req::query_pointer{ .window_id = session.root_window_id }, {},
+                    //[&](auto& ev, view payload)
+                    //{
+                    //    if (ev.type != x11::event::Error)
+                    //    {
+                    //        auto m = netxs::start_lifetime_as<x11::req::query_pointer::reply>(payload.data());
+                    //        auto coor = fp2d{ m.root_x, m.root_y };
+                    //        log(ansi::clr(tint::greenlt, "mouse sync at ", coor));
+                    //        _check_if_mouse_moved(coor, faux);
+                    //    }
+                    //});
+                    //session.sendrq(x11::req::xi2::query_pointer{ .major_opcode = session.xi2_major_opcode,
+                    //                                             .window_id    = (ui32)master.wm_hWnd,
+                    //                                             .device_id    = device_id }, {},
+                    //[&](auto& ev, view payload)
+                    //{
+                    //    if (ev.type != x11::event::Error)
+                    //    {
+                    //        auto m = netxs::start_lifetime_as<x11::req::xi2::query_pointer::reply>(payload.data());
+                    //        auto coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
+                    //        log(ansi::clr(tint::greenlt, "mouse sync at ", coor));
+                    //        _check_if_mouse_moved(coor, faux);
+                    //    }
+                    //});
+                }
             }
             else if (d.evtype == x11::req::xi2::event::FocusIn || d.evtype == x11::req::xi2::event::FocusOut)
             {
