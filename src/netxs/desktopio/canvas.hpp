@@ -3947,8 +3947,11 @@ namespace netxs
             auto layout(rect area) const
             {
                 auto vertex = corner(area.size);
-                auto side_x = hzgrip.shift(vertex).normalize_itself().shift_itself(area.coor).trim(area);
-                auto side_y = vtgrip.shift(vertex).normalize_itself().shift_itself(area.coor).trim(area);
+                auto gripsz = std::abs(widths);
+                auto dentxy = (area.size - gripsz * 2).less(dot_33 * gripsz, dot_00, gripsz);
+                auto visible_area = rect{ area.coor + dtcoor.less(dot_11, dentxy, dot_00), area.size - dentxy }; // Trim resize grips' hanging ends.
+                auto side_x = hzgrip.shift(vertex).normalize_itself().shift_itself(area.coor).trim(visible_area);
+                auto side_y = vtgrip.shift(vertex).normalize_itself().shift_itself(area.coor).trim(visible_area);
                 return std::pair{ side_x, side_y };
             }
             auto draw(auto& canvas, rect area, auto fx) const
