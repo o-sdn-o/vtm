@@ -4397,13 +4397,13 @@ namespace netxs::gui
             size_delta = new_gridsz * cellsz - old_client.size;
             if (size_delta)
             {
-                //todo sync ui
                 if (auto move_delta = szgrip.move(size_delta, zoom))
                 {
                     move_window(move_delta);
                     sync_pixel_layout(); // Align grips and shadow.
                 }
                 resize_window(size_delta);
+                szgrip.calc(inner_rect, coord, border, dent{}, cellsz);
             }
         }
         void mouse_wheel(fp32 delta, bool hz)
@@ -4452,7 +4452,7 @@ namespace netxs::gui
         void mouse_moved()
         {
             auto coord = mouse_get_pos();
-            auto& mbttns = stream.m.buttons;
+            auto mbttns = stream.m.buttons;
             mhover = true;
             auto inner_rect = blinky.area;
             auto ingrip = hit_grips();
@@ -4472,16 +4472,19 @@ namespace netxs::gui
                 {
                     moving = true;
                 }
-                else if (mbttns == bttn::left)
+                else if (mbttns == bttn::left) // Resize window.
                 {
-                    if (!szgrip.seized) // drag start
+                    if (!szgrip.seized) // Drag start.
                     {
                         szgrip.grab(inner_rect, mcoord, border, cellsz);
                     }
+                    mcoord = coord;
                     base::enqueue([&, coord](auto& /*boss*/)
                     {
                         resize_by_grips(coord);
+                        update_gui();
                     });
+                    return;
                 }
                 else drop_grips();
             }
