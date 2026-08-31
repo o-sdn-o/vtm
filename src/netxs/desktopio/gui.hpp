@@ -4060,6 +4060,22 @@ namespace netxs::gui
                     netxs::onrect(canvas, r, cell::shaders::full(shade2));
                     netxs::misc::cage(canvas, side_y, dent_y, cell::shaders::full(black)); // 1-px dark contour around.
                 });
+                if (side_x.size.x > inner_rect.size.x) // Horizontal hanging end.
+                {
+                    auto trim_rect = side_y;
+                    trim_rect.coor.x += (inner_rect.size.x + trim_rect.size.x) * s.x;
+                    auto hanging_rect = side_x.trim(trim_rect);
+                    auto dent_h = dent{ 0, 0, s.y < 0, s.y > 0 };
+                    netxs::misc::cage(canvas, hanging_rect, dent_h, cell::shaders::full(black)); // 1-px dark contour around.
+                }
+                if (side_y.size.y > inner_rect.size.y + side_x.size.y) // Vertical hanging end.
+                {
+                    auto trim_rect = rect{{ outer_rect.coor.x, side_x.coor.y }, { outer_rect.size.x, side_x.size.y }};
+                    trim_rect.coor.y += (inner_rect.size.y + trim_rect.size.y) * s.y;
+                    auto hanging_rect = side_y.trim(trim_rect);
+                    auto dent_v = dent{ s.x < 0, s.x > 0, 0, 0 };
+                    netxs::misc::cage(canvas, hanging_rect, dent_v, cell::shaders::full(black)); // 1-px dark contour around.
+                }
             }
             if (!shadow.hide) fill_grips(outer_rect, [&](auto& canvas, auto r)
             {
