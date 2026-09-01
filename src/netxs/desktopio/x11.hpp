@@ -1079,6 +1079,138 @@ namespace netxs::x11
                 //ui16 pad1               = 0;
             };
         }
+        namespace xpresent
+        {
+            static constexpr auto ConfigureNotifyMask = 1 << 0;
+            static constexpr auto CompleteNotifyMask  = 1 << 1;
+            static constexpr auto IdleNotifyMask      = 1 << 2;
+            //static constexpr auto RedirectNotifyMask  = 1 << 3;
+
+            static constexpr auto ConfigureNotify = 0;
+            static constexpr auto CompleteNotify  = 1;
+            static constexpr auto IdleNotify      = 2;
+            //static constexpr auto RedirectNotify  = 3;
+
+            struct query_version
+            {
+                struct reply
+                {
+                    byte status;
+                    byte pad1;
+                    ui16 sequence;
+                    ui32 length;
+                    ui32 server_major_version;
+                    ui32 server_minor_version;
+                    ui32 pad2[4];
+                };
+                byte major_opcode;     // xpresent_major_opcode.
+                byte minor_opcode = 0; // 0: PresentQueryVersion.
+                ui16 length = 3;
+                ui32 client_major_version;
+                ui32 client_minor_version;
+            };
+            struct present_pixmap
+            {
+                static constexpr auto PresentOptionNone         = 0;
+                static constexpr auto PresentOptionAsync        = 1 << 0; // Don't wait for VBlank.
+                static constexpr auto PresentOptionCopy         = 1 << 1;
+                static constexpr auto PresentOptionUST          = 1 << 2;
+                static constexpr auto PresentOptionSuboptimal   = 1 << 3;
+                static constexpr auto PresentOptionAsyncMayTear = 1 << 4;
+
+                byte major_opcode;       // xpresent_major_opcode
+                byte minor_opcode  = 1;  // 1: PresentPixmap.
+                ui16 length        = 18;
+                ui32 window_id;          // s.back_hWnd
+                ui32 pixmap_id;          // Virtual pixmap id (1x1).
+                ui32 serial;             // Our frame id (seq_num_any).
+                ui32 valid_region  = 0;  // 0: Update a whole window.
+                ui32 update_region = 0;  //
+
+                si16 x_offset      = 0;
+                si16 y_offset      = 0;
+                ui32 target_crtc   = 0;
+
+                ui32 wait_fence    = 0;
+                ui32 idle_fence    = 0;
+
+                ui32 options       = 0;//PresentOptionCopy;//PresentOptionAsync;
+                ui32 pad           = {};
+                ui64 target_msc    = 0;  // 0: Make it fast as possible (don't wait for VBlank).
+                ui64 divisor       = 0;
+                ui64 remainder     = 0;
+                // Payload: LISTofPRESENTNOTIFY
+            };
+            struct notify_msc
+            {
+                byte major_opcode;       // session.xpresent_major_opcode
+                byte minor_opcode = 2;   // 2: PresentNotifyMSC
+                ui16 length       = 10;
+                ui32 window_id;          // master.hWnd
+                ui32 serial;
+                ui32 pad          = 0;
+                ui64 target_msc   = 0;   // (current_msc + 1 or +2)
+                ui64 divisor      = 0;
+                ui64 remainder    = 0;
+            };
+            struct select_input // Subscribe window on xpresent events.
+            {
+
+                byte major_opcode;     // xpresent_major_opcode.
+                byte minor_opcode = 3; // 3: PresentSelectInput.
+                ui16 length       = 4;
+                ui32 event_id;         // Our subscription ID (=session.new_resource_id()).
+                ui32 window_id;        // Target window id.
+                ui32 event_mask = CompleteNotifyMask;
+            };
+            struct base // notify_event header.
+            {
+                byte type;       // =GenericEvent (35).
+                byte extension;  // =xpresent_major_opcode.
+                ui16 sequence;
+                ui32 length;
+                ui16 evtype;
+            };
+            struct complete_notify // xpresent_complete_notify_event
+            {
+                static constexpr auto CompleteNotify = 0;
+
+                base header;
+                byte kind;       // =PresentCompleteKindPixmap (0).
+                byte mode;       // =PresentCompleteModeCopy (0) or Flip (1).
+                ui32 event_id;
+                ui32 window_id;  // Our window id.
+                ui32 serial;     // Our cookies.
+                ui64 ust;        // Unadjusted System Time.
+                ui64 msc;        // Media Stream Counter.
+            };
+            struct configure_notify
+            {
+                base header;
+                ui16 pad2;
+                ui32 event_id;
+                ui32 window_id;
+                si16 x;
+                si16 y;
+                ui16 width;
+                ui16 height;
+                si16 off_x;
+                si16 off_y;
+                ui16 pixmap_width;
+                ui16 pixmap_height;
+                ui32 pixmap_flags;
+            };
+            struct idle_notify
+            {
+                base header;
+                ui16 pad2;
+                ui32 event_id;
+                ui32 window_id;
+                ui32 serial;
+                ui32 pixmap_id;
+                ui32 idle_fence;
+            };
+        }
         struct noop // Opcode 127 (NoOperation).
         {
             byte opcode = 127;
@@ -1448,7 +1580,7 @@ namespace netxs::x11
         byte                                  xkb_major_opcode = 0;
         byte                                  xkb_first_event = 0;
 
-        //byte                                  xpresent_major_opcode = 0;
+        byte                                  xpresent_major_opcode = 0;
         //byte                                  xpresent_first_event = 0;
 
         //byte                                  xsync_major_opcode = 0;
@@ -1485,6 +1617,7 @@ namespace netxs::x11
         rect default_window_area; // Window area (? provided by the window manager).
         twod x11_display_size;
         si32 x11_diagonal{};
+        bool wl_present{};
 
         std::array<flag, 65536> received_replies;
 
@@ -1498,20 +1631,21 @@ namespace netxs::x11
         {
             while (received_replies[sequence_number].load(std::memory_order_acquire))
             {
-                //if constexpr (debugmode) log(ansi::clr(tint::yellowlt, "wait sync_reply %%..."), sequence_number);
+                //if constexpr (debugmode) log(ansi::clr(tint::yellowlt, "%% wait sync_reply %%..."), datetime::now(), sequence_number);
                 std::this_thread::yield();
             }
         }
-        //void sync_reply(ui16 sequence_number, span timeout) const
-        //{
-        //    auto current_time = datetime::now();
-        //    while (received_replies[sequence_number].load(std::memory_order_acquire))
-        //    {
-        //        //if constexpr (debugmode) log(ansi::clr(tint::yellowlt, "wait sync_reply %%..."), sequence_number);
-        //        if (datetime::now() - current_time >= timeout) break;
-        //        std::this_thread::yield();
-        //    }
-        //}
+
+        void sync_reply(ui16 sequence_number, span timeout, span wait_step = span{}) const
+        {
+            auto current_time = datetime::now();
+            while (received_replies[sequence_number].load(std::memory_order_acquire))
+            {
+                //if constexpr (debugmode) log(ansi::clr(tint::yellowlt, "wait sync_reply %%..."), sequence_number);
+                if (datetime::now() - current_time >= timeout) break;
+                std::this_thread::sleep_for(wait_step);
+            }
+        }
 
         // Callback usage example.
         //    session.sendrq<x11::req::map_window>({ .window_id = 0 }, {},
@@ -1904,10 +2038,10 @@ namespace netxs::x11
                 //                                    .type      = atom_wm_hints },
                 //                                x11::icccm::wm_hints{ .flags = x11::icccm::InputHint, .input = 1 });
                 // Init XPresent event subscription.
-                //auto new_event_id = new_resource_id();
-                //sendrq<x11::req::xpresent::select_input>({ .major_opcode = xpresent_major_opcode,
-                //                                           .event_id     = new_event_id,
-                //                                           .window_id    = new_window_id });
+                auto new_event_id = new_resource_id();
+                sendrq<x11::req::xpresent::select_input>({ .major_opcode = xpresent_major_opcode,
+                                                           .event_id     = new_event_id,
+                                                           .window_id    = new_window_id });
             }
             else
             {
@@ -2583,13 +2717,14 @@ namespace netxs::x11
                 if (session.detect_extension<x11::req::xi2     ::query_version>("XInputExtension", session.xi2_major_opcode, byte{}, 2, 4)) // XInputExtension (XInput2) ver >= 2.4
                 if (session.detect_extension<x11::req::xkb     ::query_version>("XKEYBOARD"      , session.xkb_major_opcode, session.xkb_first_event, 1, 0))
                 //if (session.detect_extension<x11::req::xsync   ::query_version>("SYNC"           , session.xsync_major_opcode, byte{}, 3, 1))
-                //if (session.detect_extension<x11::req::xpresent::query_version>("Present"        , session.xpresent_major_opcode, byte{}, 1, 0))
+                if (session.detect_extension<x11::req::xpresent::query_version>("Present"        , session.xpresent_major_opcode, byte{}, 1, 0))
                 if (session.get_atoms())
                 if (session.get_props())
                 if (session.get_default_window_area())
                 if (session.create_shared_objects())
                 {
                     if constexpr (debugmode) log(session.str());
+                    session.wl_present = !!os::env::get("WAYLAND_DISPLAY").size();
                     auto& x11screen = session.roots.front().s;
                     session.set_x11_display_size(twod{ x11screen.width_in_pixels, x11screen.height_in_pixels });
                     auto max_grid_size = x11screen.width_in_pixels * x11screen.height_in_pixels;

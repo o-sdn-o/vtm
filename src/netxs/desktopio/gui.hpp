@@ -99,6 +99,7 @@ namespace netxs::gui
             {
                 //if (toggle_bank)
                 bank ^= toggle_bank;
+                //todo deadlock by unknown reason
                 //session.sync_reply(seq_nums[bank]); // It is already synced in layers_present()
                 return (ui32)((session.shm_buffer_len / 2) * bank + shm_offset);
             }
@@ -6585,6 +6586,7 @@ namespace netxs::gui
         bool is_foreground_window{};
         twod hidden_coor;
         flag block_mouse_movement{};
+        std::atomic<ui64> current_msc = 0;
         x11::session_t& session = *x11::session_ptr;
 
         window(auto&& ...Args)
@@ -6606,6 +6608,65 @@ namespace netxs::gui
                 layers[3].get().shm_offset,
                 layers[4].get().shm_offset);
         }
+
+        auto _check_if_mouse_moved(fp2d coor, bool forced) //todo: Workaround: Master's root coords are broken when windows are intensively moved in the most of linux distributions (even query_pointer affected).
+        {
+            if (current_mouse_pos != coor && (forced || !block_mouse_movement.load(std::memory_order_acquire)))
+            {
+                mouse_state._filter_x11_mouse_bug(session.x11_display_size - dot_11, coor, session.x11_diagonal, stream.m.buttons && session.wl_present); // wl_present: no need to check in pure X11 session.
+                if (current_mouse_pos != mouse_state.prev_coor)
+                {
+                    current_mouse_pos = mouse_state.prev_coor;
+                    mouse_moved();
+                    return true;
+                }
+            }
+            return faux;
+        }
+        void _wait_next_vblank()
+        {
+            // Get current msc.
+            auto n = ui16{};
+            {
+                auto lock = std::lock_guard{ session.mutex };
+                n = session.sequence_counter + netxs::ui16max / 2; // Use parallel sequence to avoid interference.
+                session.accumrq(batch_buffer, x11::req::xpresent::notify_msc{ .major_opcode  = session.xpresent_major_opcode,
+                                                                              .window_id     = (ui32)master.hWnd,
+                                                                              .serial        = n,
+                                                                              .target_msc    = 0 });
+                session.received_replies[n].store(true, std::memory_order_release);
+                if (batch_buffer.size())
+                {
+                    session.x11connection->send(batch_buffer);
+                    batch_buffer.clear();
+                }
+            }
+            //auto k0 = datetime::now();
+            //log(ansi::clr(tint::greenlt, "start synchronization (serial=%%): current_time=%%"), n, k0);
+            session.sync_reply(n, 17ms); // Wait for the current msc.
+            //auto k1 = datetime::now();
+            //log(ansi::clr(tint::greenlt, "got current msc (serial=%%): current_time=%% spent=%%ms current_msc=%%"), n, k1, datetime::round<si32>(k1 - k0), current_msc);
+            // Skip exactly one next frame (skip the current frame).
+            {
+                auto lock = std::lock_guard{ session.mutex };
+                n = session.sequence_counter + netxs::ui16max / 2;
+                auto target_msc = current_msc + 1; // Next vblank.
+                session.accumrq(batch_buffer, x11::req::xpresent::notify_msc{ .major_opcode  = session.xpresent_major_opcode,
+                                                                              .window_id     = (ui32)master.hWnd,
+                                                                              .serial        = n,
+                                                                              .target_msc    = target_msc });
+                session.received_replies[n].store(true, std::memory_order_release);
+                if (batch_buffer.size())
+                {
+                    session.x11connection->send(batch_buffer);
+                    batch_buffer.clear();
+                }
+            }
+            session.sync_reply(n, 17ms, 1ms); // Wait next vblank.
+            //auto k2 = datetime::now();
+            //log(ansi::clr(tint::greenlt, "got vblank (serial=%%): current_time=%% spent=%%ms current_msc=%%"), n, k1, datetime::round<si32>(k2 - k0), current_msc);
+        }
+
         bool keybd_test_pressed(si32 /*virtcod*/, si32 /*keycode*/ = 0) { return faux; /*!!(vkstat[virtcod] & 0x80);*/ }
         bool keybd_test_toggled(si32 /*virtcod*/) { return faux; /*!!(vkstat[virtcod] & 0x01);*/ }
         bool keybd_read_pressed(si32 /*virtcod*/) { return faux; /*!!(::GetAsyncKeyState(virtcod) & 0x8000);*/ }
@@ -6735,20 +6796,6 @@ namespace netxs::gui
             }
             s.sync.clear();
         }
-        auto _check_if_mouse_moved(fp2d coor, bool forced) //todo: Workaround: Master's root coords are broken when windows are intensively moved in the most of linux distributions (even query_pointer affected).
-        {
-            if (current_mouse_pos != coor && (forced || !block_mouse_movement.load(std::memory_order_acquire)))
-            {
-                mouse_state._filter_x11_mouse_bug(session.x11_display_size - dot_11, coor, session.x11_diagonal, stream.m.buttons);
-                if (current_mouse_pos != mouse_state.prev_coor)
-                {
-                    current_mouse_pos = mouse_state.prev_coor;
-                    mouse_moved();
-                    return true;
-                }
-            }
-            return faux;
-        }
         void layers_present()
         {
             auto seq_num_any = std::optional<ui16>{};
@@ -6767,8 +6814,15 @@ namespace netxs::gui
             if (seq_num_any.has_value()) // Wait shm_complete_event + wait 17ms.
             {
                 block_mouse_movement.store(true, std::memory_order_release);
-                session.sync_reply(seq_num_any.value());
-                std::this_thread::sleep_for(17ms); // Absolutely smooth resizing on 60Hz monitors.
+                if (session.wl_present) // On WL: Skip exactly one frame for smooth resizing on 60Hz monitors.
+                {
+                    session.sync_reply(seq_num_any.value(), 17ms);
+                    std::this_thread::sleep_for(17ms); // This is the only way to sync with vblank on WL.
+                }
+                else // Wait vblank in pure X11 session.
+                {
+                    _wait_next_vblank();
+                }
                 // Make visual swap.
                 {
                     auto lock = std::lock_guard{ session.mutex };
@@ -7130,6 +7184,58 @@ namespace netxs::gui
                                 {
                                     //todo exit debug
                                     goto break_break;
+                                }
+                            }
+                            read_buffer.resize(32); // Restore classic read_buffer size.
+                        }
+                        else if (ev.detail == session.xpresent_major_opcode) // XPresent.
+                        {
+                            auto tail_size = ev.length * 4;
+                            read_buffer.resize(32 + tail_size); // Read a whole XI2 packet.
+                            if (session.x11connection->recv(read_buffer.data() + 32, tail_size).size() == tail_size)
+                            {
+                                auto be = netxs::start_lifetime_as<x11::req::xpresent::base>(read_buffer.data());
+                                if constexpr (debugmode) log(ansi::hi("XPresent Notify evtype=%% length=%%"), be.evtype, be.length);
+                                if (be.evtype == x11::req::xpresent::ConfigureNotify)
+                                {
+                                    auto cf = netxs::start_lifetime_as<x11::req::xpresent::configure_notify>(read_buffer.data());
+                                    if constexpr (debugmode) log(ansi::hi("PresentConfigureNotify:"),
+                                        "\n\t event_id      = 0x", utf::to_hex(cf.event_id),
+                                        "\n\t window_id     = 0x", utf::to_hex(cf.window_id),
+                                        "\n\t x             = ", cf.x,
+                                        "\n\t y             = ", cf.y,
+                                        "\n\t width         = ", cf.width,
+                                        "\n\t height        = ", cf.height,
+                                        "\n\t off_x         = ", cf.off_x,
+                                        "\n\t off_y         = ", cf.off_y,
+                                        "\n\t pixmap_width  = ", cf.pixmap_width,
+                                        "\n\t pixmap_height = ", cf.pixmap_height,
+                                        "\n\t pixmap_flags  = ", cf.pixmap_flags);
+                                }
+                                else if (be.evtype == x11::req::xpresent::CompleteNotify)
+                                {
+                                    auto cm = netxs::start_lifetime_as<x11::req::xpresent::complete_notify>(read_buffer.data());
+                                    if constexpr (debugmode) log(ansi::hi("PresentCompleteNotify:"),
+                                        "\n\t serial    = ",   (ui32)cm.serial,
+                                        "\n\t kind      = ",   (ui32)cm.kind,
+                                        "\n\t mode      = ",   (ui32)cm.mode,
+                                        "\n\t event_id  = 0x", utf::to_hex(cm.event_id),
+                                        "\n\t window_id = 0x", utf::to_hex(cm.window_id),
+                                        "\n\t ust       = ",   cm.ust,
+                                        "\n\t msc       = ",   cm.msc);
+                                    current_msc = cm.msc;
+                                    session.received_replies[cm.serial & 0xFFFF].store(faux, std::memory_order_release);
+                                }
+                                else if (be.evtype == x11::req::xpresent::IdleNotify)
+                                {
+                                    auto in = netxs::start_lifetime_as<x11::req::xpresent::idle_notify>(read_buffer.data());
+                                    if constexpr (debugmode) log(ansi::hi("PresentIdleNotify:"),
+                                        "\n\t event_id     = 0x", utf::to_hex(in.event_id),
+                                        "\n\t window_id    = 0x", utf::to_hex(in.window_id),
+                                        "\n\t serial       = ",   (ui32)in.serial,
+                                        "\n\t pixmap_id    = 0x", utf::to_hex(in.pixmap_id),
+                                        "\n\t idle_fence   = 0x", utf::to_hex(in.idle_fence));
+                                    //session.received_replies[in.serial & 0xFFFF].store(faux, std::memory_order_release);
                                 }
                             }
                             read_buffer.resize(32); // Restore classic read_buffer size.
