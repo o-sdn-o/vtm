@@ -92,6 +92,7 @@ namespace netxs::gui
             arch wm_hWnd = {}; // OR=0 Layer.
             ui32 shm_offset = {};
             twod prev_size;
+            bool prev_live = {};
             bool windowsized = {};
             bool bank = {}; // Bank is switching offset segment on every resize iteration.
 
@@ -6623,48 +6624,192 @@ namespace netxs::gui
             }
             return faux;
         }
-        void _wait_next_vblank()
+        void _wm_layer_present(text& batch_buffer, layer& s, std::optional<ui16>& seq_num_any)
         {
-            // Get current msc.
-            auto n = ui16{};
+            auto target_area = s.area.trim(session.workarea);
+            if (s.live && target_area)
+            {
+                s.prev_live = true;
+                session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.wm_hWnd },
+                                            x11::req::configure_window::payload{ .x      = (ui16)target_area.coor.x,
+                                                                                 .y      = (ui16)target_area.coor.y,
+                                                                                 .width  = (ui16)target_area.size.x,
+                                                                                 .height = (ui16)target_area.size.y });
+                //todo make the master.wm_hWnd mouse opaque
+                auto r = target_area;
+                r.coor -= s.area.coor;
+                auto dirty_offset = s.get_offset(session) + (r.coor.y * s.area.size.x * sizeof(ui32));
+                seq_num_any = session.accumrq(batch_buffer, x11::req::shm::put_image
+                {
+                    .major_opcode = session.shm_major_opcode,
+                    .drawable     = (ui32)s.wm_hWnd,
+                    .gc_id        = (ui32)s.wm_hdc,
+                    .total_width  = (ui16)s.area.size.x,
+                    .total_height = (ui16)s.area.size.y,
+                    .src_x        = (ui16)r.coor.x,
+                    .src_y        = (ui16)0,        // Use 0, because dirty_offset already points to the required line Y.
+                    .src_width    = (ui16)r.size.x, // Dirty rect size.
+                    .src_height   = (ui16)r.size.y, //
+                    .dst_x        = (si16)0,//r.coor.x, // Window dest coor.
+                    .dst_y        = (si16)0,//r.coor.y, //
+                    .shm_seg_id   = session.shm_segment_xid,
+                    .offset       = (ui32)dirty_offset, // New data start.
+                });
+            }
+            else if (s.prev_live) // Hide WM window.
+            {
+                s.prev_live = faux;
+                session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.wm_hWnd },
+                                            x11::req::configure_window::payload{ .x      = (ui16)target_area.coor.x,
+                                                                                 .y      = (ui16)target_area.coor.y,
+                                                                                 .width  = 1,
+                                                                                 .height = 1 });
+                session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.wm_hWnd,
+                                                                    .gc_id       = (ui32)s.wm_hdc });
+                //todo make the master.wm_hWnd mouse transparent
+            }
+        }
+        void _wait_next_vblank(ui16 seq_num)
+        {
+            if (session.wl_present) // On WL: Skip exactly one frame for smooth resizing on 60Hz monitors.
+            {
+                session.sync_reply(seq_num, 17ms);
+                std::this_thread::sleep_for(17ms); // This is the only way to sync with vblank on WL.
+            }
+            else // Wait vblank in pure X11 session.
+            {
+                // Get current msc.
+                auto n = ui16{};
+                {
+                    auto lock = std::lock_guard{ session.mutex };
+                    n = session.sequence_counter + netxs::ui16max / 2; // Use parallel sequence to avoid interference.
+                    session.accumrq(batch_buffer, x11::req::xpresent::notify_msc{ .major_opcode  = session.xpresent_major_opcode,
+                                                                                  .window_id     = (ui32)master.hWnd,
+                                                                                  .serial        = n,
+                                                                                  .target_msc    = 0 });
+                    session.received_replies[n].store(true, std::memory_order_release);
+                    if (batch_buffer.size())
+                    {
+                        session.x11connection->send(batch_buffer);
+                        batch_buffer.clear();
+                    }
+                }
+                //auto k0 = datetime::now();
+                //log(ansi::clr(tint::greenlt, "start synchronization (serial=%%): current_time=%%"), n, k0);
+                session.sync_reply(n, 17ms); // Wait for the current msc.
+                //auto k1 = datetime::now();
+                //log(ansi::clr(tint::greenlt, "got current msc (serial=%%): current_time=%% spent=%%ms current_msc=%%"), n, k1, datetime::round<si32>(k1 - k0), current_msc);
+                // Skip exactly one next frame (skip the current frame).
+                {
+                    auto lock = std::lock_guard{ session.mutex };
+                    n = session.sequence_counter + netxs::ui16max / 2;
+                    auto target_msc = current_msc + 1; // Next vblank.
+                    session.accumrq(batch_buffer, x11::req::xpresent::notify_msc{ .major_opcode  = session.xpresent_major_opcode,
+                                                                                  .window_id     = (ui32)master.hWnd,
+                                                                                  .serial        = n,
+                                                                                  .target_msc    = target_msc });
+                    session.received_replies[n].store(true, std::memory_order_release);
+                    if (batch_buffer.size())
+                    {
+                        session.x11connection->send(batch_buffer);
+                        batch_buffer.clear();
+                    }
+                }
+                session.sync_reply(n, 17ms, 1ms); // Wait next vblank.
+                //auto k2 = datetime::now();
+                //log(ansi::clr(tint::greenlt, "got vblank (serial=%%): current_time=%% spent=%%ms current_msc=%%"), n, k1, datetime::round<si32>(k2 - k0), current_msc);
+            }
+        }
+        void _toggle_foreground(bool focused)
+        {
+            auto changed = std::exchange(is_foreground_window, focused) != is_foreground_window;
+            if (changed)
             {
                 auto lock = std::lock_guard{ session.mutex };
-                n = session.sequence_counter + netxs::ui16max / 2; // Use parallel sequence to avoid interference.
-                session.accumrq(batch_buffer, x11::req::xpresent::notify_msc{ .major_opcode  = session.xpresent_major_opcode,
-                                                                              .window_id     = (ui32)master.hWnd,
-                                                                              .serial        = n,
-                                                                              .target_msc    = 0 });
-                session.received_replies[n].store(true, std::memory_order_release);
+                auto seq_num = std::optional<ui16>{};
+                if (is_foreground_window)
+                {
+                    for (auto& l : layers)
+                    {
+                        auto& s = l.get();
+                        auto target_area = rect{ hidden_coor, s.live ? s.area.size : dot_11 };
+                        session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd },
+                                                    x11::req::configure_window::payload{ .x      = (ui16)target_area.coor.x,
+                                                                                         .y      = (ui16)target_area.coor.y,
+                                                                                         .width  = (ui16)target_area.size.x,
+                                                                                         .height = (ui16)target_area.size.y });
+                        target_area.size = dot_11;
+                        session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.back_hWnd },
+                                                    x11::req::configure_window::payload{ .x      = (ui16)target_area.coor.x,
+                                                                                         .y      = (ui16)target_area.coor.y,
+                                                                                         .width  = (ui16)target_area.size.x,
+                                                                                         .height = (ui16)target_area.size.y });
+                        session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.back_hWnd });
+                        session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.hWnd });
+                        if (s.live)
+                        {
+                            auto r = rect{ dot_00, s.area.size };
+                            auto dirty_offset = s.get_offset(session) + (r.coor.y * s.area.size.x * sizeof(ui32));
+                            seq_num = session.accumrq(batch_buffer, x11::req::shm::put_image
+                            {
+                                .major_opcode = session.shm_major_opcode,
+                                .drawable     = (ui32)s.hWnd,
+                                .gc_id        = (ui32)s.hdc,
+                                .total_width  = (ui16)s.area.size.x,
+                                .total_height = (ui16)s.area.size.y,
+                                .src_x        = (ui16)r.coor.x,
+                                .src_y        = (ui16)0,        // Use 0, because dirty_offset already points to the required line Y.
+                                .src_width    = (ui16)r.size.x, // Dirty rect size.
+                                .src_height   = (ui16)r.size.y, //
+                                .dst_x        = (si16)r.coor.x, // Window dest coor.
+                                .dst_y        = (si16)r.coor.y, //
+                                .shm_seg_id   = session.shm_segment_xid,
+                                .offset       = (ui32)dirty_offset, // New data start.
+                            });
+                        }
+                    }
+                    //if (seq_num.has_value())
+                    //{
+                    //    _wait_next_vblank(seq_num.value());
+                    //}
+                    for (auto& l : layers) // Show visible layers.
+                    {
+                        auto& s = l.get();
+                        s.prev_live = true; // Hint for wm layers.
+                        if (s.live)
+                        {
+                            session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd, },
+                                                        x11::req::configure_window::payload{ .x = (ui16)s.area.coor.x,
+                                                                                             .y = (ui16)s.area.coor.y });
+                        }
+                        session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.wm_hWnd, },
+                                                    x11::req::configure_window::payload{ .width  = 1,
+                                                                                         .height = 1 });
+                        // Put transparent pixel to the upper-left corner (the one visible window dot at hidden_coor).
+                        session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.wm_hWnd,
+                                                                            .gc_id       = (ui32)s.wm_hdc });
+                        session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.back_hWnd,
+                                                                            .gc_id       = (ui32)s.back_hdc });
+                    }
+                }
+                else
+                {
+                    for (auto& l : layers)
+                    {
+                        auto& s = l.get();
+                        _wm_layer_present(batch_buffer, s, seq_num);
+                        // Unmap or=1 windows.
+                        session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = (ui32)s.back_hWnd });
+                        session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = (ui32)s.hWnd });
+                    }
+                }
                 if (batch_buffer.size())
                 {
                     session.x11connection->send(batch_buffer);
+                    if constexpr (debugmode) log("%% layer_move_all: Batched layout update sent to X-server (size=%% bytes)", prompt::x11, batch_buffer.size());
                     batch_buffer.clear();
                 }
             }
-            //auto k0 = datetime::now();
-            //log(ansi::clr(tint::greenlt, "start synchronization (serial=%%): current_time=%%"), n, k0);
-            session.sync_reply(n, 17ms); // Wait for the current msc.
-            //auto k1 = datetime::now();
-            //log(ansi::clr(tint::greenlt, "got current msc (serial=%%): current_time=%% spent=%%ms current_msc=%%"), n, k1, datetime::round<si32>(k1 - k0), current_msc);
-            // Skip exactly one next frame (skip the current frame).
-            {
-                auto lock = std::lock_guard{ session.mutex };
-                n = session.sequence_counter + netxs::ui16max / 2;
-                auto target_msc = current_msc + 1; // Next vblank.
-                session.accumrq(batch_buffer, x11::req::xpresent::notify_msc{ .major_opcode  = session.xpresent_major_opcode,
-                                                                              .window_id     = (ui32)master.hWnd,
-                                                                              .serial        = n,
-                                                                              .target_msc    = target_msc });
-                session.received_replies[n].store(true, std::memory_order_release);
-                if (batch_buffer.size())
-                {
-                    session.x11connection->send(batch_buffer);
-                    batch_buffer.clear();
-                }
-            }
-            session.sync_reply(n, 17ms, 1ms); // Wait next vblank.
-            //auto k2 = datetime::now();
-            //log(ansi::clr(tint::greenlt, "got vblank (serial=%%): current_time=%% spent=%%ms current_msc=%%"), n, k1, datetime::round<si32>(k2 - k0), current_msc);
         }
 
         bool keybd_test_pressed(si32 /*virtcod*/, si32 /*keycode*/ = 0) { return faux; /*!!(vkstat[virtcod] & 0x80);*/ }
@@ -6729,7 +6874,7 @@ namespace netxs::gui
                 {
                     session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd },
                                                   x11::req::configure_window::payload{ .x = (ui32)(si16)target_coor.x,
-                                                                                       .y = (ui32)(si16)target_coor.y, });
+                                                                                       .y = (ui32)(si16)target_coor.y });
                 }
             }
             if (batch_buffer.size())
@@ -6798,6 +6943,31 @@ namespace netxs::gui
         }
         void layers_present()
         {
+            if (is_foreground_window) _or_layers_present();
+            else                      _wm_layers_present();
+        }
+        void _wm_layers_present()
+        {
+            auto seq_num_any = std::optional<ui16>{};
+            {
+                auto lock = std::lock_guard{ session.mutex };
+                for (auto& l : layers)
+                {
+                    _wm_layer_present(batch_buffer, l, seq_num_any);
+                }
+                if (batch_buffer.size())
+                {
+                    session.x11connection->send(batch_buffer);
+                    batch_buffer.clear();
+                }
+            }
+            if (seq_num_any.has_value())
+            {
+                session.sync_reply(seq_num_any.value(), 17ms);
+            }
+        }
+        void _or_layers_present()
+        {
             auto seq_num_any = std::optional<ui16>{};
             {
                 auto lock = std::lock_guard{ session.mutex };
@@ -6814,15 +6984,7 @@ namespace netxs::gui
             if (seq_num_any.has_value()) // Wait shm_complete_event + wait 17ms.
             {
                 block_mouse_movement.store(true, std::memory_order_release);
-                if (session.wl_present) // On WL: Skip exactly one frame for smooth resizing on 60Hz monitors.
-                {
-                    session.sync_reply(seq_num_any.value(), 17ms);
-                    std::this_thread::sleep_for(17ms); // This is the only way to sync with vblank on WL.
-                }
-                else // Wait vblank in pure X11 session.
-                {
-                    _wait_next_vblank();
-                }
+                _wait_next_vblank(seq_num_any.value());
                 // Make visual swap.
                 {
                     auto lock = std::lock_guard{ session.mutex };
@@ -6844,6 +7006,10 @@ namespace netxs::gui
                             session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.back_hWnd,
                                                                                 .gc_id       = (ui32)s.back_hdc });
                         }
+                    }
+                    if (master.windowsized)
+                    {
+                        //todo make the master.back_hWnd window mouse transparent
                     }
                     // Sync accumulated mouse movement.
                     session.accumrq(batch_buffer, x11::req::query_pointer{ .window_id = session.root_window_id }, {},
@@ -7257,7 +7423,6 @@ namespace netxs::gui
             session.activate_xinput2(master.wm_hWnd);
             hidden_coor = session.x11_display_size - dot_11;
             auto lock = std::lock_guard{ session.mutex };
-            //todo this is for the is_foreground_window=true state
             for (auto& l : layers)
             {
                 auto& s = l.get();
@@ -7325,14 +7490,6 @@ namespace netxs::gui
                                                                      .device_id    = captured_pointer_id });
         }
         void mouse_catch_outside() {}
-        void _mouse_press(si32 bttn, bool is_pressed)
-        {
-            if (is_pressed && !is_foreground_window) // Emulate win32 behavior (bring foreground on any click).
-            {
-                window_make_foreground();
-            }
-            mouse_press(bttn, is_pressed);
-        }
         bool input_read(view packet)
         {
             if constexpr (debugmode) log("Beg ----------------------------------------");//, "Packet in hex:\n", utf::buffer_to_hex(packet, true));
@@ -7472,15 +7629,15 @@ namespace netxs::gui
                     // Fix bug with pressed buttons right after startup.
                     if (is_pressed || stream.m.buttons) // Filter fake button release.
                     {
-                             if (button_id == 1) _mouse_press(bttn::left,   is_pressed);
-                        else if (button_id == 2) return faux;//todo _mouse_press(bttn::middle, is_pressed);
-                        else if (button_id == 3) _mouse_press(bttn::right,  is_pressed);
-                        //else if (button_id == 4 && is_pressed) _mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
-                        //else if (button_id == 5 && is_pressed) _mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
-                        //else if (button_id == 6 && is_pressed) _mouse_wheel(120, 1); // WheelLeft
-                        //else if (button_id == 7 && is_pressed) _mouse_wheel(-120, 1);  // WheelRight
-                        else if (button_id == 8) _mouse_press(bttn::xbutton1, is_pressed);
-                        else if (button_id == 9) _mouse_press(bttn::xbutton2, is_pressed);
+                             if (button_id == 1) mouse_press(bttn::left,   is_pressed);
+                        else if (button_id == 2) return faux;//todo mouse_press(bttn::middle, is_pressed);
+                        else if (button_id == 3) mouse_press(bttn::right,  is_pressed);
+                        //else if (button_id == 4 && is_pressed) mouse_wheel(120, 0);  // WheelUp -> WHEEL_DELTA (120)
+                        //else if (button_id == 5 && is_pressed) mouse_wheel(-120, 0); // WheelDn -> -WHEEL_DELTA (-120)
+                        //else if (button_id == 6 && is_pressed) mouse_wheel(120, 1); // WheelLeft
+                        //else if (button_id == 7 && is_pressed) mouse_wheel(-120, 1);  // WheelRight
+                        else if (button_id == 8) mouse_press(bttn::xbutton1, is_pressed);
+                        else if (button_id == 9) mouse_press(bttn::xbutton2, is_pressed);
                     }
                 }
                 //else if (d.evtype == x11::req::xi2::event::Motion)
@@ -7569,8 +7726,10 @@ namespace netxs::gui
                 auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
                 auto focused = d.evtype == x11::req::xi2::event::FocusIn;
                 if constexpr (debugmode) log("%%Focus: sourceid=%% '%%' mods=0x%% focused=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, utf::to_hex(f.mods.effective), (si32)focused);
-                //todo window_toggle_redirect(focused);
-                if (!focused) is_foreground_window = faux;
+                //base::enqueue([&, focused](auto& /*boss*/)
+                //{
+                    _toggle_foreground(focused);
+                //});
                 focus_event(focused);
             }
             if constexpr (debugmode) log("End ----------------------------------------");
