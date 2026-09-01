@@ -36,7 +36,7 @@
 #include <linux/input.h> // EV_*
 #include <fnmatch.h>     // ::fnmatch()
 #include <libgen.h>      // ::basename()
-#ifdef basename
+#if defined(basename)
     #undef basename
 #endif
 #include <dirent.h>      // ::dirent
@@ -2719,7 +2719,7 @@ namespace netxs::lixx // li++, libinput++.
         }
         void libinput_timer_set(libinput_timer_t& timer, time expire, [[maybe_unused]] bool allow_negative = {})
         {
-            #ifndef NDEBUG
+            #if !defined(NDEBUG)
             auto now = datetime::now();
             if (expire < now)
             {
@@ -19798,6 +19798,6 @@ namespace netxs::lixx // li++, libinput++.
         return li_device;
     }
 }
-#if not defined(DEBUG)
+#if !defined(DEBUG)
     #undef log
 #endif

@@ -44,7 +44,11 @@
 #include <variant>
 #include <vector>
 
-#if not defined(VTM_NO_DEPENDENCIES)
+#if !defined(_WIN32)
+    #include <unistd.h>      // ::gethostname(), ::getpid(), ::read()
+#endif
+
+#if !defined(VTM_NO_DEPENDENCIES)
     #include <ft2build.h>
     #include FT_FREETYPE_H
     #include FT_TRUETYPE_TABLES_H
@@ -52,7 +56,7 @@
     #include FT_SFNT_NAMES_H
     #include FT_COLOR_H
 
-    #ifndef FT_OTSVG_H
+    #if !defined(FT_OTSVG_H)
         #define FT_OTSVG_H <freetype/otsvg.h>
     #endif
     #include FT_OTSVG_H
@@ -71,7 +75,7 @@
     }
 #endif
 
-#ifndef faux
+#if !defined(faux)
     #define faux (false)
 #endif
 
@@ -241,6 +245,20 @@ namespace netxs
         static constexpr auto anyHyper   = LHyper | RHyper;
         static constexpr auto anyMeta    = LMeta  | RMeta;
         static constexpr auto anyMod     = anyAlt | anyCtrl | anyShift | anySuper | anyHyper | anyMeta;
+    }
+    namespace os::process
+    {
+        auto getid()
+        {
+            auto id = (ui32)
+                #if defined(_WIN32)
+                    ::GetCurrentProcessId();
+                #else
+                    ::getpid();
+                #endif
+            return std::pair{ id, std::chrono::steady_clock::now() };
+        }
+        static auto id = os::process::getid();
     }
 
     constexpr auto operator & (axes l, axes r) { return static_cast<si32>(l) & static_cast<si32>(r); }

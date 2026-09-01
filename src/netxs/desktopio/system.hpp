@@ -9,7 +9,7 @@
 
 #if defined(_WIN32)
 
-    #if not defined(NOMINMAX)
+    #if !defined(NOMINMAX)
         #define NOMINMAX
     #endif
 
@@ -29,7 +29,6 @@
 
     #include <errno.h>       // ::errno
     #include <spawn.h>       // ::exec
-    #include <unistd.h>      // ::gethostname(), ::getpid(), ::read()
     #include <sys/param.h>   //
     #include <sys/types.h>   // ::getaddrinfo(), ::sysctl()
     #include <sys/socket.h>  // ::shutdown() ::socket(2)
@@ -1447,7 +1446,7 @@ namespace netxs::os
             auto platform = "Linux"s;
             if constexpr (!debugmode)
             {
-                #ifdef __GLIBC__
+                #if defined(__GLIBC__)
                 ::fedisableexcept(FE_ALL_EXCEPT);
                 #endif
             }
@@ -1609,7 +1608,7 @@ namespace netxs::os
         }
         void shutdown() // Reset writing end of the pipe to interrupt reading call.
         {
-            #if not defined(_WIN32) // Use ::shutdown() for full duplex sockets. Socket the same fd could be assigned as stdin, stdout and stderr, e.g. it is how inetd does.
+            #if !defined(_WIN32) // Use ::shutdown() for full duplex sockets. Socket the same fd could be assigned as stdin, stdout and stderr, e.g. it is how inetd does.
 
                 auto statbuf = (struct stat){};
                 ::fstat(w, &statbuf);
@@ -2687,18 +2686,6 @@ namespace netxs::os
             }
         }
 
-        auto getid()
-        {
-            auto id = (ui32)
-                #if defined(_WIN32)
-                    ::GetCurrentProcessId();
-                #else
-                    ::getpid();
-                #endif
-            ui::console::id = std::pair{ id, datetime::now() };
-            return ui::console::id;
-        }
-        static auto id = process::getid();
         static auto arg0 = text{};
 
         class args
@@ -2870,7 +2857,7 @@ namespace netxs::os
                 }
 
             #endif
-            #if not defined(_WIN32)
+            #if !defined(_WIN32)
 
                 if (result.empty())
                 {
@@ -4119,7 +4106,7 @@ namespace netxs::os
             if (dtvt::active)
             {
                 log(prompt::os, "DirectVT mode");
-                #if not defined(_WIN32)
+                #if !defined(_WIN32)
                 fdscleanup(); // There are duplicated stdin/stdout handles among the leaked parent process handles, and this prevents them from being closed. Affected ssh, nc, ncat, socat.
                 #endif
                 dtvt::vtmode |= ui::console::direct;
