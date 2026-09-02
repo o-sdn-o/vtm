@@ -7187,7 +7187,7 @@ namespace netxs::gui
         void _update_hidden_layers_size_and_position()
         {
             auto lock = std::lock_guard{ session.mutex };
-            if (true || is_foreground_window)//todo baking // Update or=1 layers.
+            if (is_foreground_window) // Update foreground state.
             {
                 for (auto& l : layers)
                 {
@@ -7203,14 +7203,17 @@ namespace netxs::gui
                     }
                 }
             }
-            else // Update or=0 layers.
+            else // Update background state.
             {
-                //todo clip & resize or=0
-                for (auto& l : layers) if (auto& s = l.get(); s.live)
+                for (auto& l : layers)
                 {
-                    session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.wm_hWnd, },
-                                                x11::req::configure_window::payload{ .x = (ui16)s.area.coor.x,
-                                                                                     .y = (ui16)s.area.coor.y });
+                    auto& s = l.get();
+                    session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.back_hWnd, },
+                                                x11::req::configure_window::payload{ .x = (ui16)hidden_coor.x,
+                                                                                     .y = (ui16)hidden_coor.y });
+                    session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd, },
+                                                x11::req::configure_window::payload{ .x = (ui16)hidden_coor.x,
+                                                                                     .y = (ui16)hidden_coor.y });
                 }
             }
             if (batch_buffer.size())
@@ -7294,12 +7297,12 @@ namespace netxs::gui
                                 session.set_x11_display_size(size);
                                 hidden_coor = session.x11_display_size - dot_11;
                                 if (fsmode == winstate::maximized) set_state(winstate::normal);
-                                _update_hidden_layers_size_and_position();
                                 if (!master.area.trim(rect{ dot_00, hidden_coor })) // Move window to the display center if out.
                                 {
                                     auto delta = hidden_coor / 2 - (master.area.coor + master.area.size / 2);
                                     move_window(delta);
                                 }
+                                _update_hidden_layers_size_and_position();
                                 //sync_pixel_layout(); // Align grips and shadow.
                                 netxs::set_flag<task::all>(reload); // Refill all layers to trigger WM rescaling.
                                 update_gui();
@@ -7327,38 +7330,40 @@ namespace netxs::gui
                         if constexpr (debugmode) log("%%PropertyNotify atom=%%", prompt::x11, e.atom);
                         if (e.window_id == session.root_window_id)
                         {
-                            if (e.atom == session.atom_net_active_window)
-                            {
-                                session.sendrq<x11::req::get_property>({ .window_id   = session.roots.front().s.root_window_id,
-                                                                         .property    = session.atom_net_active_window,
-                                                                         .prop_type   = session.atom_window,
-                                                                         .long_length = 1 }, {},
-                                [&](auto& ev, view payload)
-                                {
-                                    if (ev.type == x11::event::Error)
-                                    {
-                                        if constexpr (debugmode) log("get_property error");
-                                        return;
-                                    }
-                                    payload.remove_prefix(sizeof(ev));
-                                    auto reply = netxs::start_lifetime_as<x11::req::get_property::reply>(ev);
-                                    if (reply.format == sizeof(ui32) * 8 && reply.prop_type == session.atom_window && reply.value_len > 0 && payload.size() >= 4)
-                                    {
-                                        auto active_window = *(ui32 const*)payload.data();
-                                        if constexpr (debugmode) log("%%  Got reply: refocus: active_window=0x%% seq=%%", prompt::x11, utf::to_hex(active_window), reply.sequence);
-                                        //auto focus = active_window == fg_w || active_window == bg_w;
-                                        //if (focus)
-                                        //{
-                                        //    current_desktop = get_window_prop(atom_net_current_desktop);
-                                        //}
-                                        //else
-                                        //{
-                                        //
-                                        //}
-                                    }
-                                });
-                            }
-                            else if (session.atom_net_workarea && e.atom == session.atom_net_workarea)
+                            //todo drop
+                            //if (e.atom == session.atom_net_active_window)
+                            //{
+                            //    session.sendrq<x11::req::get_property>({ .window_id   = session.roots.front().s.root_window_id,
+                            //                                             .property    = session.atom_net_active_window,
+                            //                                             .prop_type   = session.atom_window,
+                            //                                             .long_length = 1 }, {},
+                            //    [&](auto& ev, view payload)
+                            //    {
+                            //        if (ev.type == x11::event::Error)
+                            //        {
+                            //            if constexpr (debugmode) log("get_property error");
+                            //            return;
+                            //        }
+                            //        payload.remove_prefix(sizeof(ev));
+                            //        auto reply = netxs::start_lifetime_as<x11::req::get_property::reply>(ev);
+                            //        if (reply.format == sizeof(ui32) * 8 && reply.prop_type == session.atom_window && reply.value_len > 0 && payload.size() >= 4)
+                            //        {
+                            //            auto active_window = *(ui32 const*)payload.data();
+                            //            if constexpr (debugmode) log("%%  Got reply: refocus: active_window=0x%% seq=%%", prompt::x11, utf::to_hex(active_window), reply.sequence);
+                            //            //auto focus = active_window == fg_w || active_window == bg_w;
+                            //            //if (focus)
+                            //            //{
+                            //            //    current_desktop = get_window_prop(atom_net_current_desktop);
+                            //            //}
+                            //            //else
+                            //            //{
+                            //            //
+                            //            //}
+                            //        }
+                            //    });
+                            //}
+                            //else
+                            if (session.atom_net_workarea && e.atom == session.atom_net_workarea)
                             {
                                 if constexpr (debugmode) log("Request atom_net_workarea value");
                                 session.sendrq<x11::req::get_property>({ .window_id   = session.root_window_id,
