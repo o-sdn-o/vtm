@@ -1982,6 +1982,18 @@ namespace netxs::x11
                                             .shm_seg_id   = client_shmseg_xid });
             if constexpr (debugmode) log("%%Shared buffer segment XID %% is detached", prompt::x11, client_shmseg_xid);
         }
+        void set_mouse_input(text& batch_buffer, arch window_id, bool state) // Make sub-layer transparent for mouse.
+        {
+            accumrq(batch_buffer, x11::req::xfixes::set_window_shape_region{ .major_opcode = xfixes_major_opcode,
+                                                                             .window_id    = (ui32)window_id,
+                                                                             .region_id    = state ? 0 : empty_region_id }); // 0: enable mouse input, empty_region_id: disable mouse input.
+        }
+        void set_mouse_input(arch window_id, bool state) // Make sub-layer transparent for mouse.
+        {
+            sendrq<x11::req::xfixes::set_window_shape_region>({ .major_opcode = xfixes_major_opcode,
+                                                                .window_id    = (ui32)window_id,
+                                                                .region_id    = state ? 0 : empty_region_id }); // 0: enable mouse input, empty_region_id: disable mouse input.
+        }
         auto create_window(ui32 new_window_id, ui32 new_gc_id, bool is_master, bool override_redirect)
         {
             sendrq<x11::req::create_window>({ .window_id = new_window_id,
@@ -2015,7 +2027,7 @@ namespace netxs::x11
             //                                    .property  = atom_wm_protocols,
             //                                    .type      = atom_atom },
             //                                std::to_array({ atom_net_wm_sync_request, atom_net_wm_ping }));
-            //// Set XSync counter.
+            // Set XSync counter.
             //sendrq<x11::req::change_property>({ .window_id = (ui32)new_window_id,
             //                                    .property  = atom_net_wm_sync_request_counter,
             //                                    .type      = atom_cardinal },
@@ -2071,9 +2083,7 @@ namespace netxs::x11
                                                     atom_net_wm_state_skip_taskbar);
                 }
                 // Make sub-layer transparent for mouse.
-                sendrq<x11::req::xfixes::set_window_shape_region>({ .major_opcode = xfixes_major_opcode,
-                                                                    .window_id    = new_window_id,
-                                                                    .region_id    = empty_region_id });
+                set_mouse_input(new_window_id, faux);
             }
 
             // Disable shadows.

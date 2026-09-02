@@ -6629,13 +6629,16 @@ namespace netxs::gui
             auto target_area = s.area.trim(session.workarea);
             if (s.live && target_area)
             {
-                s.prev_live = true;
+                if (std::exchange(s.prev_live, true) == faux)
+                if (s.wm_hWnd == master.wm_hWnd) // Make the master.wm_hWnd visible for mouse.
+                {
+                    session.set_mouse_input(batch_buffer, s.wm_hWnd, true);
+                }
                 session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.wm_hWnd },
                                             x11::req::configure_window::payload{ .x      = (ui16)target_area.coor.x,
                                                                                  .y      = (ui16)target_area.coor.y,
                                                                                  .width  = (ui16)target_area.size.x,
                                                                                  .height = (ui16)target_area.size.y });
-                //todo make the master.wm_hWnd mouse opaque
                 auto r = target_area;
                 r.coor -= s.area.coor;
                 auto dirty_offset = s.get_offset(session) + (r.coor.y * s.area.size.x * sizeof(ui32));
@@ -6656,7 +6659,7 @@ namespace netxs::gui
                     .offset       = (ui32)dirty_offset, // New data start.
                 });
             }
-            else if (s.prev_live) // Hide WM window.
+            else if (s.prev_live) // Hide wm layer.
             {
                 s.prev_live = faux;
                 session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.wm_hWnd },
@@ -6666,7 +6669,10 @@ namespace netxs::gui
                                                                                  .height = 1 });
                 session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.wm_hWnd,
                                                                     .gc_id       = (ui32)s.wm_hdc });
-                //todo make the master.wm_hWnd mouse transparent
+                if (s.wm_hWnd == master.wm_hWnd) // Make the master.wm_hWnd mouse transparent.
+                {
+                    session.set_mouse_input(batch_buffer, s.wm_hWnd, faux);
+                }
             }
         }
         void _wait_next_vblank(ui16 seq_num)
@@ -6744,8 +6750,8 @@ namespace netxs::gui
                                                                                          .y      = (ui16)target_area.coor.y,
                                                                                          .width  = (ui16)target_area.size.x,
                                                                                          .height = (ui16)target_area.size.y });
-                        session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.back_hWnd });
-                        session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.hWnd });
+                        //session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.back_hWnd });
+                        //session.accumrq(batch_buffer, x11::req::map_window{ .window_id = (ui32)s.hWnd });
                         if (s.live)
                         {
                             auto r = rect{ dot_00, s.area.size };
@@ -6791,6 +6797,10 @@ namespace netxs::gui
                         session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.back_hWnd,
                                                                             .gc_id       = (ui32)s.back_hdc });
                     }
+                    // Configure mouse input.
+                    session.set_mouse_input(batch_buffer, master.hWnd, master.live);
+                    session.set_mouse_input(batch_buffer, master.back_hWnd, faux);
+                    session.set_mouse_input(batch_buffer, master.wm_hWnd, faux);
                 }
                 else
                 {
@@ -6798,10 +6808,21 @@ namespace netxs::gui
                     {
                         auto& s = l.get();
                         _wm_layer_present(batch_buffer, s, seq_num);
-                        // Unmap or=1 windows.
-                        session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = (ui32)s.back_hWnd });
-                        session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = (ui32)s.hWnd });
+                        // Hide ~~and unmap~~ or=1 layers.
+                        session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.hWnd }, // Hide layer before unmapping in order to avoid any destroying animation.
+                                                    x11::req::configure_window::payload{ .x      = (ui16)hidden_coor.x,
+                                                                                         .y      = (ui16)hidden_coor.y,
+                                                                                         .width  = 1,
+                                                                                         .height = 1 });
+                        // Put transparent pixel to the upper-left corner (the one visible window dot at hidden_coor).
+                        session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.hWnd,
+                                                                            .gc_id       = (ui32)s.hdc });
+                        //session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = (ui32)s.hWnd });
+                        //session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = (ui32)s.back_hWnd });
                     }
+                    session.set_mouse_input(batch_buffer, master.wm_hWnd, master.live);
+                    session.set_mouse_input(batch_buffer, master.back_hWnd, faux);
+                    session.set_mouse_input(batch_buffer, master.hWnd, faux);
                 }
                 if (batch_buffer.size())
                 {
@@ -6981,13 +7002,18 @@ namespace netxs::gui
                     batch_buffer.clear();
                 }
             }
-            if (seq_num_any.has_value()) // Wait shm_complete_event + wait 17ms.
+            if (seq_num_any.has_value())
             {
                 block_mouse_movement.store(true, std::memory_order_release);
                 _wait_next_vblank(seq_num_any.value());
                 // Make visual swap.
                 {
                     auto lock = std::lock_guard{ session.mutex };
+                    if (master.windowsized)
+                    {
+                        session.set_mouse_input(batch_buffer, master.hWnd, true);
+                        session.set_mouse_input(batch_buffer, master.back_hWnd, faux);
+                    }
                     for (auto& l : layers)
                     {
                         auto& s = l.get();
@@ -7006,10 +7032,6 @@ namespace netxs::gui
                             session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.back_hWnd,
                                                                                 .gc_id       = (ui32)s.back_hdc });
                         }
-                    }
-                    if (master.windowsized)
-                    {
-                        //todo make the master.back_hWnd window mouse transparent
                     }
                     // Sync accumulated mouse movement.
                     session.accumrq(batch_buffer, x11::req::query_pointer{ .window_id = session.root_window_id }, {},
@@ -7423,6 +7445,8 @@ namespace netxs::gui
             session.activate_xinput2(master.wm_hWnd);
             hidden_coor = session.x11_display_size - dot_11;
             auto lock = std::lock_guard{ session.mutex };
+            session.set_mouse_input(batch_buffer, master.back_hWnd, faux);
+            session.set_mouse_input(batch_buffer, master.wm_hWnd, faux);
             for (auto& l : layers)
             {
                 auto& s = l.get();
