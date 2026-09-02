@@ -6797,6 +6797,11 @@ namespace netxs::gui
                         session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.back_hWnd,
                                                                             .gc_id       = (ui32)s.back_hdc });
                     }
+                    // Make base layer foreground.
+                    session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)master.hWnd },
+                                                x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
+                    session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)master.back_hWnd },
+                                                x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
                     // Configure mouse input.
                     session.set_mouse_input(batch_buffer, master.hWnd, master.live);
                     session.set_mouse_input(batch_buffer, master.back_hWnd, faux);
@@ -6817,6 +6822,13 @@ namespace netxs::gui
                         // Put transparent pixel to the upper-left corner (the one visible window dot at hidden_coor).
                         session.accumrq(batch_buffer, x11::req::poly_point{ .drawable_id = (ui32)s.hWnd,
                                                                             .gc_id       = (ui32)s.hdc });
+                        //todo revise. this doesn't work
+                        //if (&s != &master) // Make sub-layers on top of master (in background).
+                        //{
+                        //    session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.wm_hWnd, },
+                        //                                x11::req::configure_window::payload{ .sibling    = master.wm_hWnd,
+                        //                                                                     .stack_mode = x11::req::configure_window::Above });
+                        //}
                         //session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = (ui32)s.hWnd });
                         //session.accumrq(batch_buffer, x11::req::unmap_window{ .window_id = (ui32)s.back_hWnd });
                     }
@@ -6879,9 +6891,9 @@ namespace netxs::gui
                 grid_size /= cell_size;
                 s.area = rect{ win_coord, grid_size * cell_size } + border_dent;
             }
-            session.create_window(s.hWnd,      s.hdc,      is_master, true);
-            session.create_window(s.back_hWnd, s.back_hdc, is_master, true);
-            session.create_window(s.wm_hWnd,   s.wm_hdc,   is_master, faux);
+            session.create_window(master.hWnd,      s.hWnd,      s.hdc,      is_master, true);
+            session.create_window(master.back_hWnd, s.back_hWnd, s.back_hdc, is_master, true);
+            session.create_window(master.wm_hWnd,   s.wm_hWnd,   s.wm_hdc,   is_master, faux);
             return true;
         }
         void layers_move()
@@ -7250,6 +7262,26 @@ namespace netxs::gui
                     //    }
                     //    break;
                     //}
+                    case x11::event::Expose:
+                    {
+                        auto ex = netxs::start_lifetime_as<x11::event::expose_event>(read_buffer.data());
+                        auto dirty_region = rect{{ ex.x, ex.y }, { ex.width, ex.height }};
+                        if constexpr (debugmode) log("Expose event: window_id=0x%% region=%% left_count=%% is_foreground_window=%%", utf::to_hex(ex.window_id), dirty_region, ex.count, is_foreground_window);
+                        if (!is_foreground_window)
+                        for (auto& l : layers)
+                        {
+                            auto& s = l.get();
+                            if (s.live && s.wm_hWnd == ex.window_id)
+                            {
+                                s.strike(dirty_region);
+                            }
+                            if (ex.count == 0)
+                            {
+                                netxs::set_flag<task::all>(reload);
+                            }
+                        }
+                        break;
+                    }
                     case x11::event::ConfigureNotify: // WM_WINDOWPOSCHANGED
                     {
                         auto cn = netxs::start_lifetime_as<x11::event::configure_notify>(read_buffer.data());

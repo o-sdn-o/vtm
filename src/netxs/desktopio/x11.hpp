@@ -166,6 +166,10 @@ namespace netxs::x11
 
             struct payload
             {
+                static constexpr auto NotUseful  = 0;
+                static constexpr auto WhenMapped = 1;
+                static constexpr auto Always     = 2;
+
                 std::optional<ui32> background_pixmap;     // 4 0: none, 1: ParentRelative or PIXMAP
                 std::optional<ui32> background_pixel;      // 4 argb
                 std::optional<ui32> border_pixmap;         // 4 0: CopyFromParent or PIXMAP
@@ -1326,6 +1330,19 @@ namespace netxs::x11
             byte major_opcode; // Request's major opcode.
             byte pad[21];
         };
+        struct expose_event // Type: 12 (expose event).
+        {
+            byte type;
+            byte pad0;
+            ui16 sequence;
+            ui32 window_id;
+            ui16 x;         // Dirty region (relative to window).
+            ui16 y;         //
+            ui16 width;     //
+            ui16 height;    //
+            ui16 count;     // Left Expose events.
+            byte pad1[14];
+        };
         //struct create_notify // Type 16 (create window notify)
         //{
         //    byte type;
@@ -1994,7 +2011,7 @@ namespace netxs::x11
                                                                 .window_id    = (ui32)window_id,
                                                                 .region_id    = state ? 0 : empty_region_id }); // 0: enable mouse input, empty_region_id: disable mouse input.
         }
-        auto create_window(ui32 new_window_id, ui32 new_gc_id, bool is_master, bool override_redirect)
+        auto create_window(arch master_window_id, ui32 new_window_id, ui32 new_gc_id, bool is_master, bool override_redirect)
         {
             sendrq<x11::req::create_window>({ .window_id = new_window_id,
                                               .parent_id = root_window_id,
@@ -2005,15 +2022,17 @@ namespace netxs::x11
                                               .visual_id = argb_visual32_id },
                                             x11::req::create_window::payload{ //.background_pixel = 0x00'000000u,
                                                                               .border_pixel = 0x00'000000u, // Mandatory: Own 32-bit ARGB border pixel value.
+                                                                              .backing_store = x11::req::create_window::payload::Always,
                                                                               //.bit_gravity = x11::req::create_window::BitGravityStatic,//BitGravityForget,//BitGravityNorthWest,
-                                                                              //.win_gravity  = StaticGravity,
+                                                                              //.win_gravity = StaticGravity,
                                                                               //todo WSLg does not show any windows with override_redirect=1 if none with override_redirect=0 were shown previously after wsl boot (bug)
                                                                               .override_redirect = override_redirect, // 1: On.
-                                                                              .event_mask        = 0u
-                                                                                                 //| x11::event::mask::Exposure
-                                                                                                 | x11::event::mask::StructureNotify // For ConfigureNotify events.
-                                                                                                 ,
-                                                                              .colormap_id       = argb_colormap_id }); // Mandatory: own colormap.
+                                                                              //.save_under = override_redirect ? 0 : 1,
+                                                                              .event_mask = 0u
+                                                                                          | (override_redirect ? 0 : x11::event::mask::Exposure) // KDE doesn't redraw our layers in background.
+                                                                                          | x11::event::mask::StructureNotify // For ConfigureNotify events.
+                                                                                          ,
+                                                                              .colormap_id = argb_colormap_id }); // Mandatory: own colormap.
             // Disable decorations.
             if (!override_redirect)
             {
@@ -2068,12 +2087,15 @@ namespace netxs::x11
                                                     .property  = atom_net_wm_window_type,
                                                     .type      = atom_atom },
                                                 atom_net_wm_window_type_utility);
-                //todo wslg places all transient windows inside the master if override_redirect=0
-                // Group sub-layers with master.
-                //sendrq<x11::req::change_property>({ .window_id = new_window_id,
-                //                                    .property  = atom_wm_transient_for,
-                //                                    .type      = atom_window },
-                //                                (ui32)master_window_id);
+                if (override_redirect == 0) // Wm layers only.
+                {
+                    //todo wslg (sometimes) places all transient windows inside the master if override_redirect=0
+                    // Group sub-layers with master.
+                    sendrq<x11::req::change_property>({ .window_id = new_window_id,
+                                                        .property  = atom_wm_transient_for,
+                                                        .type      = atom_window },
+                                                    (ui32)master_window_id);
+                }
                 // Remove sub-layers from taskbar.
                 if (!override_redirect)
                 {
