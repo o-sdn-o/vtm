@@ -7330,39 +7330,6 @@ namespace netxs::gui
                         if constexpr (debugmode) log("%%PropertyNotify atom=%%", prompt::x11, e.atom);
                         if (e.window_id == session.root_window_id)
                         {
-                            //todo drop
-                            //if (e.atom == session.atom_net_active_window)
-                            //{
-                            //    session.sendrq<x11::req::get_property>({ .window_id   = session.roots.front().s.root_window_id,
-                            //                                             .property    = session.atom_net_active_window,
-                            //                                             .prop_type   = session.atom_window,
-                            //                                             .long_length = 1 }, {},
-                            //    [&](auto& ev, view payload)
-                            //    {
-                            //        if (ev.type == x11::event::Error)
-                            //        {
-                            //            if constexpr (debugmode) log("get_property error");
-                            //            return;
-                            //        }
-                            //        payload.remove_prefix(sizeof(ev));
-                            //        auto reply = netxs::start_lifetime_as<x11::req::get_property::reply>(ev);
-                            //        if (reply.format == sizeof(ui32) * 8 && reply.prop_type == session.atom_window && reply.value_len > 0 && payload.size() >= 4)
-                            //        {
-                            //            auto active_window = *(ui32 const*)payload.data();
-                            //            if constexpr (debugmode) log("%%  Got reply: refocus: active_window=0x%% seq=%%", prompt::x11, utf::to_hex(active_window), reply.sequence);
-                            //            //auto focus = active_window == fg_w || active_window == bg_w;
-                            //            //if (focus)
-                            //            //{
-                            //            //    current_desktop = get_window_prop(atom_net_current_desktop);
-                            //            //}
-                            //            //else
-                            //            //{
-                            //            //
-                            //            //}
-                            //        }
-                            //    });
-                            //}
-                            //else
                             if (session.atom_net_workarea && e.atom == session.atom_net_workarea)
                             {
                                 if constexpr (debugmode) log("Request atom_net_workarea value");
