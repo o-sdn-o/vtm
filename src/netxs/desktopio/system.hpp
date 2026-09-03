@@ -9,13 +9,8 @@
 
 #if defined(_WIN32)
 
-    #if !defined(NOMINMAX)
-        #define NOMINMAX
-    #endif
-
     #pragma warning(disable:4996) // Suppress std::getenv warning.
 
-    #include <Windows.h>
     #include <UserEnv.h>             // ::GetUserProfileDirectoryW
     #include <Psapi.h>               // ::GetModuleFileNameEx
     #include <winternl.h>            // ::NtOpenFile
@@ -3885,7 +3880,7 @@ namespace netxs::os
                 }
                 return socket;
             }
-            static auto connect([[maybe_unused]] text name)
+            static auto connect([[maybe_unused]] view name)
             {
                 auto f = os::invalid_fd;
                 auto socket = sptr<ipc::stdcon>{};

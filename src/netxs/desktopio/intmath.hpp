@@ -44,10 +44,6 @@
 #include <variant>
 #include <vector>
 
-#if !defined(_WIN32)
-    #include <unistd.h>      // ::gethostname(), ::getpid(), ::read()
-#endif
-
 #if !defined(VTM_NO_DEPENDENCIES)
     #include <ft2build.h>
     #include FT_FREETYPE_H
@@ -73,6 +69,17 @@
     {
         struct Document {};
     }
+#endif
+
+#if defined(_WIN32)
+    #if !defined(NOMINMAX)
+        #define NOMINMAX
+    #endif
+    #include <Windows.h>
+    #undef hyper
+    #undef small
+#else
+    #include <unistd.h>      // ::gethostname(), ::getpid(), ::read()
 #endif
 
 #if !defined(faux)

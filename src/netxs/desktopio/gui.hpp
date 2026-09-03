@@ -3044,10 +3044,11 @@ namespace netxs::gui
             X(make_ontop) /* Order to make window topmost.         */ \
             X(set_normal) /* Order to make window notopmost.       */ \
             X(no_command) /* Noop. Just to update.                 */ \
-            X(cmd_w_data) /* Command with payload.                 */
+            X(cmd_w_data) /* Command with payload.                 */ \
+            X(send_reply) /* Command reply.                        */
             static constexpr auto _base = 99900;
-            static constexpr auto _counter = __COUNTER__ + 1 - _base;
-            #define X(cmd) static constexpr auto cmd = __COUNTER__ - _counter;
+            static constexpr auto _counter = __COUNTER__ + 1;
+            #define X(cmd) static constexpr auto cmd = _base + __COUNTER__ - _counter;
             ipc_t
             #undef X
             static constexpr auto _str = std::to_array({
@@ -3606,7 +3607,7 @@ namespace netxs::gui
         virtual void window_set_title(view utf8) = 0;
         virtual void window_sync_taskbar(si32 new_state) = 0;
         virtual rect window_get_fs_area(rect window_area) = 0;
-        virtual void window_send_command(arch target, si32 command, arch lParam = {}) = 0;
+        virtual void window_send_command_impl(arch target, si32 command, arch lParam = {}) = 0;
         virtual void window_post_command(arch target, si32 command, arch lParam = {}) = 0;
         virtual cont window_recv_command(arch lParam) = 0;
         virtual void window_message_pump() = 0;
@@ -3620,6 +3621,17 @@ namespace netxs::gui
 
         virtual void sync_os_settings() = 0;
 
+        void window_send_command(arch target, si32 command, arch lParam = {})
+        {
+            if (target == master.hWnd)
+            {
+                run_command(command, lParam);
+            }
+            else
+            {
+                window_send_command_impl(target, command, lParam);
+            }
+        }
         void window_make_focused()
         {
             restore_if_minimized();
@@ -6316,7 +6328,7 @@ namespace netxs::gui
 
         //todo static
         cont window_recv_command(arch lParam) { auto& data = *(COPYDATASTRUCT*)lParam; return cont{ .cmd = (si32)data.dwData, .ptr = data.lpData, .len = data.cbData }; }
-        void window_send_command(arch target, si32 command, arch lParam = {}) { ::SendMessageW((HWND)target, WM_USER, command, lParam); }
+        void window_send_command_impl(arch target, si32 command, arch lParam = {}) { ::SendMessageW((HWND)target, WM_USER, command, lParam); }
         void window_post_command(arch target, si32 command, arch lParam = {}) { ::PostMessageW((HWND)target, WM_USER, command, lParam); }
         rect window_get_fs_area(rect window_area)
         {
@@ -6844,6 +6856,72 @@ namespace netxs::gui
                 }
             }
         }
+        auto _check_has_vtmx_property(arch target_id)
+        {
+            // Check if destination can reply (has "VTMX" atom).
+            //todo set serial=seq_num
+            auto seq_num = session.syncrq<x11::req::get_property>({ .window_id   = (ui32)target_id,
+                                                                    .property    = session.atom_vtmx,
+                                                                    .prop_type   = session.atom_cardinal,
+                                                                    .long_length = 1 });
+            auto ev = x11::event::any{};
+            //todo wait seq_num
+            if (session.sync_x11connection->recv((char*)&ev, sizeof(ev)).size() == sizeof(ev))
+            {
+                if (ev.type == x11::event::Error)
+                {
+                    if constexpr (debugmode) log("get_property atom_vtmx error: %%", session.get_error(ev));
+                }
+                else
+                {
+                    auto payload = text(ev.length * 4, '\0');
+                    if (session.sync_x11connection->recv(payload.data(), payload.size()).size() == payload.size())
+                    {
+                        auto reply = netxs::start_lifetime_as<x11::req::get_property::reply>(ev);
+                        if (reply.format == sizeof(ui32) * 8 && reply.prop_type == session.atom_vtmx) // format == 0 means that property not found.
+                        if (netxs::start_lifetime_as<si32>(payload.data())) // ==1
+                        {
+                            return true; // Has vtmx property.
+                        }
+                    }
+                }
+            }
+            return faux;
+        }
+        void _post_command(arch target_id, si32 command, arch lParam = {})
+        {
+            if (target_id)
+            {
+                session.syncrq(x11::req::send_event{ .destination_id = (ui32)target_id,
+                                                     .reply_to_id    = 0,
+                                                     .message_type   = session.atom_vtmx,
+                                                     //todo set serial
+                                                     .command        = (ui32)command,
+                                                     .lParam         = (ui32)lParam }); // wParam, lParam.
+            }
+        }
+        auto _send_command(arch target_id, si32 command, arch lParam = {})
+        {
+            if (target_id && _check_has_vtmx_property(target_id)) // Check if destination can reply (has "VTMX" atom).
+            {
+                // Send command.
+                session.syncrq(x11::req::send_event{ .destination_id = (ui32)target_id,
+                                                     .reply_to_id    = session.sync_msg_window_id,
+                                                     .message_type   = session.atom_vtmx,
+                                                     //todo set serial
+                                                     .command        = (ui32)command,
+                                                     .lParam         = (ui32)lParam }); // wParam, lParam.
+                //todo add timeout
+                //todo sync via send_event::serial
+                auto reply = x11::req::send_event::reply{};
+                if (session.sync_x11connection->recv((char*)&reply, sizeof(reply)).size() == sizeof(reply))
+                if (reply.type == x11::event::Reply)
+                {
+                    return reply.lParam;
+                }
+            }
+            return -1u;
+        }
 
         bool keybd_test_pressed(si32 /*virtcod*/, si32 /*keycode*/ = 0) { return faux; /*!!(vkstat[virtcod] & 0x80);*/ }
         bool keybd_test_toggled(si32 /*virtcod*/) { return faux; /*!!(vkstat[virtcod] & 0x01);*/ }
@@ -7103,9 +7181,21 @@ namespace netxs::gui
             //todo multi-monitor setup
             return rect{ dot_00, session.x11_display_size };
         }
-        void window_send_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
-        void window_post_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
-        cont window_recv_command(arch /*lParam*/) { return cont{}; }
+        void window_send_command_impl(arch target_id, si32 command, arch lParam = {})
+        {
+            _send_command(target_id, command, lParam);
+        }
+        void window_post_command(arch target_id, si32 command, arch lParam = {})
+        {
+            _post_command(target_id, command, lParam);
+        }
+        cont window_recv_command(arch /*lParam*/)
+        {
+            //auto& data = *(COPYDATASTRUCT*)lParam;
+            //auto crop = cont{ .cmd = (si32)data.dwData, .ptr = data.lpData, .len = data.cbData };
+            //return crop;
+            return cont{};
+        }
         void window_make_foreground()
         {
             //todo
@@ -7225,12 +7315,11 @@ namespace netxs::gui
         void window_message_pump()
         {
             if constexpr (debugmode) log("window_message_pump started");
-            auto atom_wm_delete_window = ui32{};
             auto read_buffer = text(256, '\0'); // 256: Avoid SSO.
-            read_buffer.resize(32); // Classic read_buffer size.
-            while (session.x11connection->recv(read_buffer.data(), read_buffer.size()).size() == read_buffer.size()) // size always =32.
+            read_buffer.resize(x11::recv_packet_size); // Classic read_buffer size.
+            while (session.x11connection->recv(read_buffer.data(), read_buffer.size()).size() == x11::recv_packet_size)
             {
-                assert(read_buffer.size() == 32);
+                assert(read_buffer.size() == x11::recv_packet_size);
                 auto ev = netxs::start_lifetime_as<x11::event::any>(read_buffer.data());
                 auto type = ev.type & 0x7F;
                 if constexpr (debugmode) if (type != x11::event::GenericEvent) log("%%seq=%% event=%% (%%)", prompt::x11, ev.sequence, session.event_str(type), type);
@@ -7246,11 +7335,11 @@ namespace netxs::gui
                 {
                     case x11::event::Error:
                         session.parse_error(ev, read_buffer);
-                        read_buffer.resize(32); // Restore classic read_buffer size.
+                        read_buffer.resize(x11::recv_packet_size); // Restore classic read_buffer size.
                         continue;
                     case x11::event::Reply:
                         session.parse_reply(ev, read_buffer);
-                        read_buffer.resize(32); // Restore classic read_buffer size.
+                        read_buffer.resize(x11::recv_packet_size); // Restore classic read_buffer size.
                         break;
                     case x11::event::CreateNotify:
                         if constexpr (debugmode) log("Window created");
@@ -7315,12 +7404,29 @@ namespace netxs::gui
                         }
                         break;
                     }
-                    case x11::event::ClientMessage: // ?WM_CLOSE
+                    case x11::event::ClientMessage:
                     {
-                        auto msg = netxs::start_lifetime_as<x11::event::client_message>(read_buffer.data());
-                        if (msg.data32[0] == atom_wm_delete_window)
+                        //auto msg = netxs::start_lifetime_as<x11::event::client_message>(read_buffer.data());
+                        //if (msg.data32[0] == session.atom_wm_delete_window)
+                        //{
+                        //    sys_command(syscmd::close);
+                        //}
+                        auto msg = netxs::start_lifetime_as<x11::req::send_event::reply>(read_buffer.data());
+                        if (msg.message_type == session.atom_vtmx && msg.format == 32) // WIN32_WM_USER
                         {
-                            sys_command(syscmd::close);
+                            auto command = (arch)msg.command;
+                            auto lParam  = (arch)msg.lParam;
+                            //if constexpr (debugmode) 
+                            log("%%WIN32_WM_USER cmd=%% lParam=%%", prompt::x11, command, lParam);
+                            if (command != ipc::send_reply)
+                            {
+                                auto result = run_command(command, lParam);
+                                if (msg.reply_to_id)
+                                {
+                                    //todo sync via send_event::serial
+                                    _post_command(msg.reply_to_id, ipc::send_reply, result);
+                                }
+                            }
                         }
                         break;
                     }
@@ -7369,8 +7475,8 @@ namespace netxs::gui
                         if (ev.detail == session.xi2_major_opcode) // XInput2.
                         {
                             auto tail_size = ev.length * 4;
-                            read_buffer.resize(32 + tail_size); // Read a whole XI2 packet.
-                            if (session.x11connection->recv(read_buffer.data() + 32, tail_size).size() == tail_size)
+                            read_buffer.resize(x11::recv_packet_size + tail_size); // Read a whole XI2 packet.
+                            if (session.x11connection->recv(read_buffer.data() + x11::recv_packet_size, tail_size).size() == tail_size)
                             {
                                 if (!input_read(read_buffer))
                                 {
@@ -7378,13 +7484,13 @@ namespace netxs::gui
                                     goto break_break;
                                 }
                             }
-                            read_buffer.resize(32); // Restore classic read_buffer size.
+                            read_buffer.resize(x11::recv_packet_size); // Restore classic read_buffer size.
                         }
                         else if (ev.detail == session.xpresent_major_opcode) // XPresent.
                         {
                             auto tail_size = ev.length * 4;
-                            read_buffer.resize(32 + tail_size); // Read a whole XI2 packet.
-                            if (session.x11connection->recv(read_buffer.data() + 32, tail_size).size() == tail_size)
+                            read_buffer.resize(x11::recv_packet_size + tail_size); // Read a whole XI2 packet.
+                            if (session.x11connection->recv(read_buffer.data() + x11::recv_packet_size, tail_size).size() == tail_size)
                             {
                                 auto be = netxs::start_lifetime_as<x11::req::xpresent::base>(read_buffer.data());
                                 if constexpr (debugmode) log(ansi::hi("XPresent Notify evtype=%% length=%%"), be.evtype, be.length);
@@ -7430,7 +7536,7 @@ namespace netxs::gui
                                     //session.received_replies[in.serial & 0xFFFF].store(faux, std::memory_order_release);
                                 }
                             }
-                            read_buffer.resize(32); // Restore classic read_buffer size.
+                            read_buffer.resize(x11::recv_packet_size); // Restore classic read_buffer size.
                         }
                         break;
                 }
@@ -7805,7 +7911,7 @@ namespace netxs::gui
         bits layer_get_bits(layer& /*s*/, bool /*zeroize*/ = faux) { return bits{}; }
         void window_sync_taskbar(si32 /*new_state*/) {}
         rect window_get_fs_area(rect window_area) { return window_area; }
-        void window_send_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
+        void window_send_command_impl(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         void window_post_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         cont window_recv_command(arch /*lParam*/) { return cont{}; }
         void window_make_foreground() {}

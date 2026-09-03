@@ -1,9 +1,9 @@
 // Copyright (c) Dmitry Sapozhnikov
 // Licensed under the MIT license.
 
-#include "ansivt.hpp"
-
 #pragma once
+
+#include "ansivt.hpp"
 
 namespace netxs::prompt
 {

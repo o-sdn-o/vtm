@@ -5,6 +5,8 @@
 
 namespace netxs::x11
 {
+    static constexpr auto recv_packet_size = 32;
+
     using fd_t = os::fd_t;
 
     auto serialize_list(text& yield, auto& packet, auto const& payload)
@@ -25,16 +27,19 @@ namespace netxs::x11
         packet.value_mask = vmask;
         packet.length     = sizeof(packet) / 4 + std::popcount(vmask);
         yield += view{ (char*)&packet, sizeof(packet) };
-        ptr = (char const*)&payload;
-        for (auto i = 0u; i < count; ++i)
+        if (vmask)
         {
-            auto field = netxs::start_lifetime_as<field_t>(ptr);
-            if (field.has_value())
+            ptr = (char const*)&payload;
+            for (auto i = 0u; i < count; ++i)
             {
-                auto v = field.value();
-                yield += view{ (char*)&v, sizeof(v) };
+                auto field = netxs::start_lifetime_as<field_t>(ptr);
+                if (field.has_value())
+                {
+                    auto v = field.value();
+                    yield += view{ (char*)&v, sizeof(v) };
+                }
+                ptr += sizeof(field_t);
             }
-            ptr += sizeof(field_t);
         }
     }
     auto serialize_str(text& yield, auto& packet, auto const& data)
@@ -151,17 +156,17 @@ namespace netxs::x11
             //static constexpr auto BitGravityStatic    = 10;
 
             byte opcode = 1;
-            byte depth = 32;          // Color depth. Must be zero for InputOnly window.
-            ui16 length;              // Packet size in 4-byte words.
+            byte depth = 0;           // Color depth. Must be zero for InputOnly window.
+            ui16 length = 8;          // Packet size in 4-byte words.
             ui32 window_id;           // New Window ID.
             ui32 parent_id;           // root_window_id.
-            si16 x;                   // Initial coords in px.
-            si16 y;                   //
-            ui16 width;               // Initial size in px (not including the border).
-            ui16 height;              //
+            si16 x = 0;               // Initial coords in px.
+            si16 y = 0;               //
+            ui16 width = 1;           // Initial size in px (not including the border).
+            ui16 height = 1;          //
             ui16 border_width = 0;
             ui16 window_class = InputOutput; // 0: CopyFromParent, 1: InputOutput (input events and painting), 2: InputOnly (input events).
-            ui32 visual_id;           // ID: 0: CopyFromParent.
+            ui32 visual_id = 0;       // ID: 0: CopyFromParent.
             ui32 value_mask;          // Payload bits.
 
             struct payload
@@ -247,7 +252,7 @@ namespace netxs::x11
             };
             auto serialize(text& yield, payload p) { x11::serialize_list(yield, *this, p); }
         };
-        struct intern_atom // Opcode 16 (InternAtom)
+        struct intern_atom // Opcode 16 (intern atom)
         {
             struct reply
             {
@@ -302,6 +307,36 @@ namespace netxs::x11
             ui32 prop_type;       // Atom for property type, 0: for any. (e.g., XA_WINDOW=33)
             ui32 long_offset = 0; // Requested payload offset from beginning in quads.
             ui32 long_length = 1; // Requested payload length in quads.
+        };
+        struct send_event // Opcode 25 (send event).
+        {
+            struct reply // client_message
+            {
+                byte type;          // 33: ClientMessage. (or 35: GenericEvent?)
+                byte format;        // Data word format: 8, 16, 32 bits.
+                ui16 sequence;
+                ui32 reply_to_id;
+                ui32 message_type;  // Atom message id (a-la WIN32_WM_USER).
+                //todo ui32 serial = 0; // Serial number to sync replay.
+                ui32 command;       // User data.
+                ui32 lParam;        //
+                ui32 data32[3];     //
+            };
+            byte opcode     = 25; // 25: SendEvent.
+            byte propagate  = 0;  // Send to the window tree.
+            ui16 length     = 11;
+            ui32 destination_id;  // Destination window id.
+            ui32 event_mask = 0;  // 0 for ClientMessage.
+            // Payload:
+            byte type     = 33;   // 33: ClientMessage.
+            byte format   = 32;   // Data format: 8, 16, 32 bits.
+            ui16 sequence = {};
+            ui32 reply_to_id;     // Reply window id.
+            ui32 message_type;    // Atom message id (a-la WIN32_WM_USER).
+            //todo ui32 serial = 0; // Serial number to sync replay.
+            ui32 command = -1;    // User data.
+            ui32 lParam = 0;      //
+            ui32 data32[3];       //
         };
         //struct grab_server // Opcode 36 (grab server)
         //{
@@ -1392,15 +1427,7 @@ namespace netxs::x11
             byte state;     // 0: PropertyNewValue, 1: PropertyDelete.
             byte pad1[15];
         };
-        struct client_message // Type 33 (client message).
-        {
-            byte type;
-            byte format; // ? 32 bits
-            ui16 sequence;
-            ui32 window;
-            ui32 message_type; // Procotol atom (e.g., WM_PROTOCOLS)
-            ui32 data32[5];    // Payload. If data32[0]==atom_WM_DELETE_WINDOW -> Close window
-        };
+        using client_message = x11::req::send_event::reply;
     }
     template<class T>
     struct data_n_size
@@ -1496,7 +1523,7 @@ namespace netxs::x11
             } s;
             std::vector<depth> list_of_depths; // List of allowed_depths (n is always a multiple of 4)
         };
-        struct
+        struct session_init
         {
             ui32 release_number;              // 4 ui32 buffer[0..3]   = release_number
             ui32 resource_id_base;            // 4 ui32 buffer[4..7]   = resource_id_base
@@ -1552,6 +1579,7 @@ namespace netxs::x11
         //ui32                                  virtual_pixmap_id = 0; // Fake Pixmap for XPresent triggering.
 
         //ui32                                  atom_my_ping = 0; // _MY_PING
+        ui32                                  atom_vtmx = 0; // VTMX  WIN32: WM_USER
 
         ui32                                  atom_wm_hints = 35; // WM_HINTS
         ui32                                  atom_wm_transient_for = 68; // WM_TRANSIENT_FOR
@@ -1606,7 +1634,6 @@ namespace netxs::x11
         size_t                                current_frame_index = {};
         bool shm_ready_flag[2]   = { true, true }; // Buffer ready flags.
 
-        sptr<os::ipc::stdcon>                 x11connection;  // Active X11 socket connection.
         generics::indexer_growing<ui32, 256>  resource_indexer; // Use growing indexer to avoid reusing indexes.
 
         struct seq_handler
@@ -1616,8 +1643,15 @@ namespace netxs::x11
             fx_t callback;
         };
         std::deque<seq_handler> reply_callbacks;
+
         std::mutex              mutex;
-        ui16                    sequence_counter = 0; // Sent request counter.
+        sptr<os::ipc::stdcon>   x11connection;        // Main X11 socket connection.
+        ui16                    sequence_counter = 0; // Async sent request counter.
+
+        std::mutex              sync_mutex;
+        sptr<os::ipc::stdcon>   sync_x11connection;        // Parallel sync X11 socket connection.
+        ui16                    sync_sequence_counter = 0; // Sync sent request counter.
+        ui32                    sync_msg_window_id = 0;    // Window for receiving sync messages (=sync_base_id).
 
         std::unordered_map<ui16, device_t> input_devices;
 
@@ -1721,6 +1755,24 @@ namespace netxs::x11
             }
             return sequence_counter;
         }
+        template<class R, class V = qiew, class P = noop>
+        auto syncrq(R request = {}, V payload = {})
+        {
+            auto lock = std::lock_guard{ sync_mutex };
+            sync_sequence_counter++;
+            if constexpr (requires(text packet){ request.serialize(packet, payload); })
+            {
+                auto packet = text{};
+                request.serialize(packet, payload);
+                sync_x11connection->send(packet);
+            }
+            else
+            {
+                assert(!payload);
+                sync_x11connection->send(view{ (char*)&request, sizeof(request) });
+            }
+            return sync_sequence_counter;
+        }
         auto parse_reply(x11::event::any& ev, text& read_buffer)
         {
             auto r = std::decay_t<decltype(reply_callbacks.front())>{};
@@ -1748,7 +1800,7 @@ namespace netxs::x11
                 if constexpr (debugmode) log("      Unexpected reply with an empty callback queue");
             }
         }
-        auto get_error(x11::event::any const& ev)
+        text get_error(x11::event::any const& ev)
         {
             auto err = netxs::start_lifetime_as<x11::event::error>(ev);
             auto err_str = text{};
@@ -2013,12 +2065,9 @@ namespace netxs::x11
         }
         auto create_window(arch master_window_id, ui32 new_window_id, ui32 new_gc_id, bool is_master, bool override_redirect)
         {
-            sendrq<x11::req::create_window>({ .window_id = new_window_id,
+            sendrq<x11::req::create_window>({ .depth     = 32,
+                                              .window_id = new_window_id,
                                               .parent_id = root_window_id,
-                                              .x         = 0,
-                                              .y         = 0,
-                                              .width     = 1,
-                                              .height    = 1,
                                               .visual_id = argb_visual32_id },
                                             x11::req::create_window::payload{ //.background_pixel = 0x00'000000u,
                                                                               .border_pixel = 0x00'000000u, // Mandatory: Own 32-bit ARGB border pixel value.
@@ -2033,6 +2082,10 @@ namespace netxs::x11
                                                                                           | x11::event::mask::StructureNotify // For ConfigureNotify events.
                                                                                           ,
                                                                               .colormap_id = argb_colormap_id }); // Mandatory: own colormap.
+            // Mark our windows.
+            sendrq<x11::req::change_property>({ .window_id = (ui32)new_window_id,
+                                                .property  = atom_vtmx,
+                                                .type      = atom_cardinal }, 1);
             // Disable decorations.
             if (!override_redirect)
             {
@@ -2222,8 +2275,9 @@ namespace netxs::x11
             //atom_net_wm_ping                 = get_atom_id("_NET_WM_PING", true);
             //atom_net_wm_sync_request         = get_atom_id("_NET_WM_SYNC_REQUEST", true);
             //atom_net_wm_sync_request_counter = get_atom_id("_NET_WM_SYNC_REQUEST_COUNTER", true);
-            //atom_net_wm_bypass_compositor = get_atom_id("_NET_WM_BYPASS_COMPOSITOR", true);
-            atom_utf8_string              = get_atom_id("UTF8_STRING", true);
+            //atom_net_wm_bypass_compositor    = get_atom_id("_NET_WM_BYPASS_COMPOSITOR", true);
+            atom_utf8_string                 = get_atom_id("UTF8_STRING", true);
+            atom_vtmx                        = get_atom_id("VTMX", true);
 
             // Server related.
             atom_atom                   = get_atom_id("ATOM",             faux);
@@ -2579,6 +2633,35 @@ namespace netxs::x11
             x11_display_size = size;
             x11_diagonal = size.x * size.x + size.y * size.y;
         }
+        auto open_sync_connection(view x11unixpath, view auth_packet)
+        {
+            if (auto link = os::ipc::socket::connect(x11unixpath))
+            {
+                link->send(auth_packet);
+                auto reply = x11::session_t::auth::reply{};
+                if (link->recv((char*)&reply, sizeof(reply)).size() == sizeof(reply))
+                {
+                    auto buffer = text(reply.additional_length * 4, '\0');
+                    link->recv(buffer.data(), buffer.size());
+                    if (reply.status == x11::event::Reply)
+                    {
+                        auto sync_session_state = netxs::start_lifetime_as<x11::session_t::session_init>(buffer.data());
+                        sync_msg_window_id = sync_session_state.resource_id_base;
+                        sync_x11connection = link;
+                        // Create invisible window for sync receiving messages.
+                        if constexpr (debugmode) log("Create invisible window: 0x%%", utf::to_hex(sync_msg_window_id));
+                        syncrq(x11::req::create_window{ .window_id = sync_msg_window_id,
+                                                        .parent_id = root_window_id });
+                        // Mark our windows.
+                        //syncrq<x11::req::change_property>({ .window_id = sync_msg_window_id,
+                        //                                    .property  = atom_vtmx,
+                        //                                    .type      = atom_cardinal }, 1);
+                    }
+                }
+            }
+            if constexpr (debugmode) log("Sync X11 connection: ", sync_x11connection.get());
+            return !!sync_x11connection;
+        }
     };
 
     auto get_cookie(view target_display_num)
@@ -2754,6 +2837,7 @@ namespace netxs::x11
                 if (session.get_props())
                 if (session.get_default_window_area())
                 if (session.create_shared_objects())
+                if (session.open_sync_connection(x11unixpath, auth_packet))
                 {
                     if constexpr (debugmode) log(session.str());
                     session.wl_present = !!os::env::get("WAYLAND_DISPLAY").size();
