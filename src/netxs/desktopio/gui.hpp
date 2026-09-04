@@ -4849,8 +4849,7 @@ namespace netxs::gui
                 {
                     if (data.len == sizeof(vkstat))
                     {
-                        auto state_data = std::span<byte>{ (byte*)data.ptr, data.len };
-                        std::copy(state_data.begin(), state_data.end(), vkstat.begin());
+                        std::memcpy(vkstat.data(), data.ptr, sizeof(vkstat));
                     }
                 }
                 else if (command == ipc::pass_input) // Keybd input.
@@ -6601,6 +6600,7 @@ namespace netxs::gui
         bool is_foreground_window{};
         twod hidden_coor;
         flag block_mouse_movement{};
+        byts received_data;
         std::atomic<ui64> current_msc = 0;
         x11::session_t& session = *x11::session_ptr;
 
@@ -6908,7 +6908,7 @@ namespace netxs::gui
         }
         auto _send_command(arch target_id, si32 command, arch lParam = {})
         {
-            auto result = -1u;
+            auto result = 0u;
             if (target_id && _check_has_vtmx_property(target_id)) // Check if destination can reply (has "VTMX" atom).
             {
                 // Send command.
@@ -7222,10 +7222,9 @@ namespace netxs::gui
         }
         cont window_recv_command(arch /*lParam*/)
         {
-            //auto& data = *(COPYDATASTRUCT*)lParam;
-            //auto crop = cont{ .cmd = (si32)data.dwData, .ptr = data.lpData, .len = data.cbData };
-            //return crop;
-            return cont{};
+            auto command = netxs::start_lifetime_as<si32>(received_data.data());
+            auto crop = cont{ .cmd = command, .ptr = received_data.data() + sizeof(si32), .len = (ui32)(received_data.size() - sizeof(si32)) };
+            return crop;
         }
         void window_make_foreground()
         {
@@ -7448,7 +7447,37 @@ namespace netxs::gui
                             auto command = (arch)msg.command;
                             auto lParam  = (arch)msg.lParam;
                             //if constexpr (debugmode) 
-                            log("%%WIN32_WM_USER cmd=%% lParam=%%", prompt::x11, command, lParam);
+                            log("%%WIN32_WM_USER cmd=%% lParam=%%", prompt::x11, ipc::str(command), command, lParam);
+                            if (command == ipc::cmd_w_data) // msg.lParam contains data length. 
+                            {
+                                auto data_length = (si32)lParam;
+                                received_data.resize(data_length);
+                                auto dst = received_data.data();
+                                auto src = (char*)&msg.data32[0];
+                                auto step0 = std::min(4 * 2/*first packet payload*/, data_length);
+                                std::memcpy(dst, src, step0);
+                                dst += step0;
+                                if (auto extra_chunk_count = data_length <= 4 * 2 ? 0 : (data_length - 4 * 2 + 7 * 4 - 1) / 7 * 4)
+                                {
+                                    src += step0 + 4/*chunk header*/;
+                                    auto tail_size = extra_chunk_count * sizeof(x11::req::send_event::chunk);
+                                    read_buffer.resize(x11::recv_packet_size + tail_size);
+                                    //todo make recv deferred, one by one
+                                    if (session.x11connection->recv(read_buffer.data() + x11::recv_packet_size, tail_size).size() == tail_size)
+                                    {
+                                        auto rest = data_length - 4 * 2;
+                                        while (extra_chunk_count--)
+                                        {
+                                            auto step1 = std::min(7 * 4, rest);
+                                            std::memcpy(dst, src, step1);
+                                            src += sizeof(x11::req::send_event::chunk);
+                                            dst += step1;
+                                            rest -= step1;
+                                        }
+                                    }
+                                    read_buffer.resize(x11::recv_packet_size); // Restore classic read_buffer size.
+                                }
+                            }
                             if (command != ipc::send_reply)
                             {
                                 auto result = run_command(command, lParam);

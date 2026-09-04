@@ -315,11 +315,13 @@ namespace netxs::x11
                 byte type;          // 33: ClientMessage. (or 35: GenericEvent?)
                 byte format;        // Data word format: 8, 16, 32 bits.
                 ui16 sequence;
-                ui32 reply_to_id;
+                // Payload header:
+                ui32 reply_to_id;   //
                 ui32 message_type;  // Atom message id (a-la WIN32_WM_USER).
                 ui32 serial;        // Serial number to sync replay.
-                ui32 command;       // User data.
+                ui32 command;       //
                 ui32 lParam;        //
+                // User data start:
                 ui32 data32[2];     //
             };
             byte opcode     = 25; // 25: SendEvent.
@@ -327,16 +329,25 @@ namespace netxs::x11
             ui16 length     = 11;
             ui32 destination_id;  // Destination window id.
             ui32 event_mask = 0;  // 0 for ClientMessage.
-            // Payload:
-            byte type      = 33;  // 33: ClientMessage.
-            byte format    = 32;  // Data format: 8, 16, 32 bits.
-            ui16 sequence  = {};
+            byte type       = 33; // 33: ClientMessage.
+            byte format     = 32; // Data format: 8, 16, 32 bits.
+            ui16 sequence   = {};
+            // Payload header:
             ui32 reply_to_id;     // Reply window id.
             ui32 message_type;    // Atom message id (a-la WIN32_WM_USER).
-            ui32 serial    = 0;   // Serial number to sync replay.
-            ui32 command   = -1;  // User data.
-            ui32 lParam    = 0;   //
-            ui32 data32[2] = {};  //
+            ui32 serial      = 0; // Serial number to sync replay.
+            ui32 command     = 0; // User data.
+            ui32 lParam      = 0; // User data: =data_length if command==cmd_w_data.
+            // User data start:
+            ui32 data32[2] = {};  // User data.
+            struct chunk // Subsequent chunk. Chunk count = data_length <= 4*2 ? 0 : (data_length-4*2 + 7*4-1) / 7*4.
+            {
+                byte type;      // 33: ClientMessage. (or 35: GenericEvent?)
+                byte format;    // Data word format: 8, 16, 32 bits.
+                ui16 sequence;
+                // User data start:
+                ui32 data32[7]; // User data.
+            };
         };
         //struct grab_server // Opcode 36 (grab server)
         //{
