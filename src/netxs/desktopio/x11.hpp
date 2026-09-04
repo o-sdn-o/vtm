@@ -317,10 +317,10 @@ namespace netxs::x11
                 ui16 sequence;
                 ui32 reply_to_id;
                 ui32 message_type;  // Atom message id (a-la WIN32_WM_USER).
-                //todo ui32 serial = 0; // Serial number to sync replay.
+                ui32 serial;        // Serial number to sync replay.
                 ui32 command;       // User data.
                 ui32 lParam;        //
-                ui32 data32[3];     //
+                ui32 data32[2];     //
             };
             byte opcode     = 25; // 25: SendEvent.
             byte propagate  = 0;  // Send to the window tree.
@@ -328,15 +328,15 @@ namespace netxs::x11
             ui32 destination_id;  // Destination window id.
             ui32 event_mask = 0;  // 0 for ClientMessage.
             // Payload:
-            byte type     = 33;   // 33: ClientMessage.
-            byte format   = 32;   // Data format: 8, 16, 32 bits.
-            ui16 sequence = {};
+            byte type      = 33;  // 33: ClientMessage.
+            byte format    = 32;  // Data format: 8, 16, 32 bits.
+            ui16 sequence  = {};
             ui32 reply_to_id;     // Reply window id.
             ui32 message_type;    // Atom message id (a-la WIN32_WM_USER).
-            //todo ui32 serial = 0; // Serial number to sync replay.
-            ui32 command = -1;    // User data.
-            ui32 lParam = 0;      //
-            ui32 data32[3];       //
+            ui32 serial    = 0;   // Serial number to sync replay.
+            ui32 command   = -1;  // User data.
+            ui32 lParam    = 0;   //
+            ui32 data32[2] = {};  //
         };
         //struct grab_server // Opcode 36 (grab server)
         //{
@@ -1652,6 +1652,7 @@ namespace netxs::x11
         sptr<os::ipc::stdcon>   sync_x11connection;        // Parallel sync X11 socket connection.
         ui16                    sync_sequence_counter = 0; // Sync sent request counter.
         ui32                    sync_msg_window_id = 0;    // Window for receiving sync messages (=sync_base_id).
+        text                    sync_buffer;
 
         std::unordered_map<ui16, device_t> input_devices;
 
@@ -1686,7 +1687,6 @@ namespace netxs::x11
                 std::this_thread::yield();
             }
         }
-
         void sync_reply(ui16 sequence_number, span timeout, span wait_step = span{}) const
         {
             auto current_time = datetime::now();
@@ -1697,7 +1697,6 @@ namespace netxs::x11
                 std::this_thread::sleep_for(wait_step);
             }
         }
-
         // Callback usage example.
         //    session.sendrq<x11::req::map_window>({ .window_id = 0 }, {},
         //    [&](auto& ev, view payload) // ev stored in payload.
@@ -1770,6 +1769,22 @@ namespace netxs::x11
             {
                 assert(!payload);
                 sync_x11connection->send(view{ (char*)&request, sizeof(request) });
+            }
+            return sync_sequence_counter;
+        }
+        template<class R, class V = qiew, class P = noop>
+        auto syncrq(text& buffer, R request = {}, V payload = {})
+        {
+            //auto lock = std::lock_guard{ sync_mutex };
+            sync_sequence_counter++;
+            if constexpr (requires(text packet){ request.serialize(packet, payload); })
+            {
+                request.serialize(buffer, payload);
+            }
+            else
+            {
+                assert(!payload);
+                buffer += view{ (char*)&request, sizeof(request) };
             }
             return sync_sequence_counter;
         }
@@ -2649,7 +2664,7 @@ namespace netxs::x11
                         sync_msg_window_id = sync_session_state.resource_id_base;
                         sync_x11connection = link;
                         // Create invisible window for sync receiving messages.
-                        if constexpr (debugmode) log("Create invisible window: 0x%%", utf::to_hex(sync_msg_window_id));
+                        if constexpr (debugmode) log("Create invisible window: id=0x%% seq=%%", utf::to_hex(sync_msg_window_id), sync_sequence_counter + (ui16)1);
                         syncrq(x11::req::create_window{ .window_id = sync_msg_window_id,
                                                         .parent_id = root_window_id });
                         // Mark our windows.

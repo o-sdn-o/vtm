@@ -6858,69 +6858,98 @@ namespace netxs::gui
         }
         auto _check_has_vtmx_property(arch target_id)
         {
+            auto result = faux;
             // Check if destination can reply (has "VTMX" atom).
-            //todo set serial=seq_num
-            auto seq_num = session.syncrq<x11::req::get_property>({ .window_id   = (ui32)target_id,
-                                                                    .property    = session.atom_vtmx,
-                                                                    .prop_type   = session.atom_cardinal,
-                                                                    .long_length = 1 });
+            auto lock = std::lock_guard{ session.sync_mutex };
+            if constexpr (debugmode) log("_check_has_vtmx_property: seq=%%", session.sync_sequence_counter + (ui16)1);
+            auto seq_num = session.syncrq(session.sync_buffer, x11::req::get_property{ .window_id   = (ui32)target_id,
+                                                                                       .property    = session.atom_vtmx,
+                                                                                       .prop_type   = session.atom_cardinal,
+                                                                                       .long_length = 1 });
+            session.sync_x11connection->send(session.sync_buffer);
             auto ev = x11::event::any{};
-            //todo wait seq_num
-            if (session.sync_x11connection->recv((char*)&ev, sizeof(ev)).size() == sizeof(ev))
+            while (session.sync_x11connection->recv((char*)&ev, sizeof(ev)).size() == sizeof(ev))
             {
                 if (ev.type == x11::event::Error)
                 {
                     if constexpr (debugmode) log("get_property atom_vtmx error: %%", session.get_error(ev));
                 }
-                else
+                else if (ev.length)
                 {
-                    auto payload = text(ev.length * 4, '\0');
-                    if (session.sync_x11connection->recv(payload.data(), payload.size()).size() == payload.size())
+                    session.sync_buffer.assign(ev.length * 4, '\0');
+                    if (session.sync_x11connection->recv(session.sync_buffer.data(), session.sync_buffer.size()).size() == session.sync_buffer.size())
                     {
                         auto reply = netxs::start_lifetime_as<x11::req::get_property::reply>(ev);
                         if (reply.format == sizeof(ui32) * 8 && reply.prop_type == session.atom_vtmx) // format == 0 means that property not found.
-                        if (netxs::start_lifetime_as<si32>(payload.data())) // ==1
+                        if (netxs::start_lifetime_as<si32>(session.sync_buffer.data())) // ==1
                         {
-                            return true; // Has vtmx property.
+                            result = true; // Has vtmx property.
                         }
                     }
                 }
+                if (ev.sequence == seq_num) break;
             }
-            return faux;
+            session.sync_buffer.clear();
+            return result;
         }
         void _post_command(arch target_id, si32 command, arch lParam = {})
         {
             if (target_id)
             {
+                if constexpr (debugmode) log("_post_commend: seq=%%", session.sync_sequence_counter + (ui16)1);
                 session.syncrq(x11::req::send_event{ .destination_id = (ui32)target_id,
                                                      .reply_to_id    = 0,
                                                      .message_type   = session.atom_vtmx,
-                                                     //todo set serial
                                                      .command        = (ui32)command,
                                                      .lParam         = (ui32)lParam }); // wParam, lParam.
             }
         }
         auto _send_command(arch target_id, si32 command, arch lParam = {})
         {
+            auto result = -1u;
             if (target_id && _check_has_vtmx_property(target_id)) // Check if destination can reply (has "VTMX" atom).
             {
                 // Send command.
-                session.syncrq(x11::req::send_event{ .destination_id = (ui32)target_id,
-                                                     .reply_to_id    = session.sync_msg_window_id,
-                                                     .message_type   = session.atom_vtmx,
-                                                     //todo set serial
-                                                     .command        = (ui32)command,
-                                                     .lParam         = (ui32)lParam }); // wParam, lParam.
-                //todo add timeout
-                //todo sync via send_event::serial
-                auto reply = x11::req::send_event::reply{};
-                if (session.sync_x11connection->recv((char*)&reply, sizeof(reply)).size() == sizeof(reply))
-                if (reply.type == x11::event::Reply)
+                auto lock = std::lock_guard{ session.sync_mutex };
+                auto serial = session.sync_sequence_counter + (ui16)1;
+                if constexpr (debugmode) log("_send_command: seq=%%", session.sync_sequence_counter + (ui16)1);
+                session.syncrq(session.sync_buffer, x11::req::send_event{ .destination_id = (ui32)target_id,
+                                                                          .reply_to_id    = session.sync_msg_window_id,
+                                                                          .message_type   = session.atom_vtmx,
+                                                                          .serial         = (ui16)serial,
+                                                                          .command        = (ui32)command,
+                                                                          .lParam         = (ui32)lParam }); // wParam, lParam.
+                session.sync_x11connection->send(session.sync_buffer);
+                auto ev = x11::event::any{};
+                while (session.sync_x11connection->recv((char*)&ev, sizeof(ev)).size() == sizeof(ev))
                 {
-                    return reply.lParam;
+                    auto type = ev.type & 0x7F;
+                    if (type == x11::event::Error)
+                    {
+                        log("%%Send command error: %%", prompt::x11, session.get_error(ev));
+                    }
+                    else if (type == x11::event::ClientMessage)
+                    {
+                        auto reply = netxs::start_lifetime_as<x11::req::send_event::reply>(ev);
+                        if (reply.serial == (ui16)serial)
+                        {
+                            result = reply.lParam; // Has vtmx property.
+                            break;
+                        }
+                    }
+                    else if (ev.length)
+                    {
+                        session.sync_buffer.assign(ev.length * 4, '\0');
+                        if (session.sync_x11connection->recv(session.sync_buffer.data(), session.sync_buffer.size()).size() != session.sync_buffer.size())
+                        {
+                            log(ansi::err("%%Send command error: Unexpected reply length", prompt::x11));
+                            break;
+                        }
+                    }
                 }
+                session.sync_buffer.clear();
             }
-            return -1u;
+            return result;
         }
 
         bool keybd_test_pressed(si32 /*virtcod*/, si32 /*keycode*/ = 0) { return faux; /*!!(vkstat[virtcod] & 0x80);*/ }
@@ -7423,8 +7452,13 @@ namespace netxs::gui
                                 auto result = run_command(command, lParam);
                                 if (msg.reply_to_id)
                                 {
-                                    //todo sync via send_event::serial
-                                    _post_command(msg.reply_to_id, ipc::send_reply, result);
+                                    if constexpr (debugmode) log("_reply_command: seq=%%", session.sync_sequence_counter + (ui16)1);
+                                    session.syncrq(x11::req::send_event{ .destination_id = msg.reply_to_id,
+                                                                         .reply_to_id    = 0,
+                                                                         .message_type   = session.atom_vtmx,
+                                                                         .serial         = msg.serial,
+                                                                         .command        = (ui32)ipc::send_reply,
+                                                                         .lParam         = (ui32)result }); // wParam, lParam.
                                 }
                             }
                         }
