@@ -7850,6 +7850,10 @@ namespace netxs::gui
                 if (d.evtype != x11::req::xi2::event::Motion && !emulated) // ButtonPress or ButtonRelease.
                 {
                     auto is_pressed = d.evtype == x11::req::xi2::event::ButtonPress;
+                    if (is_pressed && !moved) // Sync mouse position before any click (click on unfocused window).
+                    {
+                        mouse_moved();
+                    }
                     auto button_id  = m.detail;
                     if constexpr (debugmode) log("  Mouse Button%%: bttn_id=%%", is_pressed ? "Press" : "Release", button_id);
                     // Fix bug with pressed buttons right after startup.
