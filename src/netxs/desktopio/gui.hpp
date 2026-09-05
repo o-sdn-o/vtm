@@ -6591,6 +6591,12 @@ namespace netxs::gui
                 return fake_step;
             }
         };
+        struct peer_state
+        {
+            ui32   serial{};
+            size_t received_bytes{};
+            byts   received_data;
+        };
 
         mouse_state_t mouse_state;
         text batch_buffer;
@@ -6600,7 +6606,7 @@ namespace netxs::gui
         bool is_foreground_window{};
         twod hidden_coor;
         flag block_mouse_movement{};
-        byts received_data;
+        std::unordered_map<ui32, peer_state> recv_buffers;
         std::atomic<ui64> current_msc = 0;
         x11::session_t& session = *x11::session_ptr;
 
@@ -6898,9 +6904,9 @@ namespace netxs::gui
         {
             if (target_id)
             {
-                if constexpr (debugmode) log("_post_commend: seq=%%", session.sync_sequence_counter + (ui16)1);
+                if constexpr (debugmode) log("_post_command: seq=%%", session.sync_sequence_counter + (ui16)1);
                 session.syncrq(x11::req::send_event{ .destination_id = (ui32)target_id,
-                                                     .reply_to_id    = 0,
+                                                     .originator_id  = 0,
                                                      .message_type   = session.atom_vtmx,
                                                      .command        = (ui32)command,
                                                      .lParam         = (ui32)lParam }); // wParam, lParam.
@@ -6916,7 +6922,7 @@ namespace netxs::gui
                 auto serial = session.sync_sequence_counter + (ui16)1;
                 if constexpr (debugmode) log("_send_command: seq=%%", session.sync_sequence_counter + (ui16)1);
                 session.syncrq(session.sync_buffer, x11::req::send_event{ .destination_id = (ui32)target_id,
-                                                                          .reply_to_id    = session.sync_msg_window_id,
+                                                                          .originator_id  = session.sync_msg_window_id,
                                                                           .message_type   = session.atom_vtmx,
                                                                           .serial         = (ui16)serial,
                                                                           .command        = (ui32)command,
@@ -7220,8 +7226,9 @@ namespace netxs::gui
         {
             _post_command(target_id, command, lParam);
         }
-        cont window_recv_command(arch /*lParam*/)
+        cont window_recv_command(arch lParam)
         {
+            auto& received_data = recv_buffers[lParam].received_data;
             auto command = netxs::start_lifetime_as<si32>(received_data.data());
             auto crop = cont{ .cmd = command, .ptr = received_data.data() + sizeof(si32), .len = (ui32)(received_data.size() - sizeof(si32)) };
             return crop;
@@ -7342,6 +7349,17 @@ namespace netxs::gui
                 batch_buffer.clear();
             }
         }
+        void _reply_command(ui32 originator_id, ui32 serial, ui32 result)
+        {
+            if (!originator_id) return;
+            if constexpr (debugmode) log("_reply_command: seq=%%", session.sync_sequence_counter + (ui16)1);
+            session.syncrq(x11::req::send_event{ .destination_id = originator_id,
+                                                 .originator_id  = 0,
+                                                 .message_type   = session.atom_vtmx,
+                                                 .serial         = serial,
+                                                 .command        = (ui32)ipc::send_reply,
+                                                 .lParam         = result });
+        }
         void window_message_pump()
         {
             if constexpr (debugmode) log("window_message_pump started");
@@ -7364,16 +7382,20 @@ namespace netxs::gui
                 switch (type)
                 {
                     case x11::event::Error:
+                    {
                         session.parse_error(ev, read_buffer);
                         read_buffer.resize(x11::recv_packet_size); // Restore classic read_buffer size.
                         continue;
+                    }
                     case x11::event::Reply:
+                    {
                         session.parse_reply(ev, read_buffer);
                         read_buffer.resize(x11::recv_packet_size); // Restore classic read_buffer size.
                         break;
-                    case x11::event::CreateNotify:
-                        if constexpr (debugmode) log("Window created");
-                        break;
+                    }
+                    //case x11::event::CreateNotify:
+                    //    if constexpr (debugmode) log("Window created");
+                    //    break;
                     //case x11::event::MapNotify:
                     //{
                     //    auto mn = netxs::start_lifetime_as<x11::event::map_notify>(read_buffer.data());
@@ -7442,55 +7464,58 @@ namespace netxs::gui
                         //    sys_command(syscmd::close);
                         //}
                         auto msg = netxs::start_lifetime_as<x11::req::send_event::reply>(read_buffer.data());
-                        if (msg.message_type == session.atom_vtmx && msg.format == 32) // WIN32_WM_USER
+                        auto originator_id = msg.originator_id;
+                        if (auto iter = recv_buffers.find(originator_id); iter != recv_buffers.end() && iter->second.received_data.size()) // Append existing buffer.
+                        {
+                            auto& peer = iter->second;
+                            auto data_length = peer.received_data.size();
+                            auto rest = data_length - peer.received_bytes;
+                            auto step = std::min((size_t)6 * 4, rest);
+                            auto src = (char*)&msg.message_type; // Start from chunk.data32[0].
+                            auto dst = peer.received_data.data() + peer.received_bytes;
+                            std::memcpy(dst, src, step);
+                            peer.received_bytes += step;
+                            if constexpr (debugmode) log("WIN32_WM_USER: Append existing buffer from originator_id=0x%% recvd=%% rest=%% total=%%", utf::to_hex(originator_id), peer.received_bytes, peer.received_data.size() - peer.received_bytes, peer.received_data.size());
+                            if (peer.received_bytes == data_length) // Done.
+                            {
+                                auto result = run_command(ipc::cmd_w_data, originator_id);
+                                _reply_command(originator_id, peer.serial, (ui32)result);
+                                peer.received_bytes = 0;
+                                peer.received_data.clear();
+                            }
+                        }
+                        else if (msg.message_type == session.atom_vtmx && msg.format == 32) // WIN32_WM_USER
                         {
                             auto command = (arch)msg.command;
                             auto lParam  = (arch)msg.lParam;
-                            //if constexpr (debugmode) 
-                            log("%%WIN32_WM_USER cmd=%% lParam=%%", prompt::x11, ipc::str(command), command, lParam);
+                            if constexpr (debugmode) log("%%WIN32_WM_USER cmd=%% lParam=%%", prompt::x11, ipc::str(command), command, lParam);
                             if (command == ipc::cmd_w_data) // msg.lParam contains data length. 
                             {
-                                auto data_length = (si32)lParam;
-                                received_data.resize(data_length);
-                                auto dst = received_data.data();
+                                auto data_length = (size_t)lParam;
+                                auto& peer = recv_buffers[originator_id];
+                                peer.received_data.resize(data_length);
+                                auto dst = peer.received_data.data();
                                 auto src = (char*)&msg.data32[0];
-                                auto step0 = std::min(4 * 2/*first packet payload*/, data_length);
-                                std::memcpy(dst, src, step0);
-                                dst += step0;
-                                if (auto extra_chunk_count = data_length <= 4 * 2 ? 0 : (data_length - 4 * 2 + 7 * 4 - 1) / 7 * 4)
+                                auto step = std::min((size_t)4 * 2/*first packet payload*/, data_length);
+                                std::memcpy(dst, src, step);
+                                peer.received_bytes = step;
+                                peer.serial = msg.serial;
+                                if (data_length == peer.received_bytes) // Single packet.
                                 {
-                                    src += step0 + 4/*chunk header*/;
-                                    auto tail_size = extra_chunk_count * sizeof(x11::req::send_event::chunk);
-                                    read_buffer.resize(x11::recv_packet_size + tail_size);
-                                    //todo make recv deferred, one by one
-                                    if (session.x11connection->recv(read_buffer.data() + x11::recv_packet_size, tail_size).size() == tail_size)
+                                    auto result = run_command(command, lParam);
+                                    peer.received_bytes = 0;
+                                    peer.received_data.clear();
+                                    if (peer.received_data.capacity() > 4096)
                                     {
-                                        auto rest = data_length - 4 * 2;
-                                        while (extra_chunk_count--)
-                                        {
-                                            auto step1 = std::min(7 * 4, rest);
-                                            std::memcpy(dst, src, step1);
-                                            src += sizeof(x11::req::send_event::chunk);
-                                            dst += step1;
-                                            rest -= step1;
-                                        }
+                                        peer.received_data.shrink_to_fit();
                                     }
-                                    read_buffer.resize(x11::recv_packet_size); // Restore classic read_buffer size.
+                                    _reply_command(msg.originator_id, msg.serial, (ui32)result);
                                 }
                             }
-                            if (command != ipc::send_reply)
+                            else if (command != ipc::send_reply)
                             {
                                 auto result = run_command(command, lParam);
-                                if (msg.reply_to_id)
-                                {
-                                    if constexpr (debugmode) log("_reply_command: seq=%%", session.sync_sequence_counter + (ui16)1);
-                                    session.syncrq(x11::req::send_event{ .destination_id = msg.reply_to_id,
-                                                                         .reply_to_id    = 0,
-                                                                         .message_type   = session.atom_vtmx,
-                                                                         .serial         = msg.serial,
-                                                                         .command        = (ui32)ipc::send_reply,
-                                                                         .lParam         = (ui32)result }); // wParam, lParam.
-                                }
+                                _reply_command(msg.originator_id, msg.serial, (ui32)result);
                             }
                         }
                         break;
@@ -7537,6 +7562,7 @@ namespace netxs::gui
                         continue; // Skip sys_command(syscmd::update).
                     }
                     case x11::event::GenericEvent:
+                    {
                         if (ev.detail == session.xi2_major_opcode) // XInput2.
                         {
                             auto tail_size = ev.length * 4;
@@ -7604,6 +7630,7 @@ namespace netxs::gui
                             read_buffer.resize(x11::recv_packet_size); // Restore classic read_buffer size.
                         }
                         break;
+                    }
                 }
                 sys_command(syscmd::update);
             }

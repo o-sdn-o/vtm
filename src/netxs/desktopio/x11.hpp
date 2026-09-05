@@ -316,7 +316,7 @@ namespace netxs::x11
                 byte format;        // Data word format: 8, 16, 32 bits.
                 ui16 sequence;
                 // Payload header:
-                ui32 reply_to_id;   //
+                ui32 originator_id; // Originator window id.
                 ui32 message_type;  // Atom message id (a-la WIN32_WM_USER).
                 ui32 serial;        // Serial number to sync replay.
                 ui32 command;       //
@@ -333,20 +333,21 @@ namespace netxs::x11
             byte format     = 32; // Data format: 8, 16, 32 bits.
             ui16 sequence   = {};
             // Payload header:
-            ui32 reply_to_id;     // Reply window id.
+            ui32 originator_id;   // Originator window id.
             ui32 message_type;    // Atom message id (a-la WIN32_WM_USER).
             ui32 serial      = 0; // Serial number to sync replay.
             ui32 command     = 0; // User data.
             ui32 lParam      = 0; // User data: =data_length if command==cmd_w_data.
             // User data start:
             ui32 data32[2] = {};  // User data.
-            struct chunk // Subsequent chunk. Chunk count = data_length <= 4*2 ? 0 : (data_length-4*2 + 7*4-1) / 7*4.
+            struct chunk // Subsequent chunk. Chunk count = data_length <= 4*2 ? 0 : (data_length-4*2 + 6*4-1) / 6*4.
             {
                 byte type;      // 33: ClientMessage. (or 35: GenericEvent?)
                 byte format;    // Data word format: 8, 16, 32 bits.
                 ui16 sequence;
                 // User data start:
-                ui32 data32[7]; // User data.
+                ui32 originator_id; // Originator id.
+                ui32 data32[6];     // User data.
             };
         };
         //struct grab_server // Opcode 36 (grab server)
