@@ -1,9 +1,9 @@
 // Copyright (c) Dmitry Sapozhnikov
 // Licensed under the MIT license.
 
-#include "ansivt.hpp"
-
 #pragma once
+
+#include "ansivt.hpp"
 
 namespace netxs::prompt
 {
@@ -16,6 +16,7 @@ namespace netxs::prompt
     static constexpr auto   tty = " tty: "sv;
     static constexpr auto   vtm = " vtm: "sv;
     static constexpr auto   xml = " xml: "sv;
+    static constexpr auto   x11 = " x11: "sv;
     static constexpr auto   cin = "stdin: "sv;
     static constexpr auto  cout = "stdout: "sv;
     static constexpr auto resultant_settings = "Resultant settings:"sv;
@@ -1084,7 +1085,6 @@ namespace netxs::directvt
         #define UNDEFINE_macro
         #include "macrogen.hpp"
 
-        static const auto process_id = datetime::now();
         struct bitmap_dtvt_t
             : public stream
         {
@@ -1121,7 +1121,7 @@ namespace netxs::directvt
             void set(id_t winid, twod coord, core& cache, flag& abort, sz_t& delta)
             {
                 //todo multiple windows
-                stream::reinit(winid, rect{ coord, cache.size() }, binary::process_id);
+                stream::reinit(winid, rect{ coord, cache.size() }, os::process::id.second);
                 auto pen = state;
                 auto src = cache.begin();
                 auto end = cache.end();
@@ -1235,7 +1235,7 @@ namespace netxs::directvt
             void get(view& data, std::array<ui16, 65536>& ext_to_int_map, std::vector<ui16>& unknown_indexes, P update = {}, S resize = {})
             {
                 auto [myid, area, remote_process_id] = stream::take<id_t, rect, time>(data);
-                auto is_remote_forwarding = remote_process_id != binary::process_id;
+                auto is_remote_forwarding = remote_process_id != os::process::id.second;
                 ext_to_int_map[0] = is_remote_forwarding;
                 //todo head.myid
                 if (image.size() != area.size)
@@ -2121,7 +2121,7 @@ namespace netxs::directvt
                     for (auto& image_index : image_indexes)
                     {
                         if constexpr (debugmode) log("Remote: Remove image index: remote=%% local=%%", image_index, s11n::nat[image_index]);
-                        image_index = std::exchange(s11n::nat[image_index], 0);
+                        image_index = std::exchange(s11n::nat[image_index], ui16{});
                         if (image_index)
                         {
                             images.remove(image_index);

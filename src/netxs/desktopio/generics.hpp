@@ -447,7 +447,7 @@ namespace netxs::generics
             friend auto operator + (iter i, si32 n) { i += n; return i;                                                     }
             friend auto operator + (si32 n, iter i) { i += n; return i;                                                     }
             friend auto operator - (iter i, si32 n) { i -= n; return i;                                                     }
-            reference operator[](difference_type n) const { return *(*this + (si32)n);                                      }
+            reference operator [] (difference_type n) const { return *(*this + (si32)n);                                    }
         };
 
         ring(si32 ring_size, si32 grow_by = 0, si32 grow_mx = 0)
@@ -1137,9 +1137,9 @@ namespace netxs::generics
             handle_type h;
             bool        done;
 
-            void operator++()                            { h.resume(); done = h.done(); }
-            auto& operator*() const                      { return *(h.promise().current_value); }
-            auto operator!=(iterator const& other) const { return done != other.done; }
+            void operator ++ ()                            { h.resume(); done = h.done(); }
+            auto& operator * () const                      { return *(h.promise().current_value); }
+            auto operator != (iterator const& other) const { return done != other.done; }
         };
 
         auto begin()
@@ -1392,7 +1392,7 @@ namespace netxs::generics
     template<class T, size_t Count>
     struct indexer_growing
     {
-        std::array<ui64, Count / 64> free_mask{}; // 1 — Available, 0 — In use. Initialized with zeros. Initial indices are allocated sequentially via next_index.
+        std::array<ui64, Count / 64> free_mask{}; // 1: Available, 0: In use. Initialized with zeros. Initial indices are allocated sequentially via next_index.
         T                            next_index{};
         T                            last_issued{};
         size_t                       free_count{}; // Total number of released indices available in the mask.
@@ -1429,7 +1429,7 @@ namespace netxs::generics
                     }
                 }
             }
-            if (next_index < std::numeric_limits<T>::max() - 1 && next_index < (Count - 1)) [[likely]] // Allocate a new index.
+            if (next_index < std::numeric_limits<T>::max() - 1 && next_index < Count - 1) [[likely]] // Allocate a new index.
             {
                 return last_issued = ++next_index;
             }

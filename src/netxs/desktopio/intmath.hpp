@@ -44,13 +44,17 @@
 #include <variant>
 #include <vector>
 
-#if not defined(VTM_NO_DEPENDENCIES)
+#if !defined(VTM_NO_DEPENDENCIES)
     #include <ft2build.h>
     #include FT_FREETYPE_H
     #include FT_TRUETYPE_TABLES_H
     #include FT_MULTIPLE_MASTERS_H
     #include FT_SFNT_NAMES_H
     #include FT_COLOR_H
+
+    #if !defined(FT_OTSVG_H)
+        #define FT_OTSVG_H <freetype/otsvg.h>
+    #endif
     #include FT_OTSVG_H
 
     #include <hb-ft.h>
@@ -67,7 +71,18 @@
     }
 #endif
 
-#ifndef faux
+#if defined(_WIN32)
+    #if !defined(NOMINMAX)
+        #define NOMINMAX
+    #endif
+    #include <Windows.h>
+    #undef hyper
+    #undef small
+#else
+    #include <unistd.h>      // ::gethostname(), ::getpid(), ::read()
+#endif
+
+#if !defined(faux)
     #define faux (false)
 #endif
 
@@ -95,6 +110,27 @@ namespace netxs
         ui64 u64;
         ui32 u32;
         auto operator <=> (ui96 const&) const = default;
+    };
+    struct fx32
+    {
+        si32 i; // integral
+        ui32 f; // fractional
+
+        auto to_fp64() const
+        {
+            auto v = (fp64)i + f / 4294967296.0;
+            return v;
+        }
+    };
+    struct fx16
+    {
+        si32 i; // integral & fractional
+
+        auto to_fp32() const
+        {
+            auto v = i / 65536.0f;
+            return v;
+        }
     };
 
     constexpr size_t operator ""_sz (unsigned long long i) { return static_cast<size_t>(i); }
@@ -193,16 +229,16 @@ namespace netxs
     {
         static constexpr auto LCtrl      = 1 <<  0; // Left  ⌃ Ctrl
         static constexpr auto RCtrl      = 1 <<  1; // Right ⌃ Ctrl
-        static constexpr auto LAlt       = 1 <<  2; // Left  ⎇ Alt, Left  ⌥ Option
-        static constexpr auto RAlt       = 1 <<  3; // Right ⎇ Alt, Right ⌥ Option
+        static constexpr auto LAlt       = 1 <<  2; // Left  ⎇ Alt, ⌥ Option
+        static constexpr auto RAlt       = 1 <<  3; // Right ⎇ Alt, ⌥ Option
         static constexpr auto LShift     = 1 <<  4; // Left  ⇧ Shift
         static constexpr auto RShift     = 1 <<  5; // Right ⇧ Shift
-        static constexpr auto LSuper     = 1 <<  6; // Left  ⊞ Win, ◆ Meta, ⌘ Cmd (Apple key), ❖ Super
-        static constexpr auto RSuper     = 1 <<  7; // Right ⊞ Win, ◆ Meta, ⌘ Cmd (Apple key), ❖ Super
+        static constexpr auto LSuper     = 1 <<  6; // Left  ⊞ Win, ⌘ Cmd (Apple key), ❖ Super
+        static constexpr auto RSuper     = 1 <<  7; // Right ⊞ Win, ⌘ Cmd (Apple key), ❖ Super
         static constexpr auto LHyper     = 1 <<  8; // Left  Hyper
         static constexpr auto RHyper     = 1 <<  9; // Right Hyper
-        //                               = 1 << 10;
-        //                               = 1 << 11;
+        static constexpr auto LMeta      = 1 << 10; // Left  ◆ Meta // KKP specific
+        static constexpr auto RMeta      = 1 << 11; // Right ◆ Meta //
         static constexpr auto NumLock    = 1 << 12; // ⇭ Num Lock
         static constexpr auto CapsLock   = 1 << 13; // ⇪ Caps Lock
         static constexpr auto ScrollLock = 1 << 14; // ⇳ Scroll Lock (⤓)
@@ -214,7 +250,27 @@ namespace netxs
         static constexpr auto anyCtrlAlt = anyAlt | anyCtrl;
         static constexpr auto anySuper   = LSuper | RSuper;
         static constexpr auto anyHyper   = LHyper | RHyper;
-        static constexpr auto anyMod     = anyAlt | anyCtrl | anyShift | anySuper | anyHyper;
+        static constexpr auto anyMeta    = LMeta  | RMeta;
+        static constexpr auto anyMod     = anyAlt | anyCtrl | anyShift | anySuper | anyHyper | anyMeta;
+    }
+    namespace os
+    {
+        namespace fs = std::filesystem;
+
+        namespace process
+        {
+            auto getid()
+            {
+                auto id = (ui32)
+                    #if defined(_WIN32)
+                        ::GetCurrentProcessId();
+                    #else
+                        ::getpid();
+                    #endif
+                return std::pair{ id, std::chrono::steady_clock::now() };
+            }
+            static auto id = os::process::getid();
+        }
     }
 
     constexpr auto operator & (axes l, axes r) { return static_cast<si32>(l) & static_cast<si32>(r); }
@@ -222,6 +278,21 @@ namespace netxs
     template<class T>
     using to_signed_t = std::conditional_t<(si64)std::numeric_limits<std::remove_reference_t<T>>::max() <= netxs::si16max, si16,
                         std::conditional_t<(si64)std::numeric_limits<std::remove_reference_t<T>>::max() <= netxs::si32max, si32, si64>>;
+
+    template<class T>
+    auto start_lifetime_as(auto* p) noexcept //todo waiting for c++23
+    {
+        static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
+        T obj;
+        std::memcpy(&obj, p, sizeof(T));
+        return obj;
+    }
+    template<class T>
+    auto start_lifetime_as(auto& p) noexcept //todo waiting for c++23
+    {
+        static_assert(sizeof(decltype(p)) >= sizeof(T), "Source object is smaller than target type T");
+        return netxs::start_lifetime_as<T>(&p);
+    }
 
     template<class T>
     auto& any_get_or(std::any const& value, T& fallback)
@@ -261,6 +332,25 @@ namespace netxs
     void set_bit(T&& n, bool v)
     {
         n = (n & ~(1 << P)) | (v << P);
+    }
+    // intmath: Set bit to array.
+    template<class T, size_t S>
+    void set_bit(std::array<T, S>& array, size_t i, bool value)
+    {
+        static constexpr auto word_len = sizeof(T) * 8;
+        assert(i < word_len * S);
+        auto& word = array[i / word_len];
+        auto mask = (T)1 << (i % word_len);
+        value ? word |= mask
+              : word &= ~mask;
+    }
+    // intmath: Get bit from array.
+    template<class T, size_t S>
+    auto get_bit(std::array<T, S> const& array, size_t i)
+    {
+        static constexpr auto word_len = sizeof(T) * 8;
+        assert(i < word_len * S);
+        return (array[i / word_len] & ((T)1 << (i % word_len))) != 0;
     }
     // intmath: Get a single p-bit to v.
     template<sz_t P, class T>

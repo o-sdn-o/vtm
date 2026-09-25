@@ -9,11 +9,11 @@ namespace netxs::ui
 {
     namespace console
     {
-        static auto id = std::pair<ui32, time>{};
         static constexpr auto _counter = __COUNTER__ + 1;
         static constexpr auto mouse   = 1 << (__COUNTER__ - _counter);
         static constexpr auto nt      = 1 << (__COUNTER__ - _counter); // Use win32 console api for input.
         static constexpr auto redirio = 1 << (__COUNTER__ - _counter);
+        static constexpr auto nostdio = 1 << (__COUNTER__ - _counter);
         static constexpr auto gui     = 1 << (__COUNTER__ - _counter);
         static constexpr auto tui     = 1 << (__COUNTER__ - _counter); // Output is in TUI mode.
         //todo make 3-bit field for color mode
@@ -172,7 +172,7 @@ namespace netxs::ui
             void handle(s11n::xs::logs        lock)
             {
                 auto& item = lock.thing;
-                if (ui::console::id.first == item.id)
+                if (os::process::id.first == item.id)
                 {
                     notify(e2::conio::logs, item.data, tier::general);
                 }

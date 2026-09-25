@@ -9,13 +9,8 @@
 
 #if defined(_WIN32)
 
-    #if not defined(NOMINMAX)
-        #define NOMINMAX
-    #endif
-
     #pragma warning(disable:4996) // Suppress std::getenv warning.
 
-    #include <Windows.h>
     #include <UserEnv.h>             // ::GetUserProfileDirectoryW
     #include <Psapi.h>               // ::GetModuleFileNameEx
     #include <winternl.h>            // ::NtOpenFile
@@ -29,7 +24,6 @@
 
     #include <errno.h>       // ::errno
     #include <spawn.h>       // ::exec
-    #include <unistd.h>      // ::gethostname(), ::getpid(), ::read()
     #include <sys/param.h>   //
     #include <sys/types.h>   // ::getaddrinfo(), ::sysctl()
     #include <sys/socket.h>  // ::shutdown() ::socket(2)
@@ -66,8 +60,19 @@
 
     #if defined(__APPLE__)
         #include <mach-o/dyld.h>    // ::_NSGetExecutablePath()
-    #elif defined(__BSD__)
-        #include <sys/sysctl.h>
+    #else
+        #if defined(__BSD__)
+            #include <sys/sysctl.h>
+            #include <sys/mman.h> // X11 MIT-SHM ::shm_open()
+        #endif
+            #include <sys/mman.h> // X11 MIT-SHM ::memfd_create()
+
+        namespace netxs::x11
+        {
+            struct session_t;
+            static auto session_ptr = netxs::sptr<x11::session_t>{}; // x11: Active X11 session.
+        }
+
     #endif
 
     extern char **environ;
@@ -80,7 +85,6 @@
                     os::logstd("et: ", (et_stop) / 1000.f, " ms\t expr: ", #__VA_ARGS__); }
 namespace netxs::os
 {
-    namespace fs = std::filesystem;
     namespace key = input::key;
     using page = ui::page;
     using para = ui::para;
@@ -1436,7 +1440,7 @@ namespace netxs::os
             auto platform = "Linux"s;
             if constexpr (!debugmode)
             {
-                #ifdef __GLIBC__
+                #if defined(__GLIBC__)
                 ::fedisableexcept(FE_ALL_EXCEPT);
                 #endif
             }
@@ -1529,7 +1533,44 @@ namespace netxs::os
 
             #endif
         }
+        auto is_redirio()
+        {
+            auto is_redirio = ::isatty(os::stdout_fd) || ::isatty(os::stdin_fd);
+            if (!is_redirio) // It is not a tty.
+            if (auto tty_fd = ::open("/dev/tty", O_RDWR | O_NOCTTY)) // Terminal detected.
+            {
+                is_redirio = tty_fd >= 0;
+                if (is_redirio) ::close(tty_fd);
+            }
+            return is_redirio;
+        }
 
+        #if defined(__ANDROID__)
+            // Based on: https://github.com/termux/termux-packages/issues/30815#issuecomment-5445977114
+            auto shm_open(qiew name, si32 oflag, mode_t mode)
+            {
+                utf::trim_front(name, '/');
+                if (!name) // The name "/" is not supported.
+                {
+                    errno = EINVAL;
+                    return -1;
+                }
+                auto fname = utf::concat("@TERMUX_PREFIX@/tmp/", name);
+                auto fd = ::open(fname.c_str(), oflag, mode);
+                if (fd != os::invalid_fd) // Set the FD_CLOEXEC bit.
+                {
+                    auto flags = ::fcntl(fd, F_GETFD, 0);
+                    flags = ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+                    if (flags == -1) // Something went wrong.  We cannot return the descriptor.
+                    {
+                        auto save_errno = errno;
+                        ::close(std::exchange(fd, os::invalid_fd));
+                        errno = save_errno;
+                    }
+                }
+                return fd;
+            }
+        #endif
     #endif
 
     auto get_system_error_message(auto ec)
@@ -1598,7 +1639,7 @@ namespace netxs::os
         }
         void shutdown() // Reset writing end of the pipe to interrupt reading call.
         {
-            #if not defined(_WIN32) // Use ::shutdown() for full duplex sockets. Socket the same fd could be assigned as stdin, stdout and stderr, e.g. it is how inetd does.
+            #if !defined(_WIN32) // Use ::shutdown() for full duplex sockets. Socket the same fd could be assigned as stdin, stdout and stderr, e.g. it is how inetd does.
 
                 auto statbuf = (struct stat){};
                 ::fstat(w, &statbuf);
@@ -2238,7 +2279,7 @@ namespace netxs::os
         auto cwd()
         {
             auto err = std::error_code{};
-            auto cwd = std::filesystem::current_path(err).string();
+            auto cwd = os::fs::current_path(err).string();
             return cwd;
         }
         // os::env: Set current working directory.
@@ -2676,18 +2717,6 @@ namespace netxs::os
             }
         }
 
-        auto getid()
-        {
-            auto id = (ui32)
-                #if defined(_WIN32)
-                    ::GetCurrentProcessId();
-                #else
-                    ::getpid();
-                #endif
-            ui::console::id = std::pair{ id, datetime::now() };
-            return ui::console::id;
-        }
-        static auto id = process::getid();
         static auto arg0 = text{};
 
         class args
@@ -2830,7 +2859,7 @@ namespace netxs::os
 
             #elif defined(__APPLE__)
 
-                auto size = uint32_t{};
+                auto size = ui32{};
                 if (-1 == ::_NSGetExecutablePath(nullptr, &size))
                 {
                     auto buff = std::vector<char>(size);
@@ -2859,7 +2888,7 @@ namespace netxs::os
                 }
 
             #endif
-            #if not defined(_WIN32)
+            #if !defined(_WIN32)
 
                 if (result.empty())
                 {
@@ -3000,6 +3029,9 @@ namespace netxs::os
                         os::close(os::stdin_fd ); // No stdio needed in daemon mode.
                         os::close(os::stdout_fd); //
                         os::close(os::stderr_fd); //
+                        #if !defined(__APPLE__)
+                            x11::session_ptr.reset();
+                        #endif
                         return std::pair{ success, true }; // Child branch.
                     }
                     else if (p_id > 0) os::process::exit<true>(0); // Success.
@@ -3414,6 +3446,21 @@ namespace netxs::os
             {
                 pipe::isbusy = faux; // io::send blocks until the send is complete.
                 return io::send(handle.w, buff);
+            }
+            qiew recv_all(char* buff, size_t size)
+            {
+                auto dest = buff;
+                auto rest = size;
+                inread.exchange(true);
+                while (pipe::active && rest) // The read call can be interrupted by io::abort().
+                {
+                    auto crop = io::recv(handle, dest, rest); // The read call can be interrupted by the write side when their read call is interrupted.
+                    rest -= crop.size();
+                    dest += crop.size();
+                }
+                inread.exchange(faux);
+                auto result = qiew{ buff, size - rest };
+                return result;
             }
             virtual qiew recv(char* buff, size_t size) override
             {
@@ -3884,128 +3931,47 @@ namespace netxs::os
                 }
                 return socket;
             }
-
-            //todo X11 support. #GH696
-            /*static auto open([[maybe_unused]] text addr, [[maybe_unused]] text port, [[maybe_unused]] bool logs = faux)
+            static auto connect([[maybe_unused]] view name)
             {
-                auto r = os::invalid_fd;
-                auto w = os::invalid_fd;
+                auto f = os::invalid_fd;
                 auto socket = sptr<ipc::stdcon>{};
                 #if defined(_WIN32)
                     // N/A
                 #else
-                    auto addr_family = addr[0] == '/' ? AF_UNIX : AF_UNSPEC;
+                    auto addr_family = name[0] == '/' ? AF_UNIX : AF_UNSPEC;
                     if (addr_family == AF_UNIX)
                     {
                         auto saddr = sockaddr_un{ .sun_family = AF_UNIX };
-                             if (addr.size() > sizeof(sockaddr_un::sun_path) - 1)           { if (logs) os::fail("Unix socket path too long"); }
-                        else if ((w = ::socket(AF_UNIX, SOCK_STREAM, 0)) == os::invalid_fd) { if (logs) os::fail("Unix socket opening error"); }
+                        if (name.size() > sizeof(sockaddr_un::sun_path) - 1)
+                        {
+                            os::fail("Unix socket path too long");
+                        }
+                        else if ((f = ::socket(AF_UNIX, SOCK_STREAM, 0)) == os::invalid_fd)
+                        {
+                            os::fail("Unix socket opening error");
+                        }
                         else
                         {
-                            r = w;
-                            std::copy(addr.begin(), addr.end(), saddr.sun_path);
-                            auto sock_addr_len = (socklen_t)(sizeof(saddr) - (sizeof(sockaddr_un::sun_path) - (addr.size() + 1)));
-                            if (-1 == ::connect(r, (struct sockaddr*)&saddr, sock_addr_len))
+                            std::copy(name.begin(), name.end(), saddr.sun_path);
+                            auto sock_addr_len = (socklen_t)(sizeof(saddr) - (sizeof(sockaddr_un::sun_path) - (name.size() + 1)));
+                            if (-1 == ::connect(f, (struct sockaddr*)&saddr, sock_addr_len))
                             {
-                                if (logs) os::fail("Connection to '%path%' failed", addr);
-                                os::close(r);
+                                os::fail("Connection to '%path%' failed", name);
+                                os::close(f);
                             }
                         }
                     }
                     else
                     {
-                        auto ipaddr_to_str = [](auto* ipaddr)
-                        {
-                            auto ip_addr = (sockaddr*)ipaddr;
-                            auto family = ip_addr->sa_family;
-                            auto addr = family == AF_INET ? (void*)&(((sockaddr_in*)ip_addr)->sin_addr)
-                                                          : (void*)&(((sockaddr_in6*)ip_addr)->sin6_addr);
-                            auto str = std::array<char, INET6_ADDRSTRLEN + 1>{}; // +1 for trailing null.
-                            ::inet_ntop(family, addr, str.data(), str.size() - 1);
-                            return text{ str.data() };
-                        };
-                        auto str_to_ipaddrs = [](view str)
-                        {
-                            auto addrs = std::vector<sockaddr_in6>{};
-                            if (str == "localhost")
-                            {
-                                addrs.push_back({ .sin6_family = AF_INET });
-                                addrs.push_back({ .sin6_family = AF_INET6 });
-                                ((char*)&(addrs[0].sin6_flowinfo))[0] = 127; // [127.0.0.1]:0
-                                ((char*)&(addrs[0].sin6_flowinfo))[3] = 1;   //
-                                ((char*)&(addrs[1].sin6_addr))[15] = 1; // [::1]:0
-                                std::swap(addrs.front(), addrs.back());
-                            }
-                            else
-                            {
-                                auto& a = addrs.emplace_back();
-                                str.find(':') != text::npos ? a.sin6_family = AF_INET6 : AF_INET;
-                                auto rc = ::inet_pton(a.sin6_family, str.data(), &a.sin6_port);
-                                if (rc != 1) addrs.pop_back();
-                            }
-                            return addrs;
-                        };
-                        //  getaddrinfo() can't be statically linked.
-                        //auto addrs = (addrinfo*)nullptr;
-                        //auto hints = addrinfo{ .ai_family   = AF_UNSPEC,     // Allow IPv4 or IPv6.
-                        //                       .ai_socktype = SOCK_STREAM }; // TCP connection only.
-                        //if (ok(::getaddrinfo(addr.data(), port.data(), &hints, &addrs), "::getaddrinfo()", os::unexpected))
-                        {
-                            log("Host resolved to:");
-                            //for (auto rec = addrs; rec; rec = rec->ai_next)
-                            //{
-                            //    if (logs) log("  %addr%", ipaddr_to_str(rec->ai_addr));
-                            //}
-                            //for (auto rec = addrs; rec; rec = rec->ai_next)
-                            //{
-                            //    auto ip_addr = sockaddr{ *(rec->ai_addr) };
-                            //    auto family = rec->ai_addr->sa_family;
-                            //    if (logs) log("  connect to '%path%:%port%'...", ipaddr_to_str(&ip_addr), port);
-                            //    auto s = ::socket(family, SOCK_STREAM, 0); // protocol=0: TCP is the default streaming socket for the IP protocol suite.
-                            //    if (s == os::invalid_fd) continue;
-                            //    auto addrlen = socklen_t(family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6));
-                            //    if (::connect(s, &ip_addr, addrlen) != -1)
-                            //    {
-                            //        w = s;
-                            //        r = s;
-                            //        break; // Connected.
-                            //    }
-                            //    ::close(s);
-                            //}
-                            //::freeaddrinfo(addrs);
-                            auto addrs = str_to_ipaddrs(addr);
-                            for (auto& ip_addr : addrs)
-                            {
-                                if (logs) log("  %addr%", ipaddr_to_str(&ip_addr));
-                            }
-                            for (auto& ip_addr : addrs)
-                            {
-                                auto family = ip_addr.sin6_family;
-                                if (logs) log("  connect to '[%path%]:%port%'...", ipaddr_to_str(&ip_addr), port);
-                                auto s = ::socket(family, SOCK_STREAM, 0); // protocol=0: TCP is the default streaming socket for the IP protocol suite.
-                                if (s == os::invalid_fd) continue;
-                                auto addrlen = (socklen_t)(family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6));
-                                auto portval = utf::to_int(port, ui16{});
-                                ((byte*)&ip_addr.sin6_port)[0] = (byte)(portval >> 8);
-                                ((byte*)&ip_addr.sin6_port)[1] = (byte)(portval & 0xFF);
-                                if (::connect(s, (sockaddr*)&ip_addr, addrlen) != -1)
-                                {
-                                    w = s;
-                                    r = s;
-                                    break; // Connected.
-                                }
-                                ::close(s);
-                            }
-                            if (logs && w == os::invalid_fd) os::fail("Connection to '[%path%]:%port%' failed", addr, port);
-                        }
+                        os::fail("Connection aborted: Only socket type AF_UNIX is supported (sock_name=%%)", name);
                     }
                 #endif
-                if (r != os::invalid_fd && w != os::invalid_fd)
+                if (f != os::invalid_fd)
                 {
-                    socket = ptr::shared<ipc::stdcon>(r, w);
+                    socket = ptr::shared<ipc::stdcon>(f, f);
                 }
                 return socket;
-            }*/
+            }
         };
 
         auto stdio()
@@ -4033,6 +3999,13 @@ namespace netxs::os
             return h;
         }
     }
+
+    #if !defined(__APPLE__) && !defined(_WIN32)
+}
+        #include "x11.hpp"
+namespace netxs::os
+{
+    #endif
 
     namespace dtvt
     {
@@ -4150,7 +4123,7 @@ namespace netxs::os
                        : proc([&](auto... args){ return io::select(netxs::maxspan, noop{}, args...); }); // Blocking.
 
             #endif
-            if (cfsize)
+            if (cfsize && cfsize < 100 * 1000000) // 100Mb limit for size.
             {
                 dtvt::config.resize(cfsize);
                 auto data = dtvt::config.data();
@@ -4179,46 +4152,71 @@ namespace netxs::os
             if (dtvt::active)
             {
                 log(prompt::os, "DirectVT mode");
-                #if not defined(_WIN32)
+                #if !defined(_WIN32)
                 fdscleanup(); // There are duplicated stdin/stdout handles among the leaked parent process handles, and this prevents them from being closed. Affected ssh, nc, ncat, socat.
                 #endif
                 dtvt::vtmode |= ui::console::direct;
             }
-            else if (!haspty)
-            {
-                dtvt::vtmode |= ui::console::redirio;
-            }
             else
             {
-                dtvt::gridsz = dtvt::consize();
-                if (rungui)
-                {
-                    #if defined(_WIN32)
-                    if (nt::session()) // There is no gui mode in Session0.
+                #if defined(_WIN32)
+                    if (!haspty)
                     {
-                        dtvt::vtmode |= ui::console::gui;
-                        auto processpid = DWORD{};
-                        auto proc_count = ::GetConsoleProcessList(&processpid, 1);
-                        if (1 == proc_count) // Run gui console. Close parent console when we are alone.
+                        dtvt::vtmode |= ui::console::redirio;
+                    }
+                    else
+                    {
+                        dtvt::gridsz = dtvt::consize();
+                        if (rungui)
                         {
-                            os::stdin_fd  = os::invalid_fd;
-                            os::stdout_fd = os::invalid_fd;
-                            os::stderr_fd = os::invalid_fd;
-                            //if constexpr (!debugmode) ::FreeConsole();
-                            ::FreeConsole();
+                            if (nt::session()) // There is no gui mode in Session0.
+                            {
+                                dtvt::vtmode |= ui::console::gui;
+                                auto processpid = DWORD{};
+                                auto proc_count = ::GetConsoleProcessList(&processpid, 1);
+                                if (1 == proc_count) // Run gui console. Close parent console when we are alone.
+                                {
+                                    os::stdin_fd  = os::invalid_fd;
+                                    os::stdout_fd = os::invalid_fd;
+                                    os::stderr_fd = os::invalid_fd;
+                                    ::FreeConsole();
+                                }
+                            }
+                            if (dtvt::vtmode & ui::console::gui)
+                            {
+                                term = "Native GUI console (Win32)";
+                            }
                         }
                     }
-                    #else
-                    if (!haspty) //todo this never happens, see ui::console::redirio above
+                #else
+                    if (haspty)
                     {
-                        dtvt::vtmode |= ui::console::gui;
+                        dtvt::gridsz = dtvt::consize();
                     }
-                    #endif
-                    if (dtvt::vtmode & ui::console::gui)
+                    else
                     {
-                        term = "Native GUI console";
+                        if (os::is_redirio())
+                        {
+                            dtvt::vtmode |= ui::console::redirio;
+                        }
+                        else
+                        {
+                            os::stdin_fd = os::invalid_fd;
+                            os::stdout_fd = os::invalid_fd;
+                            dtvt::vtmode |= ui::console::nostdio;
+                        }
                     }
-                }
+                    if (rungui)
+                    {
+                        #if !defined(__APPLE__)
+                        if (x11::connect())
+                        {
+                            dtvt::vtmode |= ui::console::gui;
+                            term = "Native GUI console (X11)";
+                        }
+                        #endif
+                    }
+                #endif
             }
             if (!dtvt::active && !(dtvt::vtmode & ui::console::redirio) && os::stdin_fd  != os::invalid_fd
                                                                         && os::stdout_fd != os::invalid_fd)
@@ -4711,6 +4709,7 @@ namespace netxs::os
             std::mutex              writemtx{};
             std::condition_variable writesyn{};
             sptr<consrv>            termlink{};
+            bool            last_written_esc{}; // Should we wake up bash readline if it blocks after a single "\x1b". Even SIGHUP is ignored.
 
             operator bool () { return attached; }
 
@@ -4722,6 +4721,7 @@ namespace netxs::os
                     //{
                     //    writesyn.notify_one(); // Interrupt writing thread.
                     //    termlink->abort(termlink->stdinput); // Interrupt reading thread.
+                    //    // implemented in termlink->cleanup (on posix)
                     //}
                     attached.exchange(faux);
                     writesyn.notify_one();
@@ -4771,6 +4771,10 @@ namespace netxs::os
                 {
                     std::swap(cache, writebuf);
                     guard.unlock();
+                    if (cache.size())
+                    {
+                        last_written_esc = cache.back() == '\x1b';
+                    }
                     if (terminal.io_log) log(prompt::cin, "\n\t", utf::replace_all(ansi::hi(utf::debase(cache)), "\n", ansi::pushsgr().nil().add("\n\t").popsgr()));
                     if (termlink->send(cache))
                     {
@@ -4799,6 +4803,12 @@ namespace netxs::os
             }
             auto sighup(bool state = true)
             {
+                if (last_written_esc) // Wake up bash readline if it blocks after a single "\x1b". Even SIGHUP is ignored. // "\x07\x03"
+                {
+                    write("\x07"); //termlink->send("\x07");
+                    std::this_thread::sleep_for(10ms);
+                    //termlink->handle.close(); // This wakes up bash but breaks all app logs while its closing.
+                }
                 if (attached && !signaled.exchange(state))
                 {
                     termlink->sighup();
@@ -4835,16 +4845,21 @@ namespace netxs::os
                     }
                 }
             }
-            void keybd(input::hids& gear, bool decckm, input::keybd::prot encod)
+            void keybd(input::hids& gear, bool decckm, input::keybd::prot encod, si32 kkp_mode = input::kkp::report::undef)
             {
                 using prot = input::keybd::prot;
 
                 if (attached)
                 {
-                    if (encod == prot::w32) termlink->keybd(gear, decckm);
+                    auto kkp_enabled = kkp_mode != input::kkp::report::undef;
+                    if (encod == prot::w32 && !kkp_enabled)
+                    {
+                        termlink->keybd(gear, decckm);
+                    }
                     else
                     {
-                        auto utf8 = gear.interpret(decckm);
+                        auto utf8 = kkp_enabled ? input::kkp::interpret(gear, kkp_mode)
+                                                : input::key::interpret(gear, decckm);
                         auto guard = std::lock_guard{ writemtx };
                         writebuf += utf8;
                         writesyn.notify_one();
@@ -4968,7 +4983,7 @@ namespace netxs::os
                 parser.cout(utf8);
                 #endif
             }
-            else if (!(dtvt::vtmode & (ui::console::redirio | ui::console::direct)))
+            else if (!(dtvt::vtmode & (ui::console::nostdio | ui::console::redirio | ui::console::direct)))
             {
                 io::send(utf8);
             }
@@ -5172,7 +5187,7 @@ namespace netxs::os
                         auto reload_command = "udevadm control --reload-rules";
                         log("Trigger to reload udev rules:\n  ", reload_command);
                         if (0 == ::system(reload_command)) log("    Udev rules successfuly reloaded");
-                        else                               log("    Failed to reload udev rules (%%)", errno);
+                        else                               log("    Failed to reload udev rules (%%)", os::error());
                     }
                     else
                     {
@@ -5576,7 +5591,7 @@ namespace netxs::os
                         else
                         {
                             _k0 = -1;
-                            _k1 = errno;
+                            _k1 = os::error();
                         }
                         auto led_state = si32{ 0 };
                         if (-1 != ::ioctl(os::stdin_fd, KDGKBLED, &led_state))
@@ -5591,7 +5606,7 @@ namespace netxs::os
                         else
                         {
                             _k2 = -1;
-                            _k3 = errno;
+                            _k3 = os::error();
                         }
                     #endif
                     return state;
@@ -6124,14 +6139,14 @@ namespace netxs::os
                     if (ctlstat)
                     {
                         ctlstat--;
-                        if (ctlstat & input::kkp::shift    ) k.ctlstat |= mods::LShift;
-                        if (ctlstat & input::kkp::alt      ) k.ctlstat |= mods::LAlt;
-                        if (ctlstat & input::kkp::ctrl     ) k.ctlstat |= mods::LCtrl;
-                        if (ctlstat & input::kkp::super    ) k.ctlstat |= mods::LSuper;
-                        if (ctlstat & input::kkp::hyper    ) k.ctlstat |= mods::LHyper;
-                        if (ctlstat & input::kkp::meta     ) k.ctlstat |= mods::LAlt;
-                        if (ctlstat & input::kkp::caps_lock) k.ctlstat |= mods::CapsLock;
-                        if (ctlstat & input::kkp::num_lock ) k.ctlstat |= mods::NumLock;
+                        if (ctlstat & kkp::mod::shift    ) k.ctlstat |= mods::LShift;
+                        if (ctlstat & kkp::mod::alt      ) k.ctlstat |= mods::LAlt;
+                        if (ctlstat & kkp::mod::ctrl     ) k.ctlstat |= mods::LCtrl;
+                        if (ctlstat & kkp::mod::super    ) k.ctlstat |= mods::LSuper;
+                        if (ctlstat & kkp::mod::hyper    ) k.ctlstat |= mods::LHyper;
+                        if (ctlstat & kkp::mod::meta     ) k.ctlstat |= mods::LMeta;
+                        if (ctlstat & kkp::mod::caps_lock) k.ctlstat |= mods::CapsLock;
+                        if (ctlstat & kkp::mod::num_lock ) k.ctlstat |= mods::NumLock;
                     }
 
                     k.keycode = input::key::find_abstract_uc(shifted_uc, unshift_uc); // Try to lookup using uc.
@@ -6170,15 +6185,15 @@ namespace netxs::os
                         else
                         {
                             auto& rec = input::key::map::data(k.keycode);
-                            if (k.ctlstat & mods::anyCtrl && rec.KKPCtl != -1)
+                            if (k.ctlstat & mods::anyCtrl && rec.KkpCtl != -1)
                             {
-                                k.cluster = text(1, (char)rec.KKPCtl);
+                                k.cluster = text(1, (char)rec.KkpCtl);
                             }
                             else if (k.ctlstat & mods::anyCtrl && unshift_uc > 0 && unshift_uc < 128)
                             {
                                 k.cluster = text(1, (char)(unshift_uc & 31));
                             }
-                            else if (unshift_uc > 0 && unshift_uc < 57358) // Exclude any function keys.
+                            else if (unshift_uc > 0 && unshift_uc < input::key::kkp_minFx) // Exclude any function keys.
                             {
                                 auto shifted = !!(k.ctlstat & mods::CapsLock) != !!(k.ctlstat & mods::anyShift);
                                 utf::to_utf_from_code(shifted ? shifted_uc : unshift_uc, k.cluster);
@@ -6384,9 +6399,9 @@ namespace netxs::os
                                     mouse(m);
                                     std::swap(prev_buttons, m.buttons);
                                 }
-                                if (!(dtvt::vtmode & ui::console::vt_2D) && dtvt::wheelrate) // Don't accelerate the mouse wheel if we are already inside the vtm.
+                                if (!(dtvt::vtmode & ui::console::vt_2D) && os::dtvt::wheelrate) // Don't accelerate the mouse wheel if we are already inside the vtm.
                                 {
-                                    m.wheelfp *= dtvt::wheelrate;
+                                    m.wheelfp *= os::dtvt::wheelrate;
                                 }
                                 m.wheelsi = (si32)m.wheelfp;
                                 m.changed++;
@@ -6554,7 +6569,7 @@ namespace netxs::os
                             if (e.type == LIBINPUT_EVENT_POINTER_SCROLL_WHEEL)
                             {
                                 wheelfp = -e.libinput_event_pointer_get_scroll_value_v120() / 120.0;
-                                if (dtvt::wheelrate) wheelfp *= dtvt::wheelrate;
+                                if (os::dtvt::wheelrate) wheelfp *= os::dtvt::wheelrate;
                             }
                             else if (e.type == LIBINPUT_EVENT_POINTER_SCROLL_FINGER)
                             {

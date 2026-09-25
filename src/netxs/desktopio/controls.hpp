@@ -24,30 +24,54 @@ namespace netxs
             crop = { ptr, len };
             ::lua_pop(lua, 1);
         }
-        else if (type == LUA_TLIGHTUSERDATA)
+        else if (type == LUA_TTABLE)
         {
-            if (auto object_ptr = (ui::base*)::lua_touserdata(lua, idx)) // Get Object_ptr.
+            auto abs_idx = ::lua_absindex(lua, idx);
+            ::lua_pushstring(lua, "__self");
+            auto raw_type = ::lua_rawget(lua, abs_idx);
+            if (raw_type == LUA_TLIGHTUSERDATA)
             {
+                auto object_ptr = (ui::base*)::lua_touserdata(lua, -1);
                 crop = utf::concat("<object:", object_ptr->id, ">");
             }
+            else
+            {
+                crop = "<table>";
+            }
+            ::lua_pop(lua, 1);
         }
-        else if (extended)
+        else if (extended && type == LUA_TFUNCTION)
         {
-                 if (type == LUA_TFUNCTION) crop = "<function>";
-            else if (type == LUA_TTABLE)    crop = "<table>"; //todo expand table
+            crop = "<function>";
+        }
+        else
+        {
+            crop += "<";
+            crop += ::lua_typename(lua, type);
+            crop += ">";
         }
         return crop;
     }
-    // luna: Push the object name to the stack.
     si32 luna::vtmlua_object2string(lua_State* lua)
     {
         auto crop = text{};
-        if (auto object_ptr = (ui::base*)::lua_touserdata(lua, -1)) // Get Object_ptr.
+        if (::lua_type(lua, 1) == LUA_TTABLE)
         {
-            crop = utf::concat("<object:", object_ptr->id, ">");
+            ::lua_pushstring(lua, "__self");
+            if (::lua_rawget(lua, 1) == LUA_TLIGHTUSERDATA)
+            {
+                if (auto object_ptr = (ui::base*)::lua_touserdata(lua, -1))
+                {
+                    crop = utf::concat("<object:", object_ptr->id, ">");
+                }
+            }
+            ::lua_pop(lua, 1);
         }
-        else crop = "<object>";
-        ::lua_pushstring(lua, crop.data());
+        if (crop.empty())
+        {
+            crop = "<object>";
+        }
+        ::lua_pushlstring(lua, crop.data(), crop.size());
         return 1;
     }
     // luna: Log vars from stack.
@@ -57,20 +81,7 @@ namespace netxs
         auto crop = text{};
         for (auto i = 1; i <= n; i++)
         {
-            auto t = ::lua_type(lua, i);
-            switch (t)
-            {
-                case LUA_TBOOLEAN:
-                case LUA_TNUMBER:
-                case LUA_TSTRING:
-                    crop += luna::vtmlua_torawstring(lua, i);
-                    break;
-                default:
-                    crop += "<";
-                    crop += ::lua_typename(lua, t);
-                    crop += ">";
-                    break;
-            }
+            crop += luna::vtmlua_torawstring(lua, i, true);
         }
         log("", crop);
         return 0;
@@ -107,25 +118,33 @@ namespace netxs
     si32 luna::vtmlua_vtm_subindex(lua_State* lua)
     {
         // Stack:
-        //      1. lua's object_ptr.
+        //      1. proxy table (with object_ptr).
         //      2. fx name.
-        ::lua_pushcclosure(lua, luna::vtmlua_call_method, 2);
+        ::lua_getfield(lua, 1, "__self"); // Get the reference to the object and push it to the stack top [3.] (-1)
+        ::lua_insert(lua, 2); // Swap the fx name (2.) and object_ptr (3.).
+        // Stack:
+        //      1. proxy table
+        //      2. lightuserdata (__self)
+        //      3. fx name
+        ::lua_pushcclosure(lua, luna::vtmlua_call_method, 2); // Create closure, capturing 2 top stack elements (ptr+name).
         return 1;
     }
     si32 luna::vtmlua_cfg_subindex(lua_State* lua)
     {
         // Stack:
-        //      1. ptr to settings&.
-        //      2. settings path.
-        auto v = text{};
-        if (auto config_ptr = (settings*)::lua_touserdata(lua, 1))
+        //      1. proxy table (vtm.config).
+        //      2. settings path (key name).
+        ::lua_getfield(lua, 1, "__self"); // Get the reference to the settings and push it to the stack top [3.] (-1)
+        auto config_ptr = (settings*)::lua_touserdata(lua, -1);
+        ::lua_pop(lua, 1); // Pop the reference.
+        if (config_ptr)
         {
             auto len = size_t{};
             auto ptr = ::lua_tolstring(lua, 2, &len);
             auto frompath = qiew{ ptr, len };
             if (auto item_ptr = config_ptr->find_context_ptr(frompath))
             {
-                v = config_ptr->take_value(item_ptr);
+                auto v = config_ptr->take_value(item_ptr);
                 ::lua_pushlstring(lua, v.data(), v.size());
                 return 1;
             }
@@ -233,17 +252,27 @@ namespace netxs
         {
             auto object_name = luna::vtmlua_torawstring(lua, 2);
             auto& source_ctx = indexer.context_refs.back().get();
+            //log("object_name=", object_name);
             if (object_name == "config")
             {
-                //log("object_name=", object_name);
+                ::lua_createtable(lua, 0, 1); // Create proxy-table for config.
                 ::lua_pushlightuserdata(lua, &indexer.config); // Push address of the config instance.
+                ::lua_setfield(lua, -2, "__self"); // Store reference inside.
                 ::luaL_setmetatable(lua, "cfg_submetaindex"); // Set the cfg_submetaindex for table at -1.
+                return 1;
+            }
+            else if (object_name == "keys")
+            {
+                ::lua_createtable(lua, 0, 0); // Create an empty proxy table.
+                ::luaL_setmetatable(lua, "keys_submetaindex"); // Link it with existing metatable keys_submetaindex (make it read only).
                 return 1;
             }
             else if (auto target_ptr = indexer.get_target(source_ctx, object_name))
             {
                 //if constexpr (debugmode) log("       selected: ", netxs::events::script_ref::to_string(target_ptr->get_scripting_context()));
+                ::lua_createtable(lua, 0, 1); // Create proxy-table for target.
                 ::lua_pushlightuserdata(lua, target_ptr); // Push object ptr.
+                ::lua_setfield(lua, -2, "__self"); // Store target_ptr.
                 ::luaL_setmetatable(lua, "vtm_submetaindex"); // Set the vtm_submetaindex for table at -1.
                 //todo keep target_ptr locked until we are inside the lua
                 return 1;
@@ -355,12 +384,21 @@ namespace netxs
             else if constexpr (std::is_same_v<std::decay_t<T>, twod>) return twod{ ::lua_tonumber(lua, idx), ::lua_tonumber(lua, idx + 1) };
             else if constexpr (std::is_same_v<std::decay_t<T>, sptr<ui::base>>)
             {
-                if (auto ptr = (ui::base*)::lua_touserdata(lua, idx)) // Get ui::base*.
+                auto object_ptr = sptr<ui::base>{};
+                if (type == LUA_TTABLE)
                 {
-                    auto object_ptr = ptr->This();
-                    return object_ptr;
+                    auto abs_idx = ::lua_absindex(lua, idx);
+                    ::lua_pushstring(lua, "__self");
+                    auto raw_type = ::lua_rawget(lua, abs_idx); // Push ptr to stack.
+                    if (raw_type == LUA_TLIGHTUSERDATA)
+                    if (auto ptr = (ui::base*)::lua_touserdata(lua, -1))
+                    {
+                        object_ptr = ptr->This();
+                    }
+                    //luna::vtmlua_log(lua);
+                    ::lua_pop(lua, 1); // Pop ptr from stack.
                 }
-                return sptr<ui::base>{};
+                return object_ptr;
             }
         }
         if constexpr (is_string_v || is_cstring_v) return text{ fallback };
@@ -401,6 +439,7 @@ namespace netxs
         auto error = ::luaL_loadbuffer(lua, script_body.data(), script_body.size(), "inlined script body")
                   || ::lua_pcall(lua, 0, 1, 0);
         auto result = text{};
+        auto base_top = ::lua_gettop(lua);
         if (error)
         {
             result = ::lua_tostring(lua, -1);
@@ -410,7 +449,7 @@ namespace netxs
         {
             result = luna::vtmlua_torawstring(lua, -1);
         }
-        ::lua_settop(lua, 0);
+        ::lua_settop(lua, base_top);
         return result;
     }
     text luna::run(luna::context_t& context, view script_body, auto&& param)
@@ -424,6 +463,7 @@ namespace netxs
         indexer.script_param.push_back(std::ref((T&)param));
 
         auto error = faux;
+        auto base_top = ::lua_gettop(lua);
         if (push_function_id(script_body))
         {
             if (::lua_rawget(lua, -2) == LUA_TFUNCTION) // It is precompiled.
@@ -433,6 +473,7 @@ namespace netxs
             }
             else // It is not precompiled.
             {
+                ::lua_pop(lua, 1); // Pop nil after the ::lua_rawget() call.
                 //if constexpr (debugmode) log("It is not precompiled");
                 error = ::luaL_loadbuffer(lua, script_body.data(), script_body.size(), "script body")
                      || ::lua_pcall(lua, 0, 0, 0);
@@ -452,7 +493,7 @@ namespace netxs
         {
             result = luna::vtmlua_torawstring(lua, -1);
         }
-        ::lua_settop(lua, 0);
+        ::lua_settop(lua, base_top);
         return result;
     }
     text luna::run_script(ui::base& boss, view script_body, auto&& param)
@@ -493,22 +534,16 @@ namespace netxs
     }
     bool luna::push_function_id(view script_body)
     {
-        ::lua_settop(lua, 0);
         // Get a table of precompiled functions from the registry.
         ::lua_pushstring(lua, "precompiled"); // Push internal registry key 'precompiled'.
         if (::lua_gettable(lua, LUA_REGISTRYINDEX) == LUA_TTABLE) // Retrieve address of 'precompiled' and push it to the stack at -1.
         {
-            auto script_id = script_body.data();
-            auto memory_id = reinterpret_cast<char const*>(&script_id);
-            auto lua_fx_id = view{ memory_id, sizeof(script_id) };
-            //if constexpr (debugmode) log("Function id='%%'", utf::debase437(lua_fx_id));
-            ::lua_pushlstring(lua, lua_fx_id.data(), lua_fx_id.size());
+            ::lua_pushlstring(lua, script_body.data(), script_body.size());
             return true;
         }
         else
         {
             log("%%The table of precompiled functions is missing", prompt::lua);
-            ::lua_settop(lua, 0);
             return faux;
         }
     }
@@ -519,6 +554,7 @@ namespace netxs
             auto& [ref_count, script_body] = *script_body_ptr;
             if (script_body.size())
             {
+                auto base_top = ::lua_gettop(lua);
                 if (push_function_id(script_body))
                 {
                     ::lua_pushvalue(lua, -1); // Duplicate lua_fx_id string.
@@ -529,7 +565,7 @@ namespace netxs
                     }
                     else // It is not precompiled yet.
                     {
-                        ::lua_pop(lua, 1);  // Pop nil after the ::lua_rawget() call.
+                        ::lua_pop(lua, 1); // Pop nil after the ::lua_rawget() call.
                         auto error = ::luaL_loadbuffer(lua, script_body.data(), script_body.size(), "script");
                         if (error)
                         {
@@ -545,7 +581,7 @@ namespace netxs
                             ++ref_count;
                         }
                     }
-                    ::lua_settop(lua, 0);
+                    ::lua_settop(lua, base_top);
                 }
             }
         }
@@ -557,13 +593,14 @@ namespace netxs
             auto& [ref_count, script_body] = *script_body_ptr;
             if (ref_count && --ref_count == 0)
             {
+                auto base_top = ::lua_gettop(lua);
                 if (push_function_id(script_body))
                 {
                     ::lua_pushnil(lua);
                     ::lua_rawset(lua, -3); // Remove rec from the table (because of nil) and pop key and val from stack.
                     //if constexpr (debugmode) log("Drop: Precompiled function counter: %%", get_table_size());
-                    ::lua_settop(lua, 0);
                 }
+                ::lua_settop(lua, base_top);
             }
         }
     }
@@ -627,7 +664,8 @@ namespace netxs
             ::lua_setglobal(lua, basename::vtm.data()); // Set global var "vtm". Pop "vtm".
 
         // Define vtm.* redirecting metatable.
-        static auto vtm_submetaindex = std::to_array<luaL_Reg>({{ "__index", luna::vtmlua_vtm_subindex },
+        static auto vtm_submetaindex = std::to_array<luaL_Reg>({{ "__index",    luna::vtmlua_vtm_subindex },
+                                                                { "__tostring", luna::vtmlua_object2string },
                                                                 { nullptr, nullptr }});
         ::luaL_newmetatable(lua, "vtm_submetaindex"); // Create a new metatable in registry and push it to the stack.
         ::luaL_setfuncs(lua, vtm_submetaindex.data(), 0); // Assign metamethods for the table which at the top of the stack.
@@ -637,6 +675,38 @@ namespace netxs
                                                                 { nullptr, nullptr }});
         ::luaL_newmetatable(lua, "cfg_submetaindex"); // Create a new metatable in registry and push it to the stack.
         ::luaL_setfuncs(lua, cfg_submetaindex.data(), 0); // Assign metamethods for the table which at the top of the stack.
+
+        // Define vtm.keys redirecting metatable.
+        ::lua_createtable(lua, 0, input::key::lastKey); // Create a new table and push it to the stack.
+        for (auto keycode = input::key::undef; keycode < input::key::lastKey; keycode++) // Fill the table with input::key::<key> records.
+        {
+            auto& keyrec = input::key::map::_key_map()[keycode];
+            if (keyrec.name.size())
+            {
+                ::lua_createtable(lua, 0, 7); // Create subtable and reserve 7 fields.
+                ::lua_pushinteger(lua, (lua_Integer)keycode);
+                ::lua_setfield(lua, -2, "keycode");
+                ::lua_pushlstring(lua, keyrec.generic.data(), keyrec.generic.size());
+                ::lua_setfield(lua, -2, "generic");
+                ::lua_pushinteger(lua, (lua_Integer)keyrec.vkey);
+                ::lua_setfield(lua, -2, "virtcod");
+                ::lua_pushinteger(lua, (lua_Integer)keyrec.scan);
+                ::lua_setfield(lua, -2, "scancod");
+                ::lua_pushboolean(lua, keyrec.extflag);
+                ::lua_setfield(lua, -2, "extflag");
+                ::lua_pushboolean(lua, keyrec.edit);
+                ::lua_setfield(lua, -2, "is_editkey");
+                ::lua_pushboolean(lua, keyrec.KkpIsFx);
+                ::lua_setfield(lua, -2, "is_functional");
+                // Stack: [-1] -> new subtable (keyrec), [-2] -> keys_submetaindex.
+                ::lua_setfield(lua, -2, keyrec.name.data()); // Assign keys_submetaindex[keyrec.name] and pop subtable from the stack.
+            }
+        }
+        ::lua_setfield(lua, LUA_REGISTRYINDEX, "vtm_keys_data"); // Store key map as vtm_keys_data.
+        ::luaL_newmetatable(lua, "keys_submetaindex"); // Create proxy metatable.
+        ::lua_getfield(lua, LUA_REGISTRYINDEX, "vtm_keys_data");
+        ::lua_setfield(lua, -2, "__index"); // keys_submetaindex.__index = vtm_keys_data
+        ::lua_pop(lua, 1); // Pop it from stack.
     }
     luna::~luna()
     {
@@ -1844,42 +1914,67 @@ namespace netxs::ui
             };
             struct chain_t
             {
-                struct dest_t
-                {
-                    wptr next_wptr; // next hop wptr.
-                    si32 status{}; // dead, live or idle.
-                };
+                using list = std::list<netxs::sptr<auth::next_focused_t>>;
 
-                si32              active{}; // focus: The endpoint focus state.
-                hook              token;    // focus: Cleanup token.
-                std::list<dest_t> next;     // focus: Focus next hop list.
+                si32 active; // focus: The endpoint focus state.
+                hook token;  // focus: Cleanup token.
+                list next;   // focus: Focus next hop list.
+
+                chain_t()
+                    : active{ state::dead }
+                { }
+                chain_t(chain_t&&) = default;
+                chain_t(chain_t const& other)
+                    : active{ other.active },
+                       token{ other.token }
+                {
+                    for (auto& n : other.next) // Make a deep copy of the next hop list.
+                    {
+                        next.push_back(ptr::shared(*n));
+                    }
+                }
+                chain_t& operator = (chain_t&&) = default;
 
                 template<class P>
-                auto foreach(P proc)
+                auto foreach(auth& indexer, P proc)
                 {
-                    static constexpr auto Plain = std::is_same_v<void, std::invoke_result_t<decltype(proc), base&, si32&>>;
-                    auto head = next.begin();
-                    while (head != next.end())
+                    static constexpr auto Plain = std::is_same_v<void, std::invoke_result_t<decltype(proc), base&, netxs::sptr<auth::next_focused_t>&>>;
+
+                    auto& next_copy = indexer.focus_tree_copy;
+                    auto cached_head = next_copy.size();
+                    next_copy.reserve(cached_head + next.size());
+                    next.remove_if([&](auto& item_sptr)
                     {
-                        if (auto nexthop_ptr = head->next_wptr.lock())
+                        auto expired = item_sptr->next_wptr.expired();
+                        if (!expired)
+                        {
+                            next_copy.push_back(item_sptr);
+                        }
+                        return expired;
+                    });
+                    auto cached_tail = next_copy.size();
+
+                    auto head = cached_head;
+                    while (head != cached_tail)
+                    {
+                        auto& next_rec_wptr = next_copy[head++]; // Use index because next_copy could be reallocated.
+                        if (auto next_rec_sptr = next_rec_wptr.lock())
+                        if (auto nexthop_ptr = next_rec_sptr->next_wptr.lock())
                         {
                             auto& nexthop = *nexthop_ptr;
-                            auto& status = head->status;
-                            head++;
                             if constexpr (Plain)
                             {
-                                proc(nexthop, status);
+                                proc(nexthop, next_rec_sptr);
                             }
                             else
                             {
-                                if (!proc(nexthop, status)) break;
+                                if (!proc(nexthop, next_rec_sptr)) break;
                             }
                         }
-                        else
-                        {
-                            head = next.erase(head);
-                        }
                     }
+
+                    //next.remove_if([&](auto& item_sptr){ return item_sptr->next_wptr.expired(); });
+                    next_copy.resize(cached_head);
                 }
             };
 
@@ -1895,7 +1990,7 @@ namespace netxs::ui
             ui64 digest;    // focus: .
             si32 weight;    // focus: Focusable object weight.
 
-            auto add_chain(id_t gear_id, chain_t new_chain = { .active = state::dead })
+            auto add_chain(id_t gear_id, chain_t new_chain = {})
             {
                 auto iter = gears.emplace(gear_id, std::move(new_chain)).first;
                 if (gear_id)
@@ -2080,8 +2175,9 @@ namespace netxs::ui
                     if (chain.active == state::live)
                     {
                         auto is_leaf = true;
-                        chain.foreach([&](auto& nexthop, auto& status)
+                        chain.foreach(boss.bell::indexer, [&](auto& nexthop, auto& next_rec_sptr)
                         {
+                            auto& status = next_rec_sptr->status;
                             if (status == state::live)
                             {
                                 is_leaf = faux;
@@ -2206,8 +2302,9 @@ namespace netxs::ui
                     auto ou_keystat = gear.keystat;
                     auto in_handled = gear.handled;
                     auto ou_handled = gear.handled;
-                    chain.foreach([&](auto& nexthop, auto& status)
+                    chain.foreach(boss.bell::indexer, [&](auto& nexthop, auto& next_rec_sptr)
                     {
+                        auto& status = next_rec_sptr->status;
                         if (status == state::live)
                         {
                             sent = true;
@@ -2244,8 +2341,9 @@ namespace netxs::ui
                     auto& chain = get_chain(seed.gear_id);
                     if (notify_focus_state(state::idle, chain, seed.gear_id))
                     {
-                        chain.foreach([&](auto& nexthop, auto& status)
+                        chain.foreach(boss.bell::indexer, [&](auto& nexthop, auto& next_rec_sptr)
                         {
+                            auto& status = next_rec_sptr->status;
                             if (status == state::live)
                             {
                                 status = state::idle;
@@ -2272,7 +2370,7 @@ namespace netxs::ui
                                 boss.base::signal(tier::release, input::events::focus::set::on, seed);
                             }
                         }
-                        chain.foreach([&](auto& nexthop, auto& /*status*/)
+                        chain.foreach(boss.bell::indexer, [&](auto& nexthop, auto& /*next_rec_sptr*/)
                         {
                             nexthop.base::signal(tier::request, input::events::focus::dup, seed);
                         });
@@ -2304,8 +2402,9 @@ namespace netxs::ui
                     if (node_type != mode::relay)
                     {
                         auto allow_focusize = node_type == mode::focused || node_type == mode::focusable;
-                        chain.foreach([&](auto& nexthop, auto& status)
+                        chain.foreach(boss.bell::indexer, [&](auto& nexthop, auto& next_rec_sptr)
                         {
+                            auto& status = next_rec_sptr->status;
                             if (status != state::dead || (!allow_focusize && prev_state == state::dead)) // Focusing a dead item activates a whole dead branch upto a focusable item.
                             {
                                 status = state::live;
@@ -2334,8 +2433,9 @@ namespace netxs::ui
                             auto& chain = get_chain(seed.gear_id);
                             if (allow_focusize && seed.focus_type == solo::on) // Cut a downstream focus branch.
                             {
-                                chain.foreach([&](auto& nexthop, auto& status)
+                                chain.foreach(boss.bell::indexer, [&](auto& nexthop, auto& next_rec_sptr)
                                 {
+                                    auto& status = next_rec_sptr->status;
                                     if (status == state::live)
                                     {
                                         status = state::dead;
@@ -2352,8 +2452,9 @@ namespace netxs::ui
                         if (seed.focus_type == solo::on)
                         {
                             auto exists = faux;
-                            chain.foreach([&](auto& nexthop, auto& status)
+                            chain.foreach(boss.bell::indexer, [&](auto& nexthop, auto& next_rec_sptr)
                             {
+                                auto& status = next_rec_sptr->status;
                                 if (&nexthop == seed.item.get())
                                 {
                                     status = state::live;
@@ -2367,23 +2468,24 @@ namespace netxs::ui
                             });
                             if (!exists)
                             {
-                                chain.next.push_back({ wptr{ seed.item }, state::live });
+                                chain.next.push_back(ptr::shared(auth::next_focused_t{ wptr{ seed.item }, state::live }));
                             }
                         }
                         else // Group focus.
                         {
-                            auto iter = std::find_if(chain.next.begin(), chain.next.end(), [&](auto& n){ return n.next_wptr.lock() == seed.item; });
+                            auto iter = std::find_if(chain.next.begin(), chain.next.end(), [&](auto& n){ return n->next_wptr.lock() == seed.item; });
                             if (iter == chain.next.end())
                             {
-                                chain.next.push_back({ wptr{ seed.item }, state::live });
+                                chain.next.push_back(ptr::shared(auth::next_focused_t{ wptr{ seed.item }, state::live }));
                             }
                             else
                             {
-                                iter->status = state::live;
+                                (*iter)->status = state::live;
                                 if (seed.gear_id) // Seal the || branches.
                                 {
-                                    chain.foreach([&](auto& /*nexthop*/, auto& status)
+                                    chain.foreach(boss.bell::indexer, [&](auto& /*nexthop*/, auto& next_rec_sptr)
                                     {
+                                        auto& status = next_rec_sptr->status;
                                         if (status == state::idle)
                                         {
                                             status = state::dead;
@@ -2422,10 +2524,11 @@ namespace netxs::ui
                     {
                         auto focusable = node_type == mode::focused || node_type == mode::focusable;
                         auto last_step = chain.next.size() > 1 || focusable;
-                        chain.foreach([&](auto& nexthop, auto& status)
+                        chain.foreach(boss.bell::indexer, [&](auto& nexthop, auto& next_rec_sptr)
                         {
                             if (&nexthop == seed.item.get())
                             {
+                                auto& status = next_rec_sptr->status;
                                 status = last_step ? state::dead : state::idle;
                             }
                         });
@@ -2476,8 +2579,8 @@ namespace netxs::ui
                     {
                         chain.next.remove_if([&](auto& next) // Drop all downlinks (toward inside) from the boss.
                         {
-                            auto match = next.next_wptr.lock() == seed.item;
-                            if (match && gear_id && next.status == state::live)
+                            auto match = next->next_wptr.lock() == seed.item;
+                            if (match && gear_id && next->status == state::live)
                             {
                                 seed.gear_id = gear_id;
                                 seed.item->base::signal(tier::release, input::events::focus::set::off, seed);
@@ -2493,17 +2596,15 @@ namespace netxs::ui
                     auto next_ptr = seed.next;
                     for (auto& [gear_id, chain] : gears)
                     {
-                        auto iter = chain.next.begin();
-                        while (iter != chain.next.end())
+                        chain.foreach(boss.bell::indexer, [&](auto& nexthop, auto& next_rec_sptr)
                         {
-                            auto& r = *iter++;
-                            auto item_ptr = r.next_wptr.lock();
-                            if (!item_ptr || item_ptr == next_ptr)
+                            if (nexthop.id == next_ptr->id)
                             {
-                                iter = chain.next.erase(iter);
+                                chain.next.remove_if([&](auto& chain_rec_sptr){ return next_rec_sptr == chain_rec_sptr; });
                             }
-                            else if (item_ptr == prev_ptr)
+                            else if (nexthop.id == prev_ptr->id)
                             {
+                                auto& r = *next_rec_sptr;
                                 r.next_wptr = next_ptr;
                                 if (gear_id && r.status == state::live)
                                 {
@@ -2511,7 +2612,7 @@ namespace netxs::ui
                                     next_ptr->base::signal(tier::release, input::events::focus::set::on,  { .gear_id = gear_id, .treeid = treeid, .digest = ++digest });
                                 }
                             }
-                        }
+                        });
                     }
                 };
                 // pro::focus: .
@@ -2548,8 +2649,9 @@ namespace netxs::ui
                         auto& chain = iter->second;
                         if (chain.active == state::live)
                         {
-                            chain.foreach([&](auto& /*nexthop*/, auto& status)
+                            chain.foreach(boss.bell::indexer, [&](auto& /*nexthop*/, auto& next_rec_sptr)
                             {
+                                auto& status = next_rec_sptr->status;
                                 if (status == state::live)
                                 {
                                     gear_test.second++;
@@ -3029,7 +3131,7 @@ namespace netxs::ui
             {
                 if (!area) return;
                 auto lt = rect{ area.coor - dot_11, dot_11 };
-                auto rb = rect{ area.coor + area.size, dot_11 };;
+                auto rb = rect{ area.coor + area.size, dot_11 };
                 auto rt = rect{{ rb.coor.x, lt.coor.y }, dot_11 };
                 auto lb = rect{{ lt.coor.x, rb.coor.y }, dot_11 };
                 canvas.fill(lt, cell::shaders::shadow(x3y3));
