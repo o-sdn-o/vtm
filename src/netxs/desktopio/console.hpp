@@ -526,6 +526,10 @@ namespace netxs::ui
                     os_user_id        = utf::concat("[", userid, ":", session_id, "]");
                     title             = os_user_id;
                     background_color  = config.settings::take("/config/desktop/background/color", cell{}.fgc(whitedk).bgc(0xFF000000));
+                    if (!(legacy_mode & ui::console::gui)) // Suppress desktop background transparency in non-GUI mode.
+                    {
+                        background_color.bgc().alpha(0xFF);
+                    }
                     auto utf8_tile    = config.settings::take("/config/desktop/background/tile", ""s);
                     if (utf8_tile.size())
                     {
