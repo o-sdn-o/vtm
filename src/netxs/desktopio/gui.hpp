@@ -4356,6 +4356,12 @@ namespace netxs::gui
                     {
                         change_cell_size(faux, wheelfp, center);
                         sync_cellsz();
+                        if (hit_grips())
+                        {
+                            auto inner_rect = blinky.area;
+                            auto coord = mouse_get_pos();
+                            szgrip.calc(inner_rect, coord, border, dent{}, cellsz);
+                        }
                         update_gui();
                     };
                     if (enqueue) base::enqueue([zoom](auto& /*boss*/){ zoom(); });
