@@ -334,6 +334,15 @@ namespace netxs::x11
             ui32 long_offset = 0; // Requested payload offset from beginning in quads.
             ui32 long_length = 1; // Requested payload length in quads.
         };
+        struct set_selection_owner // Opcode 22 (set clipboard owner).
+        {
+            byte opcode   = 22;
+            byte pad      = 0;
+            ui16 length   = 4;
+            ui32 owner_id;     // wm window id.
+            ui32 selection_id; // "CLIPBOARD" atom.
+            ui32 time     = 0; // last_x11_timestamp or 0 (CurrentTime).
+        };
         struct send_event // Opcode 25 (send event).
         {
             struct reply // client_message
@@ -341,7 +350,7 @@ namespace netxs::x11
                 byte type;          // 33: ClientMessage. (or 35: GenericEvent?)
                 byte format;        // Data word format: 8, 16, 32 bits.
                 ui16 sequence;
-                // Payload header:
+                // Payload body:
                 ui32 originator_id; // Originator window id.
                 ui32 message_type;  // Atom message id (a-la WIN32_WM_USER).
                 ui32 serial;        // Serial number to sync replay.
@@ -355,17 +364,17 @@ namespace netxs::x11
             ui16 length     = 11;
             ui32 destination_id;  // Destination window id.
             ui32 event_mask = 0;  // 0 for ClientMessage.
-            byte type       = 33; // 33: ClientMessage.
+            // Payload header:
+            byte event_type = 33; // e.g., 33: ClientMessage.
             byte format     = 32; // Data format: 8, 16, 32 bits.
             ui16 sequence   = {};
-            // Payload header:
+            // Payload body:
             ui32 originator_id;   // Originator window id.
             ui32 message_type;    // Atom message id (a-la WIN32_WM_USER).
-            ui32 serial      = 0; // data[0]: Serial number to sync replay. =Protocols atom for WM_PROTOCOLS.
-            ui32 command     = 0; // data[1]: User data.
-            ui32 lParam      = 0; // data[2]: User data: =data_length if command==cmd_w_data.
-            // User data start:
-            ui32 data32[2] = {};  // data[3,4]: User data.
+            ui32 serial     = 0;  // data[0]: Serial number to sync replay. =Protocols atom for WM_PROTOCOLS.
+            ui32 command    = 0;  // data[1]: User data.
+            ui32 lParam     = 0;  // data[2]: User data: =data_length if command==cmd_w_data.
+            ui32 data32[2]  = {}; // data[3,4]: User data.
             struct chunk // Subsequent chunk. Chunk count = data_length <= 4*2 ? 0 : (data_length-4*2 + 6*4-1) / 6*4.
             {
                 byte type;      // 33: ClientMessage. (or 35: GenericEvent?)
@@ -1731,6 +1740,18 @@ namespace netxs::x11
             byte state;     // 0: PropertyNewValue, 1: PropertyDelete.
             byte pad1[15];
         };
+        struct selection_request // Type 31 (request clipboard).
+        {
+            byte type;
+            byte pad;
+            ui16 sequence;
+            ui32 time;
+            ui32 owner_window_id;     // Clipboard owner window id (wm_hWnd).
+            ui32 requestor_window_id; // Remote window id.
+            ui32 selection_id;        // Atom "CLIPBOARD".
+            ui32 target_id;           // Required clipboard format (atom UTF8_STRING/TARGETS).
+            ui32 property_id;         // Destination property id of remote window.
+        };
         using client_message = x11::req::send_event::reply;
     }
     template<class T>
@@ -1980,6 +2001,8 @@ namespace netxs::x11
         ui32                                  atom_string = 0;
         ui32                                  atom_utf8_string = 0;
         ui32                                  atom_window = 0;
+        ui32                                  atom_clipboard = 0;
+        ui32                                  atom_targets = 0;
         ui32                                  atom_net_active_window = 0;
         ui32                                  atom_net_number_of_desktops = 0;
         ui32                                  atom_net_current_desktop = 0;
@@ -2660,6 +2683,8 @@ namespace netxs::x11
             // Server related.
             atom_atom                   = get_atom_id("ATOM",             faux);
             atom_window                 = get_atom_id("WINDOW",           faux);
+            atom_clipboard              = get_atom_id("CLIPBOARD",        faux);
+            atom_targets                = get_atom_id("TARGETS",          faux);
             atom_string                 = get_atom_id("STRING",           faux);
             atom_cardinal               = get_atom_id("CARDINAL",         faux);
             atom_wm_transient_for       = get_atom_id("WM_TRANSIENT_FOR", faux);
