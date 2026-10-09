@@ -3327,7 +3327,9 @@ namespace netxs::gui
             }
             void handle(s11n::xs::clipdata_request lock)
             {
-                s11n::recycle_cliprequest(intio, lock);
+                auto clipdata_lock = s11n::clipdata.freeze();
+                owner.clipboard_get(clipdata_lock.thing);
+                s11n::recycle_cliprequest(intio, clipdata_lock, lock);
             }
             //todo use xs::screenmode
             void handle(s11n::xs::fullscrn       /*lock*/)
@@ -3622,6 +3624,7 @@ namespace netxs::gui
         virtual void window_make_topmost(bool) = 0;
 
         virtual void clipboard_set(input::clipdata& clipdata) = 0;
+        virtual void clipboard_get(input::clipdata& /*clipdata*/) {}
         virtual void sync_os_settings() = 0;
 
         void window_send_command(arch target, si32 command, arch lParam = {})
@@ -7570,6 +7573,11 @@ namespace netxs::gui
                                                           .selection_id = session.atom_clipboard,
                                                           .time         = last_x11_timestamp });
         }
+        void clipboard_get(input::clipdata& clipdata)
+        {
+            session.get_clipboard(clipdata);
+            clipdata.set();
+        }
         bool keybd_test_pressed(si32 virtcod, si32 key_all = 0)
         {
             return keybd_test_pressed_ex(virtcod, key_all);
@@ -8494,9 +8502,9 @@ namespace netxs::gui
                         {
                             if constexpr (debugmode) log("Request atom_net_workarea value");
                             session.sendrq<x11::req::get_property>({ .window_id   = session.root_window_id,
-                                                                        .property    = session.atom_net_workarea,
-                                                                        .prop_type   = session.atom_cardinal,
-                                                                        .long_length = 4 }, {},
+                                                                     .property    = session.atom_net_workarea,
+                                                                     .prop_type   = session.atom_cardinal,
+                                                                     .long_length = 4 }, {},
                             [&](auto& ev, view payload)
                             {
                                 if (ev.type == x11::event::Error)
@@ -8613,6 +8621,7 @@ namespace netxs::gui
                         }
                         else if (sr.target_id == session.atom_utf8_string || sr.target_id == session.atom_string) // Send clipboard text data.
                         {
+                            //todo use INCR for large utf8 blocks
                             if constexpr (debugmode) log(ansi::clr(greenlt, utf::fprint("clipboard data requested. data sent: '%%'", utf::debase437(clipdata.utf8))));
                             session.accumrq(batch_buffer, x11::req::change_property{ .window_id = sr.requestor_window_id,
                                                                                      .property  = sr.property_id,
