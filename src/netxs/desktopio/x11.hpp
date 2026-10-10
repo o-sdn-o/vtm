@@ -2782,6 +2782,7 @@ namespace netxs::x11
         auto _get_atom_name(ui32 atom)
         {
             auto atom_name = text{};
+            sync_buffer.clear();
             auto seq_num = syncrq(sync_buffer, x11::req::get_atom_name{ .atom = atom });
             if constexpr (debugmode) log("get_atom_name: atom=0x%% seq=%%", utf::to_hex(atom), seq_num);
             sync_x11connection->send(sync_buffer);
@@ -2830,6 +2831,7 @@ namespace netxs::x11
                     std::memcpy(dest_buffer.data() + initial_size, sync_buffer.data(), chunk_size * sizeof(item_t));
                 }
             };
+            sync_buffer.clear();
             auto seq_num = syncrq(sync_buffer, x11::req::get_property{ .remove      = 0,
                                                                        .window_id   = window_id,
                                                                        .property    = property_id,   // e.g., atom_vtm_clipboard
@@ -2892,10 +2894,10 @@ namespace netxs::x11
                                 }
                             }
                         }
-                        sync_buffer.clear();
                         // Request to remove data if required.
                         if (remove)
                         {
+                            sync_buffer.clear();
                             syncrq(sync_buffer, x11::req::get_property{ .remove      = 1, // 1: Remove property.
                                                                         .window_id   = sync_msg_window_id,
                                                                         .property    = property_id,
@@ -2907,10 +2909,25 @@ namespace netxs::x11
                 }
                 if (ev.sequence == seq_num) break;
             }
+            sync_buffer.clear();
         }
-        auto _get_clipboard_format_list(ui32 atom)
+        auto _sync_filter_unexpected(x11::event::any& ev)
         {
-            //
+            auto type = ev.type & 0x7f;
+            if (type == x11::event::Error)
+            {
+                if constexpr (debugmode) log(ansi::clr(reddk, utf::fprint("got error: seq=%% error: %%", ev.sequence, get_error(ev))));
+                return faux;
+            }
+            else if (type == x11::event::Reply && ev.length) // Consume all unexpected payload.
+            {
+                if constexpr (debugmode) log(ansi::clr(greenlt, utf::fprint("unexpected reply with %% bytes in payload", ev.length * 4)));
+                sync_buffer.assign(ev.length * 4, '\0');
+                sync_x11connection->recv_all(sync_buffer.data(), sync_buffer.size());
+                sync_buffer.clear();
+                return faux;
+            }
+            return true;
         }
         void get_clipboard(input::clipdata& clipdata)
         {
@@ -2918,28 +2935,54 @@ namespace netxs::x11
             clipdata.utf8 = {};
             clipdata.form = mime::textonly;
             clipdata.hash = datetime::now();
+            // Request format list (TARGETS).
+            if constexpr (debugmode) log(ansi::clr(yellowlt, "Requesting clipboard format list"));
             auto seq_num = syncrq(sync_buffer, x11::req::convert_selection{ .requestor_window_id = sync_msg_window_id,
                                                                             .selection_id        = atom_clipboard,
-                                                                            .target_id           = atom_utf8_string,
+                                                                            .target_id           = atom_targets, // TARGETS
                                                                             .property_id         = atom_vtm_clipboard,
-                                                                            .time                = 0 }); // last_x11_timestamp
-            if constexpr (debugmode) log(ansi::clr(greenlt, utf::fprint("send convert_selection: seq=%%", seq_num)));
+                                                                            .time                = 0 });
             sync_x11connection->send(sync_buffer);
+            auto available_formats = std::vector<ui32>{};
             auto ev = x11::event::any{};
             while (sync_x11connection->recv_all((char*)&ev, sizeof(ev)).size() == sizeof(ev))
             {
                 auto type = ev.type & 0x7f;
-                if (type == x11::event::Error)
+                if (_sync_filter_unexpected(ev) && type == x11::event::SelectionNotify)
                 {
-                    if constexpr (debugmode) log(ansi::clr(reddk, utf::fprint("get_clipboard: seq=%% error: %%", ev.sequence, get_error(ev))));
+                    auto sn = netxs::start_lifetime_as<x11::req::convert_selection::selection_notify>(ev);
+                    if (sn.property_id != 0)
+                    {
+                        if constexpr (debugmode) log(ansi::clr(greenlt, "Try to get format list"));
+                        _sync_get_window_property(sync_msg_window_id, sn.property_id, atom_atom/*atom list*/, true, available_formats);
+                        if constexpr (debugmode)
+                        {
+                            auto s = utf::fprint("Available formats (%%):\n", available_formats.size());
+                            for (auto format : available_formats)
+                            {
+                                s = utf::fprint("\t%% (%%)\n", _get_atom_name(format), utf::to_hex_0x(format));
+                            }
+                            log(s);
+                        }
+                    }
+                    break;
                 }
-                else if (type == x11::event::Reply && ev.length) // Consume all unexpected payload.
-                {
-                    if constexpr (debugmode) log(ansi::clr(greenlt, utf::fprint("unexpected reply with %% bytes payload", ev.length * 4)));
-                    sync_buffer.assign(ev.length * 4, '\0');
-                    sync_x11connection->recv_all(sync_buffer.data(), sync_buffer.size());
-                }
-                else if (type == x11::event::SelectionNotify)
+                if (ev.sequence == seq_num) break;
+            }
+            auto has_utf8 = std::find(available_formats.begin(), available_formats.end(), atom_utf8_string) != available_formats.end();
+            auto target_to_request = has_utf8 ? atom_utf8_string : atom_string;
+            // Request clipboard data.
+            seq_num = syncrq(sync_buffer, x11::req::convert_selection{ .requestor_window_id = sync_msg_window_id,
+                                                                       .selection_id        = atom_clipboard,
+                                                                       .target_id           = target_to_request,
+                                                                       .property_id         = atom_vtm_clipboard,
+                                                                       .time                = 0 }); // last_x11_timestamp
+            if constexpr (debugmode) log(ansi::clr(greenlt, utf::fprint("send convert_selection: seq=%%", seq_num)));
+            sync_x11connection->send(sync_buffer);
+            while (sync_x11connection->recv_all((char*)&ev, sizeof(ev)).size() == sizeof(ev))
+            {
+                auto type = ev.type & 0x7f;
+                if (_sync_filter_unexpected(ev) && type == x11::event::SelectionNotify)
                 {
                     sync_buffer.clear();
                     auto sn = netxs::start_lifetime_as<x11::req::convert_selection::selection_notify>(ev);
