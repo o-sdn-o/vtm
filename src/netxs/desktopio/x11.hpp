@@ -9,6 +9,7 @@ namespace netxs::x11
     static auto wm_inst_name = "vtm"s; //todo unify (app::vtm::id)
     static constexpr auto fps = 60; // FPS //todo calc at startup
     static constexpr auto vbi = std::chrono::microseconds(1s) / x11::fps; // V-blank interval (VBI)
+    static constexpr auto buffer_read_step = 4096u; // 16 KB in quads.
 
     using fd_t = os::fd_t;
 
@@ -2027,8 +2028,17 @@ namespace netxs::x11
         ui32                                  atom_string = 0;
         ui32                                  atom_utf8_string = 0;
         ui32                                  atom_window = 0;
+
         ui32                                  atom_clipboard = 0;
-        ui32                                  atom_targets = 0;
+        ui32                                  atom_targets = 0;         // Request format list.
+        ui32                                  atom_timestamp = 0;       // "TIMESTAMP"
+        ui32                                  atom_multiple = 0;        // "MULTIPLE" Request multiple formats.
+        ui32                                  atom_text = 0;            // "TEXT" in current LC encoding.
+        ui32                                  atom_text_plain = 0;      // "text/plain"
+        ui32                                  atom_text_plain_utf8 = 0; // "text/plain;charset=utf-8"
+        ui32                                  atom_text_html = 0;       // "text/html"
+        ui32                                  atom_text_richtext = 0;   // "text/richtext"
+
         ui32                                  atom_net_active_window = 0;
         ui32                                  atom_net_number_of_desktops = 0;
         ui32                                  atom_net_current_desktop = 0;
@@ -2705,6 +2715,14 @@ namespace netxs::x11
             //atom_net_wm_sync_request_counter = get_atom_id("_NET_WM_SYNC_REQUEST_COUNTER", true);
             //atom_net_wm_bypass_compositor    = get_atom_id("_NET_WM_BYPASS_COMPOSITOR", true);
             atom_utf8_string                 = get_atom_id("UTF8_STRING", true);
+            atom_timestamp                   = get_atom_id("TIMESTAMP", true);
+            atom_multiple                    = get_atom_id("MULTIPLE", true);
+            atom_text                        = get_atom_id("TEXT", true);
+            atom_text_plain                  = get_atom_id("text/plain", true);
+            atom_text_plain_utf8             = get_atom_id("text/plain;charset=utf-8", true);
+            atom_text_html                   = get_atom_id("text/html", true);
+            atom_text_richtext               = get_atom_id("text/richtext", true);
+
             atom_vtmx                        = get_atom_id("VTMX", true);
             atom_vtm_always_on_top           = get_atom_id("VTM_ALWAYS_ON_TOP", true);
             atom_vtm_clipboard               = get_atom_id("VTM_CLIPBOARD", true);
@@ -2795,9 +2813,107 @@ namespace netxs::x11
             auto lock = std::lock_guard{ sync_mutex };
             return _get_atom_name(atom);
         }
+        auto _sync_get_window_property(ui32 window_id, ui32 property_id, ui32 prop_type_id, bool remove, auto& dest_buffer)
+        {
+            using dest_t = std::decay_t<decltype(dest_buffer)>;
+            using item_t = std::decay_t<decltype(dest_buffer[0])>;
+            auto append_buffer = [&](ui32 chunk_size)
+            {
+                if constexpr (std::is_same_v<dest_t, text>)
+                {
+                    dest_buffer.append(sync_buffer.data(), chunk_size);
+                }
+                else
+                {
+                    auto initial_size = dest_buffer.size();
+                    dest_buffer.resize(initial_size + chunk_size);
+                    std::memcpy(dest_buffer.data() + initial_size, sync_buffer.data(), chunk_size * sizeof(item_t));
+                }
+            };
+            auto seq_num = syncrq(sync_buffer, x11::req::get_property{ .remove      = 0,
+                                                                       .window_id   = window_id,
+                                                                       .property    = property_id,   // e.g., atom_vtm_clipboard
+                                                                       .prop_type   = prop_type_id,  // e.g., atom_utf8_string
+                                                                       .long_length = x11::buffer_read_step }); // Buffer limit for the first chunk.
+            sync_x11connection->send(sync_buffer);
+            auto ev = x11::event::any{};
+            while (sync_x11connection->recv_all((char*)&ev, sizeof(ev)).size() == sizeof(ev))
+            {
+                auto type = ev.type & 0x7f;
+                if constexpr (debugmode) log(ansi::clr(greenlt, utf::fprint("_get_window_property recv: seq=%% event=%% (%%) ev.length=%%", ev.sequence, event_str(type), type, ev.length)));
+                if (type == x11::event::Error)
+                {
+                    if constexpr (debugmode) log(ansi::clr(reddk, utf::fprint("_get_window_property error: seq=%% error: %%", ev.sequence, get_error(ev))));
+                }
+                else if ((type == x11::event::Reply || type == x11::event::GenericEvent) && ev.length)
+                {
+                    sync_buffer.assign(ev.length * sizeof(ui32), '\0');
+                    sync_x11connection->recv_all(sync_buffer.data(), sync_buffer.size());
+                    if (ev.sequence == seq_num) // Got data.
+                    {
+                        auto prop_reply = netxs::start_lifetime_as<x11::req::get_property::reply>(ev);
+                        append_buffer(prop_reply.value_len);
+                        if constexpr (debugmode) log("_get_window_property prop_reply.bytes_after=%% ", prop_reply.bytes_after);
+                        auto bytes_after = prop_reply.bytes_after;
+                        auto current_offset = x11::buffer_read_step; // In quads.
+                        while (bytes_after > 0u)
+                        {
+                            sync_buffer.clear();
+                            auto seq_next = syncrq(sync_buffer, x11::req::get_property{ .remove      = 0,
+                                                                                        .window_id   = window_id,
+                                                                                        .property    = property_id,
+                                                                                        .prop_type   = prop_type_id,
+                                                                                        .long_offset = current_offset,
+                                                                                        .long_length = x11::buffer_read_step });
+                            sync_x11connection->send(sync_buffer);
+                            auto ev_next = x11::event::any{};
+                            while (sync_x11connection->recv_all((char*)&ev_next, sizeof(ev_next)).size() == sizeof(ev_next))
+                            {
+                                auto type_next = ev_next.type & 0x7f;
+                                if (type_next == x11::event::Error)
+                                {
+                                    if constexpr (debugmode) log(ansi::clr(reddk, utf::fprint("_get_window_property get next error: %%", get_error(ev_next))));
+                                    bytes_after = 0;
+                                    break;
+                                }
+                                else if ((type_next == x11::event::Reply || type_next == x11::event::GenericEvent) && ev_next.length)
+                                {
+                                    sync_buffer.assign(ev_next.length * sizeof(ui32), '\0');
+                                    sync_x11connection->recv_all(sync_buffer.data(), sync_buffer.size());
+                                    if (ev_next.sequence == seq_next)
+                                    {
+                                        auto reply_chunk = netxs::start_lifetime_as<x11::req::get_property::reply>(ev_next);
+                                        append_buffer(reply_chunk.value_len);
+                                        bytes_after = reply_chunk.bytes_after;
+                                        if constexpr (debugmode) log(ansi::clr(greenlt, utf::fprint("_get_window_property get next: %% bytes, bytes_after=%%", reply_chunk.value_len * sizeof(item_t), bytes_after)));
+                                        current_offset += x11::buffer_read_step;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        sync_buffer.clear();
+                        // Request to remove data if required.
+                        if (remove)
+                        {
+                            syncrq(sync_buffer, x11::req::get_property{ .remove      = 1, // 1: Remove property.
+                                                                        .window_id   = sync_msg_window_id,
+                                                                        .property    = property_id,
+                                                                        .prop_type   = prop_type_id,
+                                                                        .long_length = 0u });
+                            sync_x11connection->send(sync_buffer);
+                        }
+                    }
+                }
+                if (ev.sequence == seq_num) break;
+            }
+        }
+        auto _get_clipboard_format_list(ui32 atom)
+        {
+            //
+        }
         void get_clipboard(input::clipdata& clipdata)
         {
-            static constexpr auto read_step = 4096u; // 16 KB
             auto lock = std::lock_guard{ sync_mutex };
             clipdata.utf8 = {};
             clipdata.form = mime::textonly;
@@ -2834,80 +2950,8 @@ namespace netxs::x11
                                      utf::to_hex(sn.target_id), _get_atom_name(sn.target_id))));
                     if (sn.property_id != 0)
                     {
-                        auto seq_num2 = syncrq(sync_buffer, x11::req::get_property{ .remove      = 0, // 0: Keep property.
-                                                                                    .window_id   = sync_msg_window_id,
-                                                                                    .property    = sn.property_id,// atom_vtm_clipboard
-                                                                                    .prop_type   = sn.target_id,  // atom_utf8_string
-                                                                                    .long_length = read_step });  // Buffer limit for the first chunk.
-                        sync_x11connection->send(sync_buffer);
-                        auto ev2 = x11::event::any{};
-                        while (sync_x11connection->recv_all((char*)&ev2, sizeof(ev2)).size() == sizeof(ev2))
-                        {
-                            auto type2 = ev2.type & 0x7f;
-                            if constexpr (debugmode) log(ansi::clr(greenlt, utf::fprint("sync recv: seq=%% event=%% (%%) ev2.length=%%", ev2.sequence, event_str(type2), type2, ev2.length)));
-                            if (type2 == x11::event::Error)
-                            {
-                                if constexpr (debugmode) log(ansi::clr(reddk, utf::fprint("get clipboard data: seq=%% error: %%", ev2.sequence, get_error(ev2))));
-                            }
-                            else if ((type2 == x11::event::Reply || type2 == x11::event::GenericEvent) && ev2.length)
-                            {
-                                sync_buffer.assign(ev2.length * 4, '\0');
-                                sync_x11connection->recv_all(sync_buffer.data(), sync_buffer.size());
-                                if (ev2.sequence == seq_num2) // Got clipboard data.
-                                {
-                                    auto prop_reply = netxs::start_lifetime_as<x11::req::get_property::reply>(ev2);
-                                    clipdata.utf8.append(sync_buffer.data(), prop_reply.value_len);
-                                    if constexpr (debugmode) log("prop_reply.bytes_after=%% ", prop_reply.bytes_after, ansi::clr(greenlt, utf::fprint("  clipboard start: '%%'", utf::debase437(clipdata.utf8))));
-                                    auto bytes_after = prop_reply.bytes_after;
-                                    auto current_offset = 0u;
-                                    while (bytes_after > 0u)
-                                    {
-                                        sync_buffer.clear();
-                                        auto seq_next = syncrq(sync_buffer, x11::req::get_property{ .remove      = 0,
-                                                                                                    .window_id   = sync_msg_window_id,
-                                                                                                    .property    = sn.property_id,
-                                                                                                    .prop_type   = sn.target_id,
-                                                                                                    .long_offset = current_offset,
-                                                                                                    .long_length = read_step });
-                                        sync_x11connection->send(sync_buffer);
-                                        auto ev_next = x11::event::any{};
-                                        while (sync_x11connection->recv_all((char*)&ev_next, sizeof(ev_next)).size() == sizeof(ev_next))
-                                        {
-                                            auto type_next = ev_next.type & 0x7f;
-                                            if (type_next == x11::event::Error)
-                                            {
-                                                if constexpr (debugmode) log(ansi::clr(reddk, utf::fprint("get clipboard tail error: %%", get_error(ev_next))));
-                                                bytes_after = 0;
-                                                break;
-                                            }
-                                            else if ((type_next == x11::event::Reply || type2 == x11::event::GenericEvent) && ev_next.length)
-                                            {
-                                                sync_buffer.assign(ev_next.length * 4, '\0');
-                                                sync_x11connection->recv_all(sync_buffer.data(), sync_buffer.size());
-                                                if (ev_next.sequence == seq_next)
-                                                {
-                                                    auto reply_chunk = netxs::start_lifetime_as<x11::req::get_property::reply>(ev_next);
-                                                    clipdata.utf8.append(sync_buffer.data(), reply_chunk.value_len);
-                                                    if constexpr (debugmode) log(ansi::clr(greenlt, utf::fprint("  clipboard tail: '%%'", utf::debase437(view{ sync_buffer.data(), reply_chunk.value_len }))));
-                                                    bytes_after = reply_chunk.bytes_after;
-                                                    current_offset += read_step;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    sync_buffer.clear();
-                                    // Request to remove clipboard data.
-                                    syncrq(sync_buffer, x11::req::get_property{ .remove    = 1, // 1: Remove property.
-                                                                                .window_id = sync_msg_window_id,
-                                                                                .property  = sn.property_id,
-                                                                                .prop_type = sn.target_id,
-                                                                                .long_length = 0u });
-                                    sync_x11connection->send(sync_buffer);
-                                }
-                            }
-                            if (ev2.sequence == seq_num2) break;
-                        }
+                        _sync_get_window_property(sync_msg_window_id, sn.property_id/*atom_vtm_clipboard*/, sn.target_id/*atom_utf8_string*/, true, clipdata.utf8);
+                        if constexpr (debugmode) log(ansi::clr(greenlt, utf::fprint("  got clipboard: '%%'", utf::debase437(clipdata.utf8))));
                     }
                     break;
                 }

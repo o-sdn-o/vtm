@@ -8613,7 +8613,9 @@ namespace netxs::gui
                         if (sr.target_id == session.atom_targets) // Supported clipboard formats requested (TARGETS, UTF8_STRING).
                         {
                             if constexpr (debugmode) log(ansi::clr(greenlt, "clipboard formats requested"));
-                            auto targets = std::to_array({ session.atom_targets, session.atom_utf8_string });
+                            auto targets = std::to_array({ session.atom_targets,
+                                                           session.atom_utf8_string,
+                                                           session.atom_string });
                             session.accumrq(batch_buffer, x11::req::change_property{ .window_id = sr.requestor_window_id,
                                                                                      .property  = sr.property_id,
                                                                                      .type      = session.atom_atom },
