@@ -3686,7 +3686,7 @@ namespace netxs::gui
 
         virtual void mouse_capture_impl() = 0;
         virtual void mouse_release_impl() = 0;
-        virtual void mouse_catch_outside() = 0;
+        virtual bool mouse_catch_outside(si32 button_id = {}) = 0;
         virtual fp2d mouse_get_pos() = 0;
 
         virtual void window_set_title(view utf8) = 0;
@@ -6390,8 +6390,9 @@ namespace netxs::gui
         fp2d mouse_get_pos()             { return fp2d{ winmsg.pt.x, winmsg.pt.y }; }
         void mouse_capture_impl()        { ::SetCapture((HWND)master.hWnd); }
         void mouse_release_impl()        { ::ReleaseCapture(); }
-        void mouse_catch_outside()
+        bool mouse_catch_outside(si32 /*button_id*/)
         {
+            auto ok = faux;
             auto ctrl_click = ctrl_pressed()                                  // Detect Ctrl+LeftClick
                            && !master.effective_area.hittest(mouse_get_pos()) // outside our window.
                            && keybd_read_pressed(vkey::lbutton);              //
@@ -6404,13 +6405,15 @@ namespace netxs::gui
                                             .cbData = (DWORD)(target_list.size() * sizeof(ui32)),
                                             .lpData = (void*)target_list.data() };
                 auto rc = ::SendMessageW(target, WM_COPYDATA, (WPARAM)master.hWnd, (LPARAM)&data);
+                ok = rc == ipc::make_offer;
                 if constexpr (debug_foci)
                 {
-                    if (rc == ipc::make_offer) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(target)));
-                    else                       log(ansi::err("Failed to offer group focus to hwnd=", utf::to_hex(target)));
+                    if (ok) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(target)));
+                    else    log(ansi::err("Failed to offer group focus to hwnd=", utf::to_hex(target)));
                 }
             }
             mouse_release();
+            return ok;
         }
         void keybd_send_block(view block)
         {
@@ -7775,7 +7778,26 @@ namespace netxs::gui
             //keybd_print_vkstat("keybd_read_vkstat");
             //tslink.set_focus();
         }
-        void keybd_send_block(view /*block*/) {}
+        auto _send_message(ui32 target_window_id, si32 command, auto const& block)
+        {
+            auto result = 0;
+            //todo
+            return result;
+        }
+        void keybd_send_block(view block)
+        {
+            auto target_list = mfocus.copy();
+            auto local_hwnd = (ui32)master.hWnd;
+            for (auto target : target_list) // Send to multi-focused targets.
+            {
+                if (target != local_hwnd)
+                if (ipc::pass_state != _send_message(target, ipc::pass_state, vkstat)
+                 || ipc::pass_input != _send_message(target, ipc::pass_input, block))
+                {
+                    mfocus.erase(target); // Drop failed targets.
+                }
+            }
+        }
         void _keybd_turn_layout(ui32 layout_id)
         {
             if (layout_id >= layouts.size()) layout_id = 0;
@@ -8512,7 +8534,7 @@ namespace netxs::gui
                         }
                     }
                     else if (msg.message_type == session.atom_wm_protocols
-                            && msg.serial       == session.atom_wm_delete_window)
+                          && msg.serial       == session.atom_wm_delete_window)
                     {
                         // - User somehow closes window via window manager.
                         // - window_shutdown().
@@ -9021,7 +9043,57 @@ namespace netxs::gui
             x11::session_ptr->sendrq<x11::req::xi2::ungrab_device>({ .major_opcode = x11::session_ptr->xi2_major_opcode,
                                                                      .device_id    = captured_pointer_id });
         }
-        void mouse_catch_outside() {}
+        bool mouse_catch_outside(si32 button_id)
+        {
+            //auto ctrl_click = ctrl_pressed()                                  // Detect Ctrl+LeftClick
+            //               && !master.effective_area.hittest(mouse_get_pos()) // outside our window.
+            //               && keybd_read_pressed(vkey::lbutton);              //
+            //               //&& (keybd_read_pressed(vkey::lbutton) || keybd_read_pressed(vkey::rbutton) || keybd_read_pressed(vkey::mbutton));
+            //if (ctrl_click) // Try to make group focus offer before we lose focus.
+            //{
+            //    auto target = ::WindowFromPoint(winmsg.pt);
+            //    auto target_list = mfocus.copy();
+            //    auto data = COPYDATASTRUCT{ .dwData = ipc::make_offer,
+            //                                .cbData = (DWORD)(target_list.size() * sizeof(ui32)),
+            //                                .lpData = (void*)target_list.data() };
+            //    auto rc = ::SendMessageW(target, WM_COPYDATA, (WPARAM)master.hWnd, (LPARAM)&data);
+            //    if constexpr (debug_foci)
+            //    {
+            //        if (rc == ipc::make_offer) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(target)));
+            //        else                       log(ansi::err("Failed to offer group focus to hwnd=", utf::to_hex(target)));
+            //    }
+            //}
+            //mouse_release();
+            auto ok = faux;
+            auto ctrl_click = button_id == 1                                  // Detect Ctrl+LeftClick
+                           && !master.effective_area.hittest(mouse_get_pos()) // outside our window.
+                           && ctrl_pressed();                                 //
+            if (ctrl_click) // Try to make group focus offer and pass the input focus.
+            {
+                if constexpr (debug_foci) log("Ctrl+Click outside detected");
+                if (auto target_window = session.sync_query_pointer())
+                {
+                    if constexpr (debug_foci) log("  target_window=%%", utf::to_hex_0x(target_window));
+                    //todo
+                    //if (pass_focus(target_window))
+                    //{
+                        //if constexpr (debug_foci) log("  focus_passed");
+                        auto target_list = mfocus.copy();
+                        if (auto rc = _send_message(target_window, ipc::make_offer, target_list))
+                        {
+                            ok = rc == ipc::make_offer;
+                            mouse_release();
+                            if constexpr (debug_foci)
+                            {
+                                if (ok) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(target_window)));
+                                else    log(ansi::err("Failed to offer group focus to hwnd=", utf::to_hex(target_window)));
+                            }
+                        }
+                    //}
+                }
+            }
+            return ok;
+        }
         bool input_read(view packet)
         {
             //if constexpr (debugmode) log("Beg ----------------------------------------");//, "Packet in hex:\n", utf::buffer_to_hex(packet, true));
@@ -9235,7 +9307,11 @@ namespace netxs::gui
                     {
                         auto is_pressed = d.evtype == x11::req::xi2::event::ButtonPress;
                         auto button_id  = m.detail;
-                        if (ontop_state && !is_focused_window && is_pressed && (button_id <= 3 || button_id >= 8/*exclude mouse wheel*/)) // Forward the input focus to our main window.
+                        if (is_pressed && mouse_catch_outside(button_id)) // Group focus with another window by Ctrl+LeftClick
+                        {
+                            return true;
+                        }
+                        else if (ontop_state && !is_focused_window && is_pressed && (button_id <= 3 || button_id >= 8/*exclude mouse wheel*/)) // Forward the input focus to our main window.
                         {
                             if constexpr (debugmode) log(ansi::clr(tint::greenlt, utf::fprint("  Try to set focus by mouse click")));
                             session.sendrq(x11::req::set_input_focus{ .window_id = (ui32)master.fg_hWnd, // master.wm_hWnd drops focus for unknown reason.
@@ -9423,7 +9499,7 @@ namespace netxs::gui
         fp2d mouse_get_pos() { return fp2d{}; }
         void mouse_capture_impl() {}
         void mouse_release_impl() {}
-        void mouse_catch_outside() {}
+        bool mouse_catch_outside(si32 /*button_id*/) { return faux; }
         void sync_os_settings() {}
     };
 }

@@ -453,6 +453,27 @@ namespace netxs::x11
             ui16 length = 2;
             ui32 window_id;
         };
+        struct translate_coords // Opcode 40 (TranslateCoordinates).
+        {
+            struct reply
+            {
+                byte type;
+                byte same_screen;
+                ui16 sequence;
+                ui32 length;
+                ui32 dst_window;
+                si16 dst_x;
+                si16 dst_y;
+                ui32 pad[4];
+            };
+            byte opcode = 40; // TranslateCoordinates
+            byte pad    = 0;
+            ui16 length = 4;
+            ui32 src_window;
+            ui32 dst_window;
+            si16 src_x  = 0;
+            si16 src_y  = 0;
+        };
         struct set_input_focus // Opcode 42 (set input focus).
         {
             static constexpr auto RevertToNone   = 0;
@@ -2013,6 +2034,7 @@ namespace netxs::x11
         ui32                                  atom_wm_normal_hints = 0;
         ui32                                  atom_wm_size_hints = 0;
         ui32                                  atom_wm_class = 0;
+        ui32                                  atom_wm_state = 0;
         ui32                                  atom_wm_change_state = 0; // WM_CHANGE_STATE
 
         ui32                                  atom_motif_wm_hints = 0; // Disable decoractions.
@@ -2758,6 +2780,7 @@ namespace netxs::x11
             atom_wm_normal_hints        = get_atom_id("WM_NORMAL_HINTS",  faux);
             atom_wm_size_hints          = get_atom_id("WM_SIZE_HINTS",    faux);
             atom_wm_class               = get_atom_id("WM_CLASS",         faux);
+            atom_wm_state               = get_atom_id("WM_STATE",         faux);
             atom_net_workarea           = get_atom_id("_NET_WORKAREA",    faux);
             atom_wm_protocols           = get_atom_id("WM_PROTOCOLS",            true);
             atom_wm_delete_window       = get_atom_id("WM_DELETE_WINDOW",        true);
@@ -2997,7 +3020,7 @@ namespace netxs::x11
                 if (ev.sequence == seq_num) break;
             }
             sync_buffer.clear();
-            if constexpr (debugmode) log(ansi::clr(yellowlt, utf::fprint("prop_type=%% (%%)", _get_atom_name(prop_type), prop_type)));
+            if constexpr (debugmode) log(ansi::clr(yellowlt, utf::fprint("prop_type=%% (%%)", prop_type ? _get_atom_name(prop_type) : "None", prop_type)));
             return prop_type;
         }
         auto get_clipboard()
@@ -3158,6 +3181,76 @@ namespace netxs::x11
             }
             if constexpr (debugmode) log(ansi::clr(yellowlt, "exit from get_clipboard"));
             return clipdata;
+        }
+        auto _get_sub_child(ui32 parent_win, twod root_coor)
+        {
+            auto child_win = 0u;
+            auto seq_num = syncrq(sync_buffer, x11::req::translate_coords{ .src_window = root_window_id,
+                                                                           .dst_window = parent_win,
+                                                                           .src_x      = (si16)root_coor.x,
+                                                                           .src_y      = (si16)root_coor.y });
+            sync_x11connection->send(sync_buffer);
+            sync_buffer.clear();
+            auto ev = x11::event::any{};
+            while (sync_x11connection->recv_all((char*)&ev, sizeof(ev)).size() == sizeof(ev))
+            {
+                auto type = ev.type & 0x7f;
+                if (_sync_filter_unexpected(ev) && type == x11::event::Reply && ev.sequence == seq_num)
+                {
+                    auto tc = netxs::start_lifetime_as<x11::req::translate_coords::reply>(ev);
+                    if constexpr (debugmode) log(ansi::clr(yellowlt, "subchild window translate_coords reply:",
+                        "\n\t dst_window=", utf::to_hex_0x(tc.dst_window),
+                        "\n\t dst_coords=", twod{ tc.dst_x, tc.dst_y }));
+                    child_win = tc.dst_window;
+                }
+                if (ev.sequence == seq_num) break;
+            }
+            return child_win;
+        }
+        auto sync_query_pointer()
+        {
+            auto lock = std::lock_guard{ sync_mutex };
+            auto window_id = 0u;
+            auto current_id = 0u;
+            auto root_coor = dot_00;
+            auto seq_num = syncrq(sync_buffer, x11::req::query_pointer{ .window_id = root_window_id });
+            sync_x11connection->send(sync_buffer);
+            sync_buffer.clear();
+            auto ev = x11::event::any{};
+            while (sync_x11connection->recv_all((char*)&ev, sizeof(ev)).size() == sizeof(ev))
+            {
+                auto type = ev.type & 0x7f;
+                if (_sync_filter_unexpected(ev) && type == x11::event::Reply && ev.sequence == seq_num)
+                {
+                    auto qp = netxs::start_lifetime_as<x11::req::query_pointer::reply>(ev);
+                    if constexpr (debugmode) log(ansi::clr(yellowlt, "query_pointer::reply:",
+                        "\n\t     same_screen=", (si32)qp.same_screen,
+                        "\n\t  root_window_id=", utf::to_hex(qp.root_window_id),
+                        "\n\t child_window_id=", utf::to_hex(qp.child_window_id),
+                        "\n\t       root_coor=", twod{ qp.root_x, qp.root_y },
+                        "\n\t        win_coor=", twod{ qp.win_x, qp.win_y }));
+                    current_id = qp.child_window_id;
+                    root_coor = twod{ qp.root_x, qp.root_y };
+                }
+                if (ev.sequence == seq_num) break;
+            }
+            if constexpr (debugmode) log(ansi::clr(yellowlt, utf::fprint("window under pointer=%%", utf::to_hex_0x(current_id))));
+            while (current_id && current_id != root_window_id)
+            {
+                if (_sync_get_window_property_type(current_id, atom_wm_state)) // Check WM_STATE to make sure it is a real window.
+                {
+                    window_id = current_id;
+                    if constexpr (debugmode) log(ansi::clr(cyanlt, " client window found: ", utf::to_hex_0x(window_id)));
+                    break;
+                }
+                else // Make one step down to follow the xprop logic.
+                {
+                    auto same = std::exchange(current_id, _get_sub_child(current_id, root_coor)) == current_id;
+                    if (same) break;
+                    if constexpr (debugmode) log(ansi::clr(yellowlt, " next window_id: ", utf::to_hex_0x(current_id)));
+                }
+            }
+            return window_id;
         }
         auto enable_detectable_autorepeat()
         {
