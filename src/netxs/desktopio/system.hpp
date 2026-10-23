@@ -1282,14 +1282,15 @@ namespace netxs::os
             {
                 auto utf8value = text{};
                 auto required = DWORD{};
-                auto ret = ::RegGetValueW(hKey, lpSubKey, lpValue, RRF_RT_REG_SZ, nullptr, nullptr, &required); /* RRF_RT_REG_SZ: automatically converts REG_EXPAND_SZ to REG_SZ. */
+                auto ret = ::RegGetValueW(hKey, lpSubKey, lpValue, RRF_RT_REG_SZ, nullptr, nullptr, &required); // RRF_RT_REG_SZ: automatically converts REG_EXPAND_SZ to REG_SZ.
                 if (ret == ERROR_SUCCESS)
                 {
                     auto utf16value = wide(required / sizeof(wchr), 0);
                     ret = ::RegGetValueW(hKey, lpSubKey, lpValue, RRF_RT_REG_SZ, nullptr, (LPBYTE)utf16value.data(), &required);
                     if (ret == ERROR_SUCCESS)
                     {
-                        utf::to_utf(utf16value, utf8value);
+                        auto crop = wiew(utf16value.data()); // Drop all trailing nulls.
+                        utf::to_utf(crop, utf8value);
                     }
                 }
                 if (ret != ERROR_SUCCESS)
@@ -1381,9 +1382,9 @@ namespace netxs::os
                                 {
                                     if (valueBuffer[valueSize - 1] == '\0') valueSize--;
                                 }
-                                registry_item.name  = utf::to_utf(nameBuffer.data(), nameSize);
+                                registry_item.name = utf::to_utf(nameBuffer.data(), nameSize);
                                 registry_item.data = utf::to_utf(valueBuffer.data(), valueSize);
-                                registry_item.type  = type;
+                                registry_item.type = type;
                                 if (filter(registry_item))
                                 {
                                     co_yield registry_item; // Yield key values.
