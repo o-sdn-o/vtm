@@ -3415,6 +3415,7 @@ namespace netxs::x11
                         if (q.size() >= sizeof(x11::req::xi2::event::device_changed::button_class) + dynamic_payload_bytes)
                         {
                             auto state_ptr = btn_cls.state_mask_ptr(q.data());
+                            dev.pressed_buttons.clear();
                             dev.pressed_buttons.reserve(mask_words);
                             for (auto word_idx = 0u; word_idx < mask_words; ++word_idx)
                             {
@@ -3486,7 +3487,7 @@ namespace netxs::x11
                     {
                         auto reply = netxs::start_lifetime_as<x11::req::xi2::query_device::reply>(q.data());
                         q.remove_prefix(sizeof(ev));
-                        if constexpr (debugmode) log("Connected input devices: %%", reply.num_devices);
+                        if constexpr (debugmode) log("Input device count: %%", reply.num_devices);
                         if (reply.num_devices)
                         while (q)
                         {
@@ -3582,6 +3583,11 @@ namespace netxs::x11
             }
             if constexpr (debugmode) log("Sync X11 connection: ", sync_x11connection.get());
             return !!sync_x11connection;
+        }
+        auto is_our_resource_id(ui32 id)
+        {
+            auto our_resource_id = (id & ~s.resource_id_mask) == s.resource_id_base;
+            return our_resource_id;
         }
     };
 

@@ -3734,6 +3734,10 @@ namespace netxs::gui
             restore_if_minimized();
             window_make_focused_impl();
         }
+        bool mouse_captured()
+        {
+            return heldby;
+        }
         void mouse_capture(si32 captured_by)
         {
             if (!std::exchange(heldby, heldby | captured_by))
@@ -4449,7 +4453,7 @@ namespace netxs::gui
         }
         void zoom_by_wheel(fp32 wheelfp, bool enqueue)
         {
-            if (ctrl_pressed())
+            if (master.effective_area.hittest(mcoord) && ctrl_pressed())
             {
                 mouse_normalize_wheeldt(wheelfp); // Disable system-wide acceleration.
                 if (whlacc * wheelfp < 0.f) whlacc = 0.f; // Reset accumulator if the wheeling direction has changed.
@@ -4516,7 +4520,10 @@ namespace netxs::gui
                 stream.m.wheelfp = {};
                 stream.m.wheelsi = {};
             }
-            else zoom_by_wheel(wheelfp, true);
+            else
+            {
+                zoom_by_wheel(wheelfp, true);
+            }
         }
         void mouse_send_halt()
         {
@@ -6824,6 +6831,7 @@ namespace netxs::gui
         fp2d                                 current_mouse_pos;      // window: Current mouse coor.
         ui16                                 master_pointer_id{};    // window: Master mouse device id for mouse capturing/releasing.
         ui16                                 captured_pointer_id{};  // window: Lasted captured master mouse device id.
+        bool                                 is_hovered_window{};    // window: Visible window is hovered by mouse pointer.
         bool                                 is_focused_window{};    // window: Master (wm) window has input focus.
         bool                                 is_foreground_window{}; // window: Master (fg) window is foreground window (or=1).
         twod                                 hidden_coor;            // window: Safe coordinates where hidden windows can be moved.
@@ -8643,7 +8651,7 @@ namespace netxs::gui
                                 {
                                     auto active_window = netxs::start_lifetime_as<ui32>(payload.data());
                                     if constexpr (debugmode) log("%%  Got reply: refocus: active_window=0x%% seq=%%", prompt::x11, utf::to_hex(active_window), reply.sequence);
-                                    auto our_resource_id = (active_window & ~session.s.resource_id_mask) == session.s.resource_id_base;
+                                    auto our_resource_id = session.is_our_resource_id(active_window);
                                     auto focus_changed = is_focused_window == !our_resource_id;
                                     if (focus_changed)
                                     {
@@ -9403,37 +9411,36 @@ namespace netxs::gui
                     master_pointer_id = device_id;
                     auto f = netxs::start_lifetime_as<x11::req::xi2::event::focus>(packet.data());
                     auto hover = d.evtype == x11::req::xi2::event::Enter;
-                    if constexpr (debugmode) log("%%Hover: sourceid=%% '%%' mode=%% mods=0x%% leds=0x%% hover=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, (si32)f.mode, utf::to_hex(f.mods.effective), utf::to_hex(f.mods.locked), (si32)hover);
-                    _set_keyboard_led_state(f.mods.locked); // Sync CapsLock/NumLock/ScrollLock.
-                    if (!hover) // f.mode==0/*Normal*/ when mouse leaving by moving out; f.mode!=0 when the mouse pointer is grabbed by another window on key down.
+                    if constexpr (debugmode) log("%%Hover: sourceid=%% '%%' mode=%% mods=0x%% leds=0x%% hover=%% event_id=%% child_id=%% detail=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, (si32)f.mode, utf::to_hex(f.mods.effective), utf::to_hex(f.mods.locked), (si32)hover, utf::to_hex_0x(f.event_window_id), utf::to_hex_0x(f.child_window_id), (si32)f.detail);
+                    auto forced = hover;
+                    if (!hover && !mouse_captured() && f.event_window_id == master.wm_hWnd) // Check if pointer hits our visible window.
                     {
-                        mouse_leave();
-                        // Sometimes, system reports nothing when mouse leaving (mouse moved +/- 1px w/o reporting).
-                        //todo WL(XWL) only: They sometime (after drag) also return broken coords (+/- 1px):
-                        //session.sendrq(x11::req::query_pointer{ .window_id = session.root_window_id }, {},
-                        //[&](auto& ev, view payload)
-                        //{
-                        //    if (ev.type != x11::event::Error)
-                        //    {
-                        //        auto m = netxs::start_lifetime_as<x11::req::query_pointer::reply>(payload.data());
-                        //        auto coor = fp2d{ m.root_x, m.root_y };
-                        //        log(ansi::clr(tint::greenlt, "mouse sync at ", coor));
-                        //        _check_if_mouse_moved(coor, faux);
-                        //    }
-                        //});
-                        //session.sendrq(x11::req::xi2::query_pointer{ .major_opcode = session.xi2_major_opcode,
-                        //                                             .window_id    = (ui32)master.wm_hWnd,
-                        //                                             .device_id    = device_id }, {},
-                        //[&](auto& ev, view payload)
-                        //{
-                        //    if (ev.type != x11::event::Error)
-                        //    {
-                        //        auto m = netxs::start_lifetime_as<x11::req::xi2::query_pointer::reply>(payload.data());
-                        //        auto coor = fp2d{ m.root_x.to_fp32(), m.root_y.to_fp32() };
-                        //        log(ansi::clr(tint::greenlt, "mouse sync at ", coor));
-                        //        _check_if_mouse_moved(coor, faux);
-                        //    }
-                        //});
+                        if (auto window_under_pointer = session.sync_query_pointer())
+                        {
+                            hover = session.is_our_resource_id(window_under_pointer);
+                        }
+                        forced = true;
+                    }
+                    if (is_foreground_window == (f.event_window_id != master.wm_hWnd) || forced) // Filter out the events caused by capturing.
+                    {
+                        _set_keyboard_led_state(f.mods.locked); // Sync CapsLock/NumLock/ScrollLock.
+                        auto changed = std::exchange(is_hovered_window, hover || mouse_captured()) != is_hovered_window;
+                        if (changed)
+                        {
+                            if constexpr (debugmode)
+                            {
+                                static auto i = 0;
+                                log(ansi::clr(magentalt, utf::fprint("Is_hovered changed to: %% i=%%", is_hovered_window, i++)));
+                            }
+                            if (is_hovered_window) // f.mode==0(Normal) when mouse leaving by moving out; f.mode!=0 when the mouse pointer is grabbed by another window on key down (captured).
+                            {
+                                session.query_device(f.sourceid); // Load current axes.
+                            }
+                            else
+                            {
+                                mouse_leave();
+                            }
+                        }
                     }
                 }
                 else if (d.evtype == x11::req::xi2::event::FocusIn || d.evtype == x11::req::xi2::event::FocusOut)
