@@ -9405,12 +9405,10 @@ namespace netxs::gui
                     auto hover = d.evtype == x11::req::xi2::event::Enter;
                     if constexpr (debugmode) log("%%Hover: sourceid=%% '%%' mode=%% mods=0x%% leds=0x%% hover=%%", prompt::x11, f.sourceid, session.input_devices[f.sourceid].name, (si32)f.mode, utf::to_hex(f.mods.effective), utf::to_hex(f.mods.locked), (si32)hover);
                     _set_keyboard_led_state(f.mods.locked); // Sync CapsLock/NumLock/ScrollLock.
-                    if (!hover && f.mode == 0/*Normal*/)
+                    if (!hover) // f.mode==0/*Normal*/ when mouse leaving by moving out; f.mode!=0 when the mouse pointer is grabbed by another window on key down.
                     {
                         mouse_leave();
-                    }
-                    else if (!hover) // Sometimes, system reports nothing when mouse leaving (mouse moved +/- 1px w/o reporting).
-                    {
+                        // Sometimes, system reports nothing when mouse leaving (mouse moved +/- 1px w/o reporting).
                         //todo WL(XWL) only: They sometime (after drag) also return broken coords (+/- 1px):
                         //session.sendrq(x11::req::query_pointer{ .window_id = session.root_window_id }, {},
                         //[&](auto& ev, view payload)
