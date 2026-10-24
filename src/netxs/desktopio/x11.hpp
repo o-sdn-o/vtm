@@ -3023,6 +3023,11 @@ namespace netxs::x11
             if constexpr (debugmode) log(ansi::clr(yellowlt, utf::fprint("prop_type=%% (%%)", prop_type ? _get_atom_name(prop_type) : "None", prop_type)));
             return prop_type;
         }
+        auto sync_get_window_property_type(ui32 window_id, ui32 property_id)
+        {
+            auto lock = std::lock_guard{ sync_mutex };
+            return _sync_get_window_property_type(window_id, property_id);
+        }
         auto get_clipboard()
         {
             auto lock = std::lock_guard{ sync_mutex };
@@ -3207,7 +3212,7 @@ namespace netxs::x11
             }
             return child_win;
         }
-        auto sync_query_pointer()
+        auto sync_query_pointer() // Only windows with the VTMX property are supported; windows with or=1 do not receive the WM_STATE property.
         {
             auto lock = std::lock_guard{ sync_mutex };
             auto window_id = 0u;
@@ -3237,7 +3242,7 @@ namespace netxs::x11
             if constexpr (debugmode) log(ansi::clr(yellowlt, utf::fprint("window under pointer=%%", utf::to_hex_0x(current_id))));
             while (current_id && current_id != root_window_id)
             {
-                if (_sync_get_window_property_type(current_id, atom_wm_state)) // Check WM_STATE to make sure it is a real window.
+                if (_sync_get_window_property_type(current_id, atom_vtmx)) // Check VTMX property to make sure it is vtm-aware window.
                 {
                     window_id = current_id;
                     if constexpr (debugmode) log(ansi::clr(cyanlt, " client window found: ", utf::to_hex_0x(window_id)));

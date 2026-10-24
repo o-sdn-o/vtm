@@ -3126,7 +3126,9 @@ namespace netxs::gui
             X(set_normal) /* Order to make window notopmost.       */ \
             X(no_command) /* Noop. Just to update.                 */ \
             X(cmd_w_data) /* Command with payload.                 */ \
-            X(send_reply) /* Command reply.                        */
+            X(send_reply) /* Command reply.                        */ \
+            X(join_focus) /* Join to the group focus.              */ \
+            X(request_id) /* Request WM window id (X11).           */
             static constexpr auto _base = 99900;
             static constexpr auto _counter = __COUNTER__ + 1;
             #define X(cmd) static constexpr auto cmd = _base + __COUNTER__ - _counter;
@@ -3172,13 +3174,14 @@ namespace netxs::gui
             bool wheel{}; // foci: Window is a leader of the multi-focus group.
             bool offer{}; // foci: Window just received a multi-focus offer.
 
-            void  insert(ui32 target) { auto lock = std::lock_guard{ mutex }; group.insert(target); }
-            void   erase(ui32 target) { auto lock = std::lock_guard{ mutex }; group.erase(target); }
-            bool   clear()            { auto lock = std::lock_guard{ mutex }; group.clear(); owner = {}; angel = faux; return std::exchange(buson, faux); }
-            auto    size()            { auto lock = std::lock_guard{ mutex }; return group.size(); }
-            auto    copy()            { auto lock = std::lock_guard{ mutex }; return std::vector<ui32>(group.begin(), group.end()); }
-            auto  active()            { auto lock = std::lock_guard{ mutex }; return wheel && group.size() > 1; }
-            bool focused()            { auto lock = std::lock_guard{ mutex }; return wheel || angel; }
+            auto contains(ui32 target) { auto lock = std::lock_guard{ mutex }; return group.find(target) != group.end(); }
+            void   insert(ui32 target) { auto lock = std::lock_guard{ mutex }; group.insert(target); }
+            void    erase(ui32 target) { auto lock = std::lock_guard{ mutex }; group.erase(target); }
+            bool    clear()            { auto lock = std::lock_guard{ mutex }; group.clear(); owner = {}; angel = faux; return std::exchange(buson, faux); }
+            auto     size()            { auto lock = std::lock_guard{ mutex }; return group.size(); }
+            auto     copy()            { auto lock = std::lock_guard{ mutex }; return std::vector<ui32>(group.begin(), group.end()); }
+            auto   active()            { auto lock = std::lock_guard{ mutex }; return wheel && group.size() > 1; }
+            bool  focused()            { auto lock = std::lock_guard{ mutex }; return wheel || angel; }
             auto is_idle()
             {
                 auto lock = std::lock_guard{ mutex };
@@ -3211,7 +3214,13 @@ namespace netxs::gui
                 auto lock = std::lock_guard{ mutex };
                 owner = (ui32)lParam;
                 group.insert(owner);
-                return std::exchange(buson, true);
+                auto prev_focus_state = buson;
+                if (!prev_focus_state)
+                {
+                    buson = true;
+                    angel = true;
+                }
+                return prev_focus_state;
             }
             auto set_focus(auto local_target, auto new_focus_state)
             {
@@ -3703,6 +3712,7 @@ namespace netxs::gui
         virtual void window_make_focused_impl() = 0;
         virtual void window_make_exposed() = 0;
         virtual void window_make_topmost(bool) = 0;
+        virtual void window_focus_updated() {}
 
         virtual void clipboard_set(input::clipdata& clipdata) = 0;
         virtual void clipboard_get(input::clipdata& /*clipdata*/) {}
@@ -4540,7 +4550,7 @@ namespace netxs::gui
             if (auto target_list = mfocus.is_idle()) // Seize OS focus if group focus is active but window is idle.
             {
                 auto local_target = master.hWnd;
-                for (auto target : target_list.value()) window_send_command(target, ipc::main_focus, local_target);
+                for (auto target : target_list.value()) window_post_command(target, ipc::main_focus, local_target);
                 window_make_foreground();
             }
             if ((!seized && ingrip) || szgrip.seized)
@@ -4860,7 +4870,7 @@ namespace netxs::gui
                         for (auto target : target_list)
                         {
                             if constexpr (debug_foci) log("\thwnd=", utf::to_hex(target));
-                            window_send_command(target, ipc::main_focus, local_target);
+                            window_post_command(target, ipc::main_focus, local_target);
                         }
                     }
                     else
@@ -4906,6 +4916,7 @@ namespace netxs::gui
                     if constexpr (debug_foci) log("  send focus::set::on");
                     // Focus event must be sent sync (without queueing). Key press events can precede focus events because they are sent synchronously.
                     base::signal(tier::release, input::events::focus::set::on, { .gear_id = stream.gears->id, .focus_type = solo::on });
+                    window_focus_updated();
                     if (!has_layout) // The first focus event - sync keybd layout.
                     {
                         has_layout = true;
@@ -4918,6 +4929,17 @@ namespace netxs::gui
                     }
                 }
             }
+            else if (command == ipc::join_focus)
+            {
+                auto focus_bus_on = mfocus.set_owner(lParam);
+                if (!focus_bus_on)
+                {
+                    if constexpr (debug_foci) log("  send focus::set::on (join)");
+                    // Focus event must be sent sync (without queueing). Key press events can precede focus events because they are sent synchronously.
+                    base::signal(tier::release, input::events::focus::set::on, { .gear_id = stream.gears->id, .focus_type = solo::on });
+                    window_focus_updated();
+                }
+            }
             else if (command == ipc::drop_focus)
             {
                 auto focus_bus_on = mfocus.clear();
@@ -4926,13 +4948,14 @@ namespace netxs::gui
                 if (focus_bus_on)
                 {
                     base::signal(tier::release, input::events::focus::set::off, { .gear_id = stream.gears->id });
+                    window_focus_updated();
                 }
             }
             else if (command == ipc::solo_focus)
             {
                 auto local_target = (ui32)master.hWnd;
                 auto target_list = mfocus.set_solo(local_target);
-                for (auto target : target_list) window_send_command(target, ipc::drop_focus);
+                for (auto target : target_list) window_post_command(target, ipc::drop_focus);
             }
             else if (command == ipc::sync_state)
             {
@@ -4954,6 +4977,10 @@ namespace netxs::gui
             {
                 window_make_topmost(faux);
             }
+            else if (command == ipc::request_id)
+            {
+                command = master.hWnd; // Reply with wm-window id.
+            }
             else command = 0;
             return command;
         }
@@ -4969,7 +4996,7 @@ namespace netxs::gui
                     if constexpr (debug_foci) log("focus_event: read_lbutton=%% test_lbutton=%% read_ctrl_pressed=%% test_ctrl_pressed=%% ctrl_pressed()=%%", keybd_read_pressed(vkey::lbutton), keybd_test_pressed(vkey::lbutton), keybd_read_pressed(vkey::ctrl), keybd_test_pressed(vkey::ctrl), ctrl_pressed());
                     for (auto target : target_list.value())
                     {
-                        window_send_command(target, ipc::main_focus, local_target);
+                        window_post_command(target, ipc::main_focus, local_target);
                     }
                 }
                 else
@@ -4979,7 +5006,7 @@ namespace netxs::gui
                     {
                         for (auto target : target_list.value())
                         {
-                            window_send_command(target, ipc::drop_focus);
+                            window_post_command(target, ipc::drop_focus);
                         }
                     }
                 }
@@ -6798,6 +6825,7 @@ namespace netxs::gui
         ui16                                 master_pointer_id{};    // window: Master mouse device id for mouse capturing/releasing.
         ui16                                 captured_pointer_id{};  // window: Lasted captured master mouse device id.
         bool                                 is_focused_window{};    // window: Master (wm) window has input focus.
+        bool                                 is_foreground_window{}; // window: Master (fg) window is foreground window (or=1).
         twod                                 hidden_coor;            // window: Safe coordinates where hidden windows can be moved.
         flag                                 block_mouse_movement{}; // window: Flag blocking mouse movement event processing (discarding).
         std::unordered_map<ui32, peer_state> recv_buffers;           // window: Buffers for receiving fragmented messages from neighboring windows (multifocus).
@@ -7025,9 +7053,15 @@ namespace netxs::gui
                 }
             });
         }
+        void _set_focus(ui32 window_id) // Acquire/forward input focus.
+        {
+            session.sendrq(x11::req::set_input_focus{ .window_id = window_id,
+                                                      .time      = last_x11_timestamp });
+        }
         auto _is_foreground_window()
         {
-            return fsmode != winstate::minimized && (is_focused_window || ontop_state);
+            //return fsmode != winstate::minimized && (is_focused_window || ontop_state);//todo || mfocus.focused());
+            return is_foreground_window;
         }
         void _trigger_to_update_alwaysontop(text& batch_buffer, layer& s) // Trigger for reordering the system-wide windows with enabled AlwaysOnTop, if any exist.
         {
@@ -7146,42 +7180,19 @@ namespace netxs::gui
                 });
             }
         }
+        auto _check_foreground_state()
+        {
+            auto new_state = fsmode != winstate::minimized && (is_focused_window || ontop_state || mfocus.focused());
+            auto changed = std::exchange(is_foreground_window, new_state) != is_foreground_window;
+            if (changed)
+            {
+                _toggle_foreground();
+            }
+            return changed;
+        }
         auto _check_has_vtmx_property(arch target_id)
         {
-            auto result = faux;
-            // Check if destination can reply (has "VTMX" atom).
-            auto lock = std::lock_guard{ session.sync_mutex };
-            if constexpr (debugmode) log("_check_has_vtmx_property: seq=%%", session.sync_sequence_counter + (ui16)1);
-            auto seq_num = session.syncrq(session.sync_buffer, x11::req::get_property{ .window_id   = (ui32)target_id,
-                                                                                       .property    = session.atom_vtmx,
-                                                                                       .prop_type   = session.atom_cardinal,
-                                                                                       .long_length = 1 });
-            session.sync_x11connection->send(session.sync_buffer);
-            auto ev = x11::event::any{};
-            while (session.sync_x11connection->recv_all((char*)&ev, sizeof(ev)).size() == sizeof(ev))
-            {
-                auto type = ev.type & 0x7f;
-                if (type == x11::event::Error)
-                {
-                    if constexpr (debugmode) log("get_property atom_vtmx error: %%", session.get_error(ev));
-                }
-                else if ((type == x11::event::Reply || type == x11::event::GenericEvent) && ev.length)
-                {
-                    session.sync_buffer.assign(ev.length * 4, '\0');
-                    if (session.sync_x11connection->recv_all(session.sync_buffer.data(), session.sync_buffer.size()).size() == session.sync_buffer.size())
-                    {
-                        auto reply = netxs::start_lifetime_as<x11::req::get_property::reply>(ev);
-                        if (reply.format == sizeof(ui32) * 8 && reply.prop_type == session.atom_vtmx) // format == 0 means that property not found.
-                        if (netxs::start_lifetime_as<si32>(session.sync_buffer.data())) // ==1
-                        {
-                            result = true; // Has vtmx property.
-                        }
-                    }
-                }
-                if (ev.sequence == seq_num) break;
-            }
-            session.sync_buffer.clear();
-            return result;
+            return !!session.sync_get_window_property_type(target_id, session.atom_vtmx);
         }
         void _post_command(arch target_id, si32 command, arch lParam = {})
         {
@@ -7196,51 +7207,87 @@ namespace netxs::gui
                                                      .lParam         = (ui32)lParam }); // wParam, lParam.
             }
         }
+        auto _send_buffer_and_get_reply(ui16 serial)
+        {
+            auto result = 0u;
+            session.sync_x11connection->send(session.sync_buffer);
+            session.sync_buffer.clear();
+            auto ev = x11::event::any{};
+            while (session.sync_x11connection->recv_all((char*)&ev, sizeof(ev)).size() == sizeof(ev))
+            {
+                auto type = ev.type & 0x7F;
+                if (session._sync_filter_unexpected(ev) && type == x11::event::ClientMessage)
+                {
+                    auto reply = netxs::start_lifetime_as<x11::req::send_event::reply>(ev);
+                    if (reply.serial       == serial
+                     && reply.message_type == session.atom_vtmx
+                     && reply.command      == (ui32)ipc::send_reply)
+                    {
+                        result = reply.lParam; // Got reply.
+                        break;
+                    }
+                }
+            }
+            return result;
+        }
+        auto _send_message(arch target_id, si32 command, view block = {})
+        {
+            auto result = 0u;
+            if (target_id && _check_has_vtmx_property(target_id)) // Check if destination can reply (has "VTMX" atom).
+            {
+                auto lock = std::lock_guard{ session.sync_mutex };
+                auto serial = (ui16)(session.sync_sequence_counter + 1);
+                if constexpr (debugmode) log("_send_message: command=%% (%%) block.size()=%% seq=%%", ipc::str(command), command, block.size(), session.sync_sequence_counter + (ui16)1);
+                auto ptr = block.data();
+                auto len = block.size();
+                auto packet = x11::req::send_event{ .destination_id = (ui32)target_id,
+                                                    .event_type     = x11::event::ClientMessage,
+                                                    .originator_id  = session.sync_msg_window_id,
+                                                    .message_type   = session.atom_vtmx,
+                                                    .serial         = serial,
+                                                    .command        = (ui32)ipc::cmd_w_data,
+                                                    .lParam         = (ui32)(len + sizeof(ui32)/*command*/) };
+                packet.data32[0] = (ui32)command;
+                if (len > 0)
+                {
+                    auto step = std::min(sizeof(ui32), len);
+                    std::memcpy((char*)&packet.data32[1], ptr, step);
+                    len -= step;
+                    ptr += step;
+                }
+                session.syncrq(session.sync_buffer, packet);
+                while (len)
+                {
+                    auto step = std::min(len, sizeof(ui32) * 6);
+                    std::memcpy(&packet.message_type, ptr, step);
+                    if (len < sizeof(ui32) * 6)
+                    {
+                        std::memset((char*)&packet.message_type + len, 0, sizeof(ui32) * 6 - len);
+                    }
+                    len -= step;
+                    ptr += step;
+                    session.syncrq(session.sync_buffer, packet);
+                }
+                result = _send_buffer_and_get_reply(serial);
+            }
+            return result;
+        }
         auto _send_command(arch target_id, si32 command, arch lParam = {})
         {
             auto result = 0u;
             if (target_id && _check_has_vtmx_property(target_id)) // Check if destination can reply (has "VTMX" atom).
             {
-                // Send command.
                 auto lock = std::lock_guard{ session.sync_mutex };
-                auto serial = session.sync_sequence_counter + (ui16)1;
-                if constexpr (debugmode) log("_send_command: seq=%%", session.sync_sequence_counter + (ui16)1);
+                auto serial = (ui16)(session.sync_sequence_counter + 1);
+                if constexpr (debugmode) log("_send_command: target_id=%% command=%% (%%) seq=%%", utf::to_hex_0x(target_id), ipc::str(command), command, session.sync_sequence_counter + (ui16)1);
                 session.syncrq(session.sync_buffer, x11::req::send_event{ .destination_id = (ui32)target_id,
                                                                           .event_type     = x11::event::ClientMessage,
                                                                           .originator_id  = session.sync_msg_window_id,
                                                                           .message_type   = session.atom_vtmx,
-                                                                          .serial         = (ui16)serial,
+                                                                          .serial         = serial,
                                                                           .command        = (ui32)command,
-                                                                          .lParam         = (ui32)lParam }); // wParam, lParam.
-                session.sync_x11connection->send(session.sync_buffer);
-                auto ev = x11::event::any{};
-                while (session.sync_x11connection->recv_all((char*)&ev, sizeof(ev)).size() == sizeof(ev))
-                {
-                    auto type = ev.type & 0x7F;
-                    if (type == x11::event::Error)
-                    {
-                        log("%%Send command error: %%", prompt::x11, session.get_error(ev));
-                    }
-                    else if (type == x11::event::ClientMessage)
-                    {
-                        auto reply = netxs::start_lifetime_as<x11::req::send_event::reply>(ev);
-                        if (reply.serial == (ui16)serial)
-                        {
-                            result = reply.lParam; // Has vtmx property.
-                            break;
-                        }
-                    }
-                    else if ((type == x11::event::Reply || type == x11::event::GenericEvent) && ev.length)
-                    {
-                        session.sync_buffer.assign(ev.length * 4, '\0');
-                        if (session.sync_x11connection->recv_all(session.sync_buffer.data(), session.sync_buffer.size()).size() != session.sync_buffer.size())
-                        {
-                            log(ansi::err("%%Send command error: Unexpected reply length", prompt::x11));
-                            break;
-                        }
-                    }
-                }
-                session.sync_buffer.clear();
+                                                                          .lParam         = (ui32)lParam });
+                result = _send_buffer_and_get_reply(serial);
             }
             return result;
         }
@@ -7778,20 +7825,15 @@ namespace netxs::gui
             //keybd_print_vkstat("keybd_read_vkstat");
             //tslink.set_focus();
         }
-        auto _send_message(ui32 target_window_id, si32 command, auto const& block)
-        {
-            auto result = 0;
-            //todo
-            return result;
-        }
         void keybd_send_block(view block)
         {
             auto target_list = mfocus.copy();
+            auto vkstat_shadow = view{ (char*)vkstat.data(), vkstat.size() * sizeof(vkstat[0]) };
             auto local_hwnd = (ui32)master.hWnd;
             for (auto target : target_list) // Send to multi-focused targets.
             {
                 if (target != local_hwnd)
-                if (ipc::pass_state != _send_message(target, ipc::pass_state, vkstat)
+                if (ipc::pass_state != _send_message(target, ipc::pass_state, vkstat_shadow)
                  || ipc::pass_input != _send_message(target, ipc::pass_input, block))
                 {
                     mfocus.erase(target); // Drop failed targets.
@@ -8186,7 +8228,7 @@ namespace netxs::gui
         }
         void window_post_command(arch target_id, si32 command, arch lParam = {})
         {
-            if constexpr (debugmode) log("window_post_command: target_id=0x%% command=%%", utf::to_hex(target_id), command);
+            if constexpr (debugmode) log("window_post_command: target_id=0x%% command=%% (%%)", utf::to_hex(target_id), ipc::str(command), command);
             _post_command(target_id, command, lParam);
         }
         cont window_recv_command(arch lParam)
@@ -8196,28 +8238,27 @@ namespace netxs::gui
             auto crop = cont{ .cmd = command, .ptr = received_data.data() + sizeof(si32), .len = (ui32)(received_data.size() - sizeof(si32)) };
             return crop;
         }
+        void _window_make_foreground()
+        {
+            session.send_batch([&](auto& batch_buffer)
+            {
+                if constexpr (debugmode) log("Make window foreground");
+                for (auto& l : layers)
+                {
+                    auto& s = l.get();
+                    session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.fg_hWnd },
+                                x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
+                }
+            });
+        }
         void window_make_foreground()
         {
-            //todo
-            return;
-            //session.send_batch([&](auto& batch_buffer)
-            //{
-            //    if constexpr (debugmode) log("Try to make window foreground");
-            //    //todo revise: this changes only logic Z-order (mouse input only), but keep visible order intact
-            //    for (auto& l : layers)
-            //    {
-            //        auto& s = l.get();
-            //        session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.fg_hWnd },
-            //                                      x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
-            //    }
-            //    //session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)(ui32)master.fg_hWnd },
-            //    //                              x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
-            //    //todo revise: this makes window resizing be center-based for some reason
-            //    session.accumrq(batch_buffer, x11::req::set_input_focus{ .window_id = (ui32)master.fg_hWnd });
-            //});
+            //_set_focus((ui32)master.wm_hWnd);
         }
         void window_make_focused_impl()
         {
+            //window_make_foreground();
+            //_set_focus((ui32)master.wm_hWnd);
             //todo
             //if constexpr (debugmode)
             //{
@@ -8238,13 +8279,8 @@ namespace netxs::gui
         void window_make_exposed() {}
         void window_make_topmost(bool state)
         {
-            auto old_fg_state = _is_foreground_window();
             ontop_state = state;
-            if (old_fg_state != _is_foreground_window())
-            {
-                _toggle_foreground();
-            }
-            else if (!state && _is_foreground_window()) // Trigger system-wide z-reordering if AlwaysOnTop is off.
+            if (!_check_foreground_state() && !state && _is_foreground_window()) // Trigger system-wide z-reordering if AlwaysOnTop is off.
             {
                 session.send_batch([&](auto& batch_buffer)
                 {
@@ -8306,7 +8342,10 @@ namespace netxs::gui
                 auto ev = netxs::start_lifetime_as<x11::event::any>(read_buffer.data());
                 auto type = ev.type & 0x7F;
                 auto synthetic = !!(ev.type & 0x80);
-                if constexpr (debugmode) if (type != x11::event::GenericEvent) log("%%seq=%% event=%% (%%)", prompt::x11, ev.sequence, session.event_str(type), type);
+                if constexpr (debugmode) if (type != x11::event::GenericEvent && type != session.shm_completion_event)
+                {
+                    log("%%seq=%% event=%% (%%)", prompt::x11, ev.sequence, session.event_str(type), type);
+                }
                 //if constexpr (debugmode)
                 //{
                 //    if (session.received_replies[ev.sequence].load(std::memory_order_acquire))
@@ -8503,34 +8542,34 @@ namespace netxs::gui
                     {
                         auto command = (arch)msg.command;
                         auto lParam  = (arch)msg.lParam;
-                        if constexpr (debugmode) log("%%WIN32_WM_USER cmd=%% (%%) lParam=%%", prompt::x11, ipc::str(command), command, lParam);
-                        if (command == ipc::cmd_w_data) // msg.lParam contains data length.
+                        if constexpr (debugmode) log("%%WIN32_WM_USER cmd=%% (%%) lParam=%%", prompt::x11, ipc::str(command), command, utf::to_hex_0x(lParam));
+                        if (command == ipc::cmd_w_data) // msg.lParam contains data length when command == ipc::cmd_w_data.
                         {
                             auto data_length = (size_t)lParam;
                             auto& peer = recv_buffers[originator_id];
                             peer.received_data.resize(data_length);
                             auto dst = peer.received_data.data();
-                            auto src = (char*)&msg.data32[0];
+                            auto src = (char*)&msg.data32[0]; // x11::req::send_event::reply::data32[0] contains real command id.
                             auto step = std::min((size_t)4 * 2/*first packet payload*/, data_length);
                             std::memcpy(dst, src, step);
                             peer.received_bytes = step;
                             peer.serial = msg.serial;
                             if (data_length == peer.received_bytes) // Single packet.
                             {
-                                auto result = run_command(command, lParam);
+                                auto result = run_command(command, originator_id);
                                 peer.received_bytes = 0;
                                 peer.received_data.clear();
                                 if (peer.received_data.capacity() > 4096)
                                 {
                                     peer.received_data.shrink_to_fit();
                                 }
-                                _reply_command(msg.originator_id, msg.serial, (ui32)result);
+                                _reply_command(originator_id, msg.serial, (ui32)result);
                             }
                         }
                         else if (command != ipc::send_reply)
                         {
                             auto result = run_command(command, lParam);
-                            _reply_command(msg.originator_id, msg.serial, (ui32)result);
+                            _reply_command(originator_id, msg.serial, (ui32)result);
                         }
                     }
                     else if (msg.message_type == session.atom_wm_protocols
@@ -8580,15 +8619,7 @@ namespace netxs::gui
                                     if (ontop_window_id != master.wm_hWnd) // Do nothing if our window triggers the event.
                                     {
                                         auto lock_ui = bell::sync();
-                                        session.send_batch([&](auto& batch_buffer)
-                                        {
-                                            for (auto& l : layers)
-                                            {
-                                                auto& s = l.get();
-                                                session.accumrq(batch_buffer, x11::req::configure_window{ .window_id = (ui32)s.fg_hWnd },
-                                                            x11::req::configure_window::payload{ .stack_mode = x11::req::configure_window::Above });
-                                            }
-                                        });
+                                        _window_make_foreground();
                                     }
                                 }
                             });
@@ -9045,51 +9076,43 @@ namespace netxs::gui
         }
         bool mouse_catch_outside(si32 button_id)
         {
-            //auto ctrl_click = ctrl_pressed()                                  // Detect Ctrl+LeftClick
-            //               && !master.effective_area.hittest(mouse_get_pos()) // outside our window.
-            //               && keybd_read_pressed(vkey::lbutton);              //
-            //               //&& (keybd_read_pressed(vkey::lbutton) || keybd_read_pressed(vkey::rbutton) || keybd_read_pressed(vkey::mbutton));
-            //if (ctrl_click) // Try to make group focus offer before we lose focus.
-            //{
-            //    auto target = ::WindowFromPoint(winmsg.pt);
-            //    auto target_list = mfocus.copy();
-            //    auto data = COPYDATASTRUCT{ .dwData = ipc::make_offer,
-            //                                .cbData = (DWORD)(target_list.size() * sizeof(ui32)),
-            //                                .lpData = (void*)target_list.data() };
-            //    auto rc = ::SendMessageW(target, WM_COPYDATA, (WPARAM)master.hWnd, (LPARAM)&data);
-            //    if constexpr (debug_foci)
-            //    {
-            //        if (rc == ipc::make_offer) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(target)));
-            //        else                       log(ansi::err("Failed to offer group focus to hwnd=", utf::to_hex(target)));
-            //    }
-            //}
-            //mouse_release();
             auto ok = faux;
             auto ctrl_click = button_id == 1                                  // Detect Ctrl+LeftClick
                            && !master.effective_area.hittest(mouse_get_pos()) // outside our window.
                            && ctrl_pressed();                                 //
-            if (ctrl_click) // Try to make group focus offer and pass the input focus.
+            if (ctrl_click) // Try to join (or drop if focused) other window to our group focus.
             {
                 if constexpr (debug_foci) log("Ctrl+Click outside detected");
-                if (auto target_window = session.sync_query_pointer())
+                if (auto window_under_pointer = session.sync_query_pointer())
+                if (auto target_window = _send_command(window_under_pointer, ipc::request_id))
                 {
-                    if constexpr (debug_foci) log("  target_window=%%", utf::to_hex_0x(target_window));
-                    //todo
-                    //if (pass_focus(target_window))
-                    //{
-                        //if constexpr (debug_foci) log("  focus_passed");
-                        auto target_list = mfocus.copy();
-                        if (auto rc = _send_message(target_window, ipc::make_offer, target_list))
+                    //auto target_list = mfocus.copy();
+                    auto local_window = master.wm_hWnd;
+                    if (!mfocus.contains(target_window)) // Toggle focus.
+                    {
+                        if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::join_focus to hwnd=", utf::to_hex(target_window)));
+                        if (ipc::join_focus == _send_command(target_window, ipc::join_focus, local_window))
                         {
-                            ok = rc == ipc::make_offer;
-                            mouse_release();
-                            if constexpr (debug_foci)
-                            {
-                                if (ok) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(target_window)));
-                                else    log(ansi::err("Failed to offer group focus to hwnd=", utf::to_hex(target_window)));
-                            }
+                            ok = true;
+                            mfocus.insert(target_window);
+                            //todo ?inform neighbors
                         }
-                    //}
+                    }
+                    else
+                    {
+                        if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::drop_focus to hwnd=", utf::to_hex(target_window)));
+                        if (ipc::drop_focus == _send_command(target_window, ipc::drop_focus))
+                        {
+                            ok = true;
+                            mfocus.erase(target_window);
+                            //todo ?inform neighbors
+                        }
+                    }
+                    if constexpr (debug_foci)
+                    {
+                        if (ok) log(ansi::clr(greenlt, "Group focus command is accepted by hwnd=", utf::to_hex(target_window)));
+                        else    log(ansi::err("Failed to send group focus command to hwnd=", utf::to_hex(target_window)));
+                    }
                 }
             }
             return ok;
@@ -9274,9 +9297,9 @@ namespace netxs::gui
                     }
                     if constexpr (debugmode)
                     {
-                        log("%%sourceid=%% '%%' Key%%: keycode=%% sym=%% name=%% test_name_to_sym=%% mods=0x%% leds=0x%% layout_idx=%%", prompt::x11, k.sourceid, session.input_devices[k.sourceid].name, is_pressed ? (repeated ? "Repeat" : "Press") : "Release", keycode, utf::to_hex(symcode), x11::key::sym_to_name(symcode), utf::to_hex(x11::key::name_to_sym(x11::key::sym_to_name(symcode))), utf::to_hex(k.mods.effective), utf::to_hex(led_state), (si32)layout_id);
-                        log("   mods:    pressed=%% latched=%% locked=%% effective=%%", utf::to_bin((byte)k.mods.pressed), utf::to_bin((byte)k.mods.latched), utf::to_bin((byte)k.mods.locked), utf::to_bin((byte)k.mods.effective));
-                        log(" layout:    pressed=%% latched=%% locked=%% effective=%%", (si32)k.group.base_group, (si32)k.group.latched, (si32)k.group.locked, (si32)k.group.effective);
+                        log("sourceid: %% '%%' Key%%: keycode=%% sym=%% name=%% test_name_to_sym=%% mods=0x%% leds=0x%% layout_idx=%%", k.sourceid, session.input_devices[k.sourceid].name, is_pressed ? (repeated ? "Repeat" : "Press") : "Release", keycode, utf::to_hex(symcode), x11::key::sym_to_name(symcode), utf::to_hex(x11::key::name_to_sym(x11::key::sym_to_name(symcode))), utf::to_hex(k.mods.effective), utf::to_hex(led_state), (si32)layout_id);
+                        log("    mods:    pressed=%% latched=%% locked=%% effective=%%", utf::to_bin((byte)k.mods.pressed), utf::to_bin((byte)k.mods.latched), utf::to_bin((byte)k.mods.locked), utf::to_bin((byte)k.mods.effective));
+                        log("  layout:    pressed=%% latched=%% locked=%% effective=%%", (si32)k.group.base_group, (si32)k.group.latched, (si32)k.group.locked, (si32)k.group.effective);
                         //keybd_print_vkstat("KeyPress");
                     }
                     _keybd_send_state(keycode, latin_keyall, modifiers, layout_id, virtcod, keystat, scancod, extflag, cluster);
@@ -9423,22 +9446,27 @@ namespace netxs::gui
                         utf::to_hex(f.root_window_id), utf::to_hex(f.event_window_id), utf::to_hex(f.child_window_id),
                         f.sourceid, session.input_devices[f.sourceid].name, utf::to_hex(f.mods.effective), utf::to_hex(f.mods.locked), (si32)focused, (si32)f.group.effective);
                     _set_keyboard_led_state(f.mods.effective); // Sync CapsLock/NumLock/ScrollLock.
-                    auto focus_changed = is_focused_window == !focused;
+                    auto focus_changed = std::exchange(is_focused_window, focused) != is_focused_window;
                     if (focus_changed)
                     {
                         if constexpr (debugmode) log(ansi::clr(tint::greenlt, utf::fprint("  Focus changed2: focused=%%", focused)));
-                        if (focused) restore_if_minimized();
-                        auto changed = std::exchange(is_focused_window, focused) != is_focused_window;
-                        if (!ontop_state && changed)
+                        if (focused)
                         {
-                            _toggle_foreground();
+                            restore_if_minimized();
+                        }
+                        else
+                        {
+                            recv_buffers.clear();
                         }
                         focus_event(focused);
                     }
                 }
             }
-            //if constexpr (debugmode) log("End ----------------------------------------");
             return true;
+        }
+        void window_focus_updated()
+        {
+            _check_foreground_state();
         }
         void sync_os_settings()
         {
