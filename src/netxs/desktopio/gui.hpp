@@ -3713,6 +3713,7 @@ namespace netxs::gui
         virtual void window_make_exposed() = 0;
         virtual void window_make_topmost(bool) = 0;
         virtual void window_focus_updated() {}
+        virtual void window_check_focus_on_hover() {}
 
         virtual void clipboard_set(input::clipdata& clipdata) = 0;
         virtual void clipboard_get(input::clipdata& /*clipdata*/) {}
@@ -4554,12 +4555,7 @@ namespace netxs::gui
             {
                 moving = faux;
             }
-            if (auto target_list = mfocus.is_idle()) // Seize OS focus if group focus is active but window is idle.
-            {
-                auto local_target = master.hWnd;
-                for (auto target : target_list.value()) window_post_command(target, ipc::main_focus, local_target);
-                window_make_foreground();
-            }
+            window_check_focus_on_hover(); // Seize OS focus if group focus is active but window is idle.
             if ((!seized && ingrip) || szgrip.seized)
             {
                 if (mbttns == bttn::right && fsmode == winstate::normal) // Move window.
@@ -6413,6 +6409,15 @@ namespace netxs::gui
             else
             {
                 return faux; // The event is not processed.
+            }
+        }
+        void window_check_focus_on_hover() // Seize OS focus if group focus is active but window is idle.
+        {
+            if (auto target_list = mfocus.is_idle())
+            {
+                auto local_target = master.hWnd;
+                for (auto target : target_list.value()) window_post_command(target, ipc::main_focus, local_target);
+                window_make_foreground();
             }
         }
         void window_make_focused_impl()  { ::SetFocus((HWND)master.hWnd); } // Calls WM_KILLFOCOS(prev) + WM_ACTIVATEAPP(next) + WM_SETFOCUS(next).
