@@ -449,10 +449,10 @@ In the Classic VT console (Teletype, Terminal), vtm always runs in Classic VT mo
 ```bash
 #                                                  ┌─ Classic VT console (Teletype, vtty) for any command or TUI App
 #                                                 ─┴──
-#  ┌ ssh/ssh.exe        ┌─ expanded to `vtm --run vtty [any_remote_command_or_tui_app]`
-# ─┴─                ───┴───────────────────────────────
-  ssh -t user@server vtm [any_remote_command_or_tui_app]
-#                    ┬┬─  ─────────────┬───────────────
+#  ┌ ssh/ssh.exe        ┌─ expanded to `vtm --run vtty [any_remote_tui_app]`
+# ─┴─                ───┴────────────────────
+  ssh -t user@server vtm [any_remote_tui_app]
+#                    ┬┬─  ─────────────┬────
 # <──  Classic VT <──┘└<─ Classic VT <─┘
 ```
 
@@ -461,18 +461,18 @@ DirectVT mode will be automatically enabled if vtm is started inside the DirectV
 #    DirectVT Gateway with TTY (DirectVT console) for DirectVT content received from an external dtvt-aware process
 #                              ─┴──
 #    ┌─ expanded to `vtm --run dtty ssh`
-#    │                   ┌─ expanded to `vtm --run vtty <any_remote_command_or_tui_app>`
-# ───┴───             ───┴───────────────────────────────
-  vtm ssh user@server vtm <any_remote_command_or_tui_app>
-# ─┬─                 ┬┬   ─────────────┬───────────────
+#    │                   ┌─ expanded to `vtm --run vtty <any_remote_tui_app>`
+# ───┴───             ───┴────────────────────
+  vtm ssh user@server vtm <any_remote_tui_app>
+# ─┬─                 ┬┬   ─────────────┬────
 #  └ binary DirectVT ─┘└<─ Classic VT <─┘
 ```
 ...or with verbose syntax, allowing the use of any dtvt-aware source, not just ssh:
 ```bash
 #  DirectVT ─┐    ┌ any ssh/ssh.exe command ┌─ Classic VT console (Teletype, vtty) for TUI App
 #   console ─┴── ─┴─────────────           ─┴──
-  vtm --run dtty ssh user@server vtm --run vtty <any_remote_command_or_tui_app>
-# ─┬────────────                 ─┬┬             ──────────────┬──────────────
+  vtm --run dtty ssh user@server vtm --run vtty <any_remote_tui_app>
+# ─┬────────────                 ─┬┬             ──────────────┬───
 #  └─── binary DirectVT stream ───┘└<─── Classic VT stream <───┘
 ```
 
