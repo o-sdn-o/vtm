@@ -448,9 +448,9 @@ Note: vtm (as a desktop client or standalone terminal) can be run in an existing
 In the Classic VT console (Teletype, Terminal), vtm always runs in Classic VT mode:
 ```bash
 #                                                  ┌─ Classic VT console (Teletype, vtty) for any command or TUI App
-#                                                 ─┴──
-#  ┌ ssh/ssh.exe        ┌─ expanded to `vtm --run vtty [any_remote_tui_app]`
-# ─┴─                ───┴────────────────────
+#  ┌ ssh/ssh.exe                                  ─┴──
+#  │ interactive session   ┌─ expanded to `vtm --run vtty [any_remote_tui_app]`
+# ─┴────             ──────┴─────────────────
   ssh -t user@server vtm [any_remote_tui_app]
 #                    ┬┬─  ─────────────┬────
 # <──  Classic VT <──┘└<─ Classic VT <─┘
