@@ -4908,7 +4908,14 @@ namespace netxs::gui
                         for (auto target : target_list)
                         {
                             if constexpr (debug_foci) log("\thwnd=", utf::to_hex(target));
-                            window_post_command(target, ipc::main_focus, local_target);
+                            if (target == local_target)
+                            {
+                                run_command(ipc::main_focus, local_target);
+                            }
+                            else
+                            {
+                                window_send_command(target, ipc::main_focus, local_target);
+                            }
                         }
                     }
                     else
@@ -5036,7 +5043,7 @@ namespace netxs::gui
                         }
                         else
                         {
-                            window_post_command(target, ipc::main_focus, local_target);
+                            window_send_command(target, ipc::main_focus, local_target);
                         }
                     }
                 }
@@ -6456,10 +6463,17 @@ namespace netxs::gui
             mfocus.if_focus_on_hover(focus_group_copy);
             if (focus_group_copy.size())
             {
-                auto local_target = master.hWnd;
+                auto local_target = (ui32)master.hWnd;
                 for (auto target : focus_group_copy)
                 {
-                    window_post_command(target, ipc::main_focus, local_target);
+                    if (target == local_target)
+                    {
+                        run_command(ipc::main_focus, local_target);
+                    }
+                    else
+                    {
+                        window_send_command(target, ipc::main_focus, local_target);
+                    }
                 }
                 window_make_foreground();
             }
