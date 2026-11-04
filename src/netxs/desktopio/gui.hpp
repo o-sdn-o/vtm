@@ -3072,7 +3072,6 @@ namespace netxs::gui
     {
         using grip = netxs::misc::szgrips;
         using s11n = netxs::directvt::binary::s11n;
-        using b256 = std::array<byte, 256>;
         using title = ui::pro::title;
         using focus = ui::pro::focus;
         using kmap = input::key::kmap;
@@ -3173,7 +3172,6 @@ namespace netxs::gui
             auto contains(ui32 target) { auto lock = std::lock_guard{ mutex }; return group.find(target) != group.end(); }
             void   insert(ui32 target) { auto lock = std::lock_guard{ mutex }; group.insert(target); }
             void    erase(ui32 target) { auto lock = std::lock_guard{ mutex }; group.erase(target); }
-            auto   active()            { auto lock = std::lock_guard{ mutex }; return wheel && group.size() > 1; }
             bool  focused()            { auto lock = std::lock_guard{ mutex }; return !group.empty(); }
             bool clear()
             {
@@ -3187,6 +3185,16 @@ namespace netxs::gui
             {
                 auto lock = std::lock_guard{ mutex };
                 group_copy.assign(group.begin(), group.end());
+            }
+            auto is_multifocused(std::vector<ui32>& group_copy)
+            {
+                auto lock = std::lock_guard{ mutex };
+                auto multifocused = wheel && group.size() > 1;
+                if (multifocused)
+                {
+                    group_copy.assign(group.begin(), group.end());
+                }
+                return multifocused;
             }
             void if_focus_on_hover(std::vector<ui32>& group_copy)
             {
@@ -3698,7 +3706,7 @@ namespace netxs::gui
         virtual void keybd_wipe_vkstat() = 0;
         virtual void keybd_print_vkstat(text s) = 0;
         virtual void keybd_sync_shift(bool async) = 0;
-        virtual void keybd_send_block(view block) = 0;
+        virtual view keybd_view_vkstat() = 0;
         virtual bool keybd_test_toggled(si32 virtcod) = 0;
         virtual bool keybd_read_pressed(si32 virtcod, si32 key_all = 0) = 0;
         virtual bool keybd_test_pressed(si32 virtcod, si32 keycode = 0) = 0;
@@ -4739,9 +4747,18 @@ namespace netxs::gui
             gear.timecod = datetime::now();
             stream.keybd(gear, [&](view block)
             {
-                if (mfocus.active())
+                if (mfocus.is_multifocused(focus_group_copy)) // Send keybd events to the focused group.
                 {
-                    keybd_send_block(block); // Send multifocus events.
+                    auto vkstat_shadow = keybd_view_vkstat();
+                    for (auto target : focus_group_copy)
+                    {
+                        if (target != (ui32)master.hWnd)
+                        if (ipc::pass_state != window_send_message(target, ipc::pass_state, vkstat_shadow)
+                         || ipc::pass_input != window_send_message(target, ipc::pass_input, block))
+                        {
+                            mfocus.erase(target); // Drop failed targets.
+                        }
+                    }
                 }
             });
         }
@@ -5576,8 +5593,8 @@ namespace netxs::gui
         bool fake_ralt{};     // window: Fake alt/ctrl key events on AltGr press/release (non-US kb layouts).
         ui32 fake_time{};     // window: Fake alt/ctrl event time stamp.
         si32 fake_scan{};     // window: Fake LeftCtrl scancode.
-        b256 vkstat{};        // window: Win32 keyboard virtual keys state.
         flag shutdown_called{}; // window: window_shutdow was called.
+        std::array<byte, 256> vkstat{}; // window: Win32 keyboard virtual keys state.
 
         window(auto&& ...Args)
             : winbase{ Args... }
@@ -5783,6 +5800,11 @@ namespace netxs::gui
             {
                 ::SetWindowTextW((HWND)master.hWnd, title.data());
             });
+        }
+        view keybd_view_vkstat()
+        {
+            auto vkstat_shadow = view{ (char*)vkstat.data(), vkstat.size() * sizeof(vkstat[0]) };
+            return vkstat_shadow;
         }
         bool keybd_test_pressed(si32 virtcod, si32 keycode = 0)
         {
@@ -6475,21 +6497,6 @@ namespace netxs::gui
             }
             mouse_release();
             return ok;
-        }
-        void keybd_send_block(view block)
-        {
-            mfocus.copy_group(focus_group_copy);
-            auto local_hwnd = (ui32)master.hWnd;
-            auto vkstat_shadow = view{ (char*)vkstat.data(), vkstat.size() * sizeof(vkstat[0]) };
-            for (auto target : focus_group_copy) // Send to group focused targets.
-            {
-                if (target != local_hwnd)
-                if (ipc::pass_state != window_send_message(target, ipc::pass_state, vkstat_shadow)
-                 || ipc::pass_input != window_send_message(target, ipc::pass_input, block))
-                {
-                    mfocus.erase(target); // Drop failed targets.
-                }
-            }
         }
         void window_sync_taskbar(si32 new_state)
         {
@@ -7873,20 +7880,10 @@ namespace netxs::gui
             //keybd_print_vkstat("keybd_read_vkstat");
             //tslink.set_focus();
         }
-        void keybd_send_block(view block)
+        view keybd_view_vkstat()
         {
-            mfocus.copy_group(focus_group_copy);
             auto vkstat_shadow = view{ (char*)vkstat.data(), vkstat.size() * sizeof(vkstat[0]) };
-            auto local_hwnd = (ui32)master.hWnd;
-            for (auto target : focus_group_copy) // Send to multi-focused targets.
-            {
-                if (target != local_hwnd)
-                if (ipc::pass_state != window_send_message(target, ipc::pass_state, vkstat_shadow)
-                 || ipc::pass_input != window_send_message(target, ipc::pass_input, block))
-                {
-                    mfocus.erase(target); // Drop failed targets.
-                }
-            }
+            return vkstat_shadow;
         }
         void _keybd_turn_layout(ui32 layout_id)
         {
@@ -9548,7 +9545,7 @@ namespace netxs::gui
         si32 keybd_read_state() { return 0; }
         si32 keybd_test_state() { return 0; }
         void keybd_print_vkstat(text /*s*/) {}
-        void keybd_send_block(view /*block*/) {}
+        view keybd_view_vkstat() { return view{}; }
         void keybd_turn_layout(ui32 /*hkl*/) {}
         void keybd_sync_layout() {}
         void keybd_reset_deadkey(arch /*hkl*/ = {}) {}
