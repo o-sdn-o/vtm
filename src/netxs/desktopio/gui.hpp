@@ -3198,7 +3198,7 @@ namespace netxs::gui
                 }
                 return multifocused;
             }
-            void if_focus_on_hover(std::vector<ui32>& group_copy)
+            auto if_focus_on_hover(std::vector<ui32>& group_copy)
             {
                 auto lock = std::lock_guard{ mutex };
                 group_copy.clear();
@@ -3206,6 +3206,7 @@ namespace netxs::gui
                 {
                     group_copy.assign(group.begin(), group.end());
                 }
+                return !group_copy.empty();
             }
             auto set_solo(ui32 local_target)
             {
@@ -4889,6 +4890,55 @@ namespace netxs::gui
             window_send_command(master.hWnd, state ? ipc::make_ontop : ipc::set_normal);
         }
 
+        void do_main_focus(arch lParam)
+        {
+            auto local_target = (ui32)master.hWnd;
+            auto focus_owner = (ui32)lParam;
+            auto changed = mfocus.set_owner(local_target, focus_owner);
+            if (changed)
+            {
+                if constexpr (debug_foci) log("  send focus::set::on");
+                // Focus event must be sent sync (without queueing). Key press events can precede focus events because they are sent synchronously.
+                base::signal(tier::release, input::events::focus::set::on, { .gear_id = stream.gears->id, .focus_type = solo::on });
+                window_focus_updated();
+                if (!has_layout) // The first focus event - sync keybd layout.
+                {
+                    has_layout = true;
+                    keybd_sync_layout();
+                }
+                if (focus_owner == local_target)
+                {
+                    //todo share keybd layout between group focused windows
+                    window_post_command(ipc::sync_state);
+                }
+            }
+        }
+        void do_drop_focus()
+        {
+            auto changed = mfocus.clear();
+            keybd_wipe_vkstat();
+            keybd_send_state();
+            if (changed)
+            {
+                base::signal(tier::release, input::events::focus::set::off, { .gear_id = stream.gears->id });
+                window_focus_updated();
+            }
+        }
+        void send_main_focus(std::span<ui32> target_list)
+        {
+            auto local_target = (ui32)master.hWnd;
+            for (auto target : target_list)
+            {
+                if (target == local_target)
+                {
+                    do_main_focus(local_target);
+                }
+                else
+                {
+                    window_send_command(target, ipc::main_focus, local_target);
+                }
+            }
+        }
         arch run_command(arch command, arch lParam)
         {
             if constexpr (debug_foci) log("command: ", ipc::str(command));
@@ -4898,6 +4948,7 @@ namespace netxs::gui
                 auto data = window_recv_command(lParam);
                 command = data.cmd;
                 if constexpr (debug_foci) log("\tsubcommand: ", ipc::str(command));
+
                 if (command == ipc::make_offer) // Group focus offer.
                 {
                     auto local_target = (ui32)master.hWnd;
@@ -4905,18 +4956,7 @@ namespace netxs::gui
                     if (mfocus.accept_foreign_offer(target_list, local_target))
                     {
                         if constexpr (debug_foci) log("\tGot group focus offer");
-                        for (auto target : target_list)
-                        {
-                            if constexpr (debug_foci) log("\thwnd=", utf::to_hex(target));
-                            if (target == local_target)
-                            {
-                                run_command(ipc::main_focus, local_target);
-                            }
-                            else
-                            {
-                                window_send_command(target, ipc::main_focus, local_target);
-                            }
-                        }
+                        send_main_focus(target_list);
                     }
                     else
                     {
@@ -4955,37 +4995,11 @@ namespace netxs::gui
             }
             else if (command == ipc::main_focus)
             {
-                auto local_target = (ui32)master.hWnd;
-                auto focus_owner = (ui32)lParam;
-                auto changed = mfocus.set_owner(local_target, focus_owner);
-                if (changed)
-                {
-                    if constexpr (debug_foci) log("  send focus::set::on");
-                    // Focus event must be sent sync (without queueing). Key press events can precede focus events because they are sent synchronously.
-                    base::signal(tier::release, input::events::focus::set::on, { .gear_id = stream.gears->id, .focus_type = solo::on });
-                    window_focus_updated();
-                    if (!has_layout) // The first focus event - sync keybd layout.
-                    {
-                        has_layout = true;
-                        keybd_sync_layout();
-                    }
-                    if (focus_owner == local_target)
-                    {
-                        //todo share keybd layout between group focused windows
-                        window_post_command(ipc::sync_state);
-                    }
-                }
+                do_main_focus(lParam);
             }
             else if (command == ipc::drop_focus)
             {
-                auto changed = mfocus.clear();
-                keybd_wipe_vkstat();
-                keybd_send_state();
-                if (changed)
-                {
-                    base::signal(tier::release, input::events::focus::set::off, { .gear_id = stream.gears->id });
-                    window_focus_updated();
-                }
+                do_drop_focus();
             }
             else if (command == ipc::solo_focus)
             {
@@ -5035,17 +5049,7 @@ namespace netxs::gui
                     keybd_read_vkstat(); // It must be called in current thread.
                     activated_by_ctrl_click = was_unfocused && keybd_test_pressed(vkey::ctrl); // Track if the focus is activated by the ctrl+click (don't use ctrl_pressed() because keymod is not updated yet).
                     if constexpr (debug_foci) log("focus_event: read_lbutton=%% test_lbutton=%% read_ctrl_pressed=%% test_ctrl_pressed=%% ctrl_pressed()=%%", keybd_read_pressed(vkey::lbutton), keybd_test_pressed(vkey::lbutton), keybd_read_pressed(vkey::ctrl), keybd_test_pressed(vkey::ctrl), ctrl_pressed());
-                    for (auto target : focus_group_copy)
-                    {
-                        if (target == local_target)
-                        {
-                            run_command(ipc::main_focus, local_target);
-                        }
-                        else
-                        {
-                            window_send_command(target, ipc::main_focus, local_target);
-                        }
-                    }
+                    send_main_focus(focus_group_copy);
                 }
                 else
                 {
@@ -6460,21 +6464,9 @@ namespace netxs::gui
         }
         void window_check_focus_on_hover() // Seize OS focus if group focus is active but window is idle.
         {
-            mfocus.if_focus_on_hover(focus_group_copy);
-            if (focus_group_copy.size())
+            if (mfocus.if_focus_on_hover(focus_group_copy))
             {
-                auto local_target = (ui32)master.hWnd;
-                for (auto target : focus_group_copy)
-                {
-                    if (target == local_target)
-                    {
-                        run_command(ipc::main_focus, local_target);
-                    }
-                    else
-                    {
-                        window_send_command(target, ipc::main_focus, local_target);
-                    }
-                }
+                send_main_focus(focus_group_copy);
                 window_make_foreground();
             }
         }
