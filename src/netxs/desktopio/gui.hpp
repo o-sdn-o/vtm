@@ -3716,6 +3716,7 @@ namespace netxs::gui
         virtual void window_set_title(view utf8) = 0;
         virtual void window_sync_taskbar(si32 new_state) = 0;
         virtual rect window_get_fs_area(rect window_area) = 0;
+        virtual si32 window_send_message(arch target_id, si32 command, view block = {}) = 0;
         virtual void window_send_command_impl(arch target, si32 command, arch lParam = {}) = 0;
         virtual void window_post_command(arch target, si32 command, arch lParam = {}) = 0;
         virtual cont window_recv_command(arch lParam) = 0;
@@ -6479,13 +6480,12 @@ namespace netxs::gui
         {
             mfocus.copy_group(focus_group_copy);
             auto local_hwnd = (ui32)master.hWnd;
-            auto state_data = COPYDATASTRUCT{ .dwData = ipc::pass_state, .cbData = (DWORD)vkstat.size(), .lpData = (void*)vkstat.data() };
-            auto input_data = COPYDATASTRUCT{ .dwData = ipc::pass_input, .cbData = (DWORD)block.size(),  .lpData = (void*)block.data()  };
+            auto vkstat_shadow = view{ (char*)vkstat.data(), vkstat.size() * sizeof(vkstat[0]) };
             for (auto target : focus_group_copy) // Send to group focused targets.
             {
                 if (target != local_hwnd)
-                if (ipc::pass_state != ::SendMessageW((HWND)(arch)target, WM_COPYDATA, (WPARAM)local_hwnd, (LPARAM)&state_data)
-                 || ipc::pass_input != ::SendMessageW((HWND)(arch)target, WM_COPYDATA, (WPARAM)local_hwnd, (LPARAM)&input_data))
+                if (ipc::pass_state != window_send_message(target, ipc::pass_state, vkstat_shadow)
+                 || ipc::pass_input != window_send_message(target, ipc::pass_input, block))
                 {
                     mfocus.erase(target); // Drop failed targets.
                 }
@@ -6545,9 +6545,25 @@ namespace netxs::gui
         }
 
         //todo static
-        cont window_recv_command(arch lParam) { auto& data = *(COPYDATASTRUCT*)lParam; return cont{ .cmd = (si32)data.dwData, .ptr = data.lpData, .len = data.cbData }; }
-        void window_send_command_impl(arch target, si32 command, arch lParam = {}) { ::SendMessageW((HWND)target, WM_USER, command, lParam); }
-        void window_post_command(arch target, si32 command, arch lParam = {}) { ::PostMessageW((HWND)target, WM_USER, command, lParam); }
+        cont window_recv_command(arch lParam)
+        {
+            auto& data = *(COPYDATASTRUCT*)lParam;
+            return cont{ .cmd = (si32)data.dwData, .ptr = data.lpData, .len = data.cbData };
+        }
+        si32 window_send_message(arch target_id, si32 command, view block = {})
+        {
+            auto local_hwnd = (ui32)master.hWnd;
+            auto state_data = COPYDATASTRUCT{ .dwData = (ui32)command, .cbData = (DWORD)block.size(), .lpData = (void*)block.data() };
+            return (si32)::SendMessageW((HWND)target_id, WM_COPYDATA, (WPARAM)local_hwnd, (LPARAM)&state_data);
+        }
+        void window_send_command_impl(arch target, si32 command, arch lParam = {})
+        {
+            ::SendMessageW((HWND)target, WM_USER, command, lParam);
+        }
+        void window_post_command(arch target, si32 command, arch lParam = {})
+        {
+            ::PostMessageW((HWND)target, WM_USER, command, lParam);
+        }
         rect window_get_fs_area(rect window_area)
         {
             auto enum_proc = [](HMONITOR /*unnamedParam1*/, HDC /*unnamedParam2*/, LPRECT monitor_rect_ptr, LPARAM pair_ptr)
@@ -7865,8 +7881,8 @@ namespace netxs::gui
             for (auto target : focus_group_copy) // Send to multi-focused targets.
             {
                 if (target != local_hwnd)
-                if (ipc::pass_state != _send_message(target, ipc::pass_state, vkstat_shadow)
-                 || ipc::pass_input != _send_message(target, ipc::pass_input, block))
+                if (ipc::pass_state != window_send_message(target, ipc::pass_state, vkstat_shadow)
+                 || ipc::pass_input != window_send_message(target, ipc::pass_input, block))
                 {
                     mfocus.erase(target); // Drop failed targets.
                 }
@@ -8253,6 +8269,10 @@ namespace netxs::gui
         {
             //todo multi-monitor setup
             return rect{ dot_00, session.x11_display_size };
+        }
+        si32 window_send_message(arch target_id, si32 command, view block)
+        {
+            return (si32)_send_message(target_id, command, block);
         }
         void window_send_command_impl(arch target_id, si32 command, arch lParam = {})
         {
@@ -9540,6 +9560,7 @@ namespace netxs::gui
         void layer_sync_bits(layer& /*s*/, rect /*area*/, bool /*zeroize*/ = faux) {}
         void window_sync_taskbar(si32 /*new_state*/) {}
         rect window_get_fs_area(rect window_area) { return window_area; }
+        si32 window_send_message(arch /*target_id*/, si32 /*command*/, view /*block*/ = {}) { return 0u; }
         void window_send_command_impl(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         void window_post_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         cont window_recv_command(arch /*lParam*/) { return cont{}; }
