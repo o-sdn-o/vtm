@@ -3127,7 +3127,6 @@ namespace netxs::gui
             X(no_command) /* Noop. Just to update.                 */ \
             X(cmd_w_data) /* Command with payload.                 */ \
             X(send_reply) /* Command reply.                        */ \
-            X(join_focus) /* Join to the group focus.              */ \
             X(request_id) /* Request WM window id (X11).           */
             static constexpr auto _base = 99900;
             static constexpr auto _counter = __COUNTER__ + 1;
@@ -3215,10 +3214,10 @@ namespace netxs::gui
             bool accept_foreign_offer(auto target_list, ui32 local_target)
             {
                 auto lock = std::lock_guard{ mutex };
-                auto bus_was_off = group.empty();
+                auto changed = group.empty();
                 group = { target_list.begin(), target_list.end() };
                 group.insert(local_target);
-                return bus_was_off;
+                return changed;
             }
             auto set_owner(ui32 local_target, ui32 focus_owner)
             {
@@ -3238,7 +3237,7 @@ namespace netxs::gui
                     group_copy.assign(group.begin(), group.end());
                     if (new_focus_state) group_copy.push_back(local_target);
                 }
-                else
+                else //if (!new_focus_state)
                 {
                     group_copy.clear();
                 }
@@ -4950,19 +4949,6 @@ namespace netxs::gui
                     }
                 }
             }
-            else if (command == ipc::join_focus)
-            {
-                auto local_target = (ui32)master.hWnd;
-                auto focus_owner = (ui32)lParam;
-                auto changed = mfocus.set_owner(local_target, focus_owner);
-                if (changed)
-                {
-                    if constexpr (debug_foci) log("  send focus::set::on (join)");
-                    // Focus event must be sent sync (without queueing). Key press events can precede focus events because they are sent synchronously.
-                    base::signal(tier::release, input::events::focus::set::on, { .gear_id = stream.gears->id, .focus_type = solo::on });
-                    window_focus_updated();
-                }
-            }
             else if (command == ipc::drop_focus)
             {
                 auto changed = mfocus.clear();
@@ -6469,7 +6455,7 @@ namespace netxs::gui
                            && !master.effective_area.hittest(mouse_get_pos()) // outside our window.
                            && keybd_read_pressed(vkey::lbutton);              //
                            //&& (keybd_read_pressed(vkey::lbutton) || keybd_read_pressed(vkey::rbutton) || keybd_read_pressed(vkey::mbutton));
-            if (ctrl_click) // Try to make group focus offer before we lose focus.
+            if (ctrl_click) // Try to make group focus offer before we lose os focus.
             {
                 auto target = ::WindowFromPoint(winmsg.pt);
                 mfocus.copy_group(focus_group_copy);
@@ -9135,8 +9121,8 @@ namespace netxs::gui
                     auto local_window = master.wm_hWnd;
                     if (!mfocus.contains(target_window)) // Toggle focus.
                     {
-                        if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::join_focus to hwnd=", utf::to_hex(target_window)));
-                        if (ipc::join_focus == _send_command(target_window, ipc::join_focus, local_window))
+                        if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::main_focus to hwnd=", utf::to_hex(target_window)));
+                        if (ipc::main_focus == _send_command(target_window, ipc::main_focus, local_window))
                         {
                             ok = true;
                             mfocus.insert(target_window);
