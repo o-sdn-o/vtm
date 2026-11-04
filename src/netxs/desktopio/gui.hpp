@@ -3181,10 +3181,12 @@ namespace netxs::gui
                 group.clear();
                 return bus_was_on;
             }
-            void copy_group(std::vector<ui32>& group_copy)
+            auto copy_group(std::vector<ui32>& group_copy)
             {
                 auto lock = std::lock_guard{ mutex };
                 group_copy.assign(group.begin(), group.end());
+                auto copy_view = view{ (char*)group_copy.data(), group_copy.size() * sizeof(group_copy[0]) };
+                return copy_view;
             }
             auto is_multifocused(std::vector<ui32>& group_copy)
             {
@@ -6480,13 +6482,11 @@ namespace netxs::gui
                            //&& (keybd_read_pressed(vkey::lbutton) || keybd_read_pressed(vkey::rbutton) || keybd_read_pressed(vkey::mbutton));
             if (ctrl_click) // Try to make group focus offer before we lose os focus.
             {
-                auto target = ::WindowFromPoint(winmsg.pt);
-                mfocus.copy_group(focus_group_copy);
-                auto data = COPYDATASTRUCT{ .dwData = ipc::make_offer, .cbData = (DWORD)(focus_group_copy.size() * sizeof(ui32)), .lpData = (void*)focus_group_copy.data() };
-                auto rc = ::SendMessageW(target, WM_COPYDATA, (WPARAM)master.hWnd, (LPARAM)&data);
-                ok = rc == ipc::make_offer;
-                if (ok)
+                auto target = (arch)::WindowFromPoint(winmsg.pt);
+                auto group_view = mfocus.copy_group(focus_group_copy);
+                if (ipc::make_offer == window_send_message(target, ipc::make_offer, group_view))
                 {
+                    ok = true;
                     mfocus.handoff((ui32)(arch)target);
                 }
                 if constexpr (debug_foci)
