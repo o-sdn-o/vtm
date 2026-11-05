@@ -3169,10 +3169,9 @@ namespace netxs::gui
             uset group{}; // foci: Members including leader.
             bool wheel{}; // foci: Window is a leader of the multi-focus group.
 
-            auto contains(ui32 target) { auto lock = std::lock_guard{ mutex }; return group.find(target) != group.end(); }
-            void   insert(ui32 target) { auto lock = std::lock_guard{ mutex }; group.insert(target); }
-            void    erase(ui32 target) { auto lock = std::lock_guard{ mutex }; group.erase(target); }
-            bool  focused()            { auto lock = std::lock_guard{ mutex }; return !group.empty(); }
+            void  insert(ui32 target) { auto lock = std::lock_guard{ mutex }; group.insert(target); }
+            void   erase(ui32 target) { auto lock = std::lock_guard{ mutex }; group.erase(target); }
+            bool focused()            { auto lock = std::lock_guard{ mutex }; return !group.empty(); }
             bool clear()
             {
                 auto lock = std::lock_guard{ mutex };
@@ -3181,30 +3180,43 @@ namespace netxs::gui
                 group.clear();
                 return bus_was_on;
             }
-            auto copy_group(std::vector<ui32>& group_copy)
+            void _copy_peers(ui32 local_target, std::vector<ui32>& group_copy)
+            {
+                group_copy.clear();
+                for (auto target : group)
+                {
+                    if (target != local_target)
+                    {
+                        group_copy.push_back(target);
+                    }
+                }
+            }
+            auto copy_group(ui32 local_target, std::vector<ui32>& group_copy)
             {
                 auto lock = std::lock_guard{ mutex };
-                group_copy.assign(group.begin(), group.end());
+                _copy_peers(local_target, group_copy);
+                group_copy.push_back(local_target);
                 auto copy_view = view{ (char*)group_copy.data(), group_copy.size() * sizeof(group_copy[0]) };
                 return copy_view;
             }
-            auto is_multifocused(std::vector<ui32>& group_copy)
+            auto is_multifocused(ui32 local_target, std::vector<ui32>& group_copy)
             {
                 auto lock = std::lock_guard{ mutex };
                 auto multifocused = wheel && group.size() > 1;
                 if (multifocused)
                 {
-                    group_copy.assign(group.begin(), group.end());
+                    _copy_peers(local_target, group_copy);
                 }
                 return multifocused;
             }
-            auto if_focus_on_hover(std::vector<ui32>& group_copy)
+            auto if_focus_on_hover(ui32 local_target, std::vector<ui32>& group_copy)
             {
                 auto lock = std::lock_guard{ mutex };
                 group_copy.clear();
                 if (!wheel && group.size())
                 {
-                    group_copy.assign(group.begin(), group.end());
+                    _copy_peers(local_target, group_copy);
+                    group_copy.push_back(local_target);
                 }
                 return !group_copy.empty();
             }
@@ -3230,12 +3242,13 @@ namespace netxs::gui
                 group.insert(local_target);
                 return changed;
             }
-            auto set_owner(ui32 local_target, ui32 focus_owner)
+            auto set_owner(ui32 local_target, std::span<ui32> target_list)
             {
                 auto lock = std::lock_guard{ mutex };
                 auto changed = group.empty();
+                auto focus_owner = target_list.back();
                 wheel = local_target == focus_owner;
-                group.insert(focus_owner);
+                group = { target_list.begin(), target_list.end() };
                 return changed;
             }
             auto changed_os_focus(ui32 local_target, bool new_focus_state, std::vector<ui32>& group_copy)
@@ -3243,14 +3256,11 @@ namespace netxs::gui
                 auto lock = std::lock_guard{ mutex };
                 auto was_unfocused = group.empty();
                 auto switched = wheel != new_focus_state;
+                group_copy.clear();
                 if (switched)
                 {
-                    group_copy.assign(group.begin(), group.end());
-                    if (new_focus_state) group_copy.push_back(local_target);
-                }
-                else //if (!new_focus_state)
-                {
-                    group_copy.clear();
+                    _copy_peers(local_target, group_copy);
+                    group_copy.push_back(local_target);
                 }
                 return std::pair{ switched, was_unfocused };
             }
@@ -4750,12 +4760,11 @@ namespace netxs::gui
             gear.timecod = datetime::now();
             stream.keybd(gear, [&](view block)
             {
-                if (mfocus.is_multifocused(focus_group_copy)) // Send keybd events to the focused group.
+                if (mfocus.is_multifocused((ui32)master.hWnd, focus_group_copy)) // Send keybd events to the focused group.
                 {
                     auto vkstat_shadow = keybd_view_vkstat();
                     for (auto target : focus_group_copy)
                     {
-                        if (target != (ui32)master.hWnd)
                         if (ipc::pass_state != window_send_message(target, ipc::pass_state, vkstat_shadow)
                          || ipc::pass_input != window_send_message(target, ipc::pass_input, block))
                         {
@@ -4890,11 +4899,11 @@ namespace netxs::gui
             window_send_command(master.hWnd, state ? ipc::make_ontop : ipc::set_normal);
         }
 
-        void do_main_focus(arch lParam)
+        void do_main_focus(std::span<ui32> target_list)
         {
+            if (target_list.empty()) return;
             auto local_target = (ui32)master.hWnd;
-            auto focus_owner = (ui32)lParam;
-            auto changed = mfocus.set_owner(local_target, focus_owner);
+            auto changed = mfocus.set_owner(local_target, target_list);
             if (changed)
             {
                 if constexpr (debug_foci) log("  send focus::set::on");
@@ -4906,6 +4915,7 @@ namespace netxs::gui
                     has_layout = true;
                     keybd_sync_layout();
                 }
+                auto focus_owner = target_list.back();
                 if (focus_owner == local_target)
                 {
                     //todo share keybd layout between group focused windows
@@ -4931,11 +4941,12 @@ namespace netxs::gui
             {
                 if (target == local_target)
                 {
-                    do_main_focus(local_target);
+                    do_main_focus(target_list);
                 }
                 else
                 {
-                    window_send_command(target, ipc::main_focus, local_target);
+                    auto group_view = view{ (char*)target_list.data(), target_list.size() * sizeof(target_list[0]) };
+                    window_send_message(target, ipc::main_focus, group_view);
                 }
             }
         }
@@ -4967,6 +4978,11 @@ namespace netxs::gui
                         }
                     }
                 }
+                else if (command == ipc::main_focus)
+                {
+                    auto target_list = std::span<ui32>{ (ui32*)data.ptr, data.len / sizeof(ui32) };
+                    do_main_focus(target_list);
+                }
                 else if (command == ipc::pass_state) // Keybd state.
                 {
                     keybd_load_vkstat(data.ptr, data.len);
@@ -4992,10 +5008,6 @@ namespace netxs::gui
                     }
                 }
                 else command = 0;
-            }
-            else if (command == ipc::main_focus)
-            {
-                do_main_focus(lParam);
             }
             else if (command == ipc::drop_focus)
             {
@@ -6464,7 +6476,7 @@ namespace netxs::gui
         }
         void window_check_focus_on_hover() // Seize OS focus if group focus is active but window is idle.
         {
-            if (mfocus.if_focus_on_hover(focus_group_copy))
+            if (mfocus.if_focus_on_hover((ui32)master.hWnd, focus_group_copy))
             {
                 send_main_focus(focus_group_copy);
                 window_make_foreground();
@@ -6489,7 +6501,7 @@ namespace netxs::gui
             if (ctrl_click) // Try to make group focus offer before we lose os focus.
             {
                 auto target = (arch)::WindowFromPoint(winmsg.pt);
-                auto group_view = mfocus.copy_group(focus_group_copy);
+                auto group_view = mfocus.copy_group((ui32)master.hWnd, focus_group_copy);
                 if (ipc::make_offer == window_send_message(target, ipc::make_offer, group_view))
                 {
                     ok = true;
@@ -9141,11 +9153,12 @@ namespace netxs::gui
                 if (auto window_under_pointer = session.sync_query_pointer())
                 if (auto target_window = _send_command(window_under_pointer, ipc::request_id))
                 {
-                    auto local_window = master.wm_hWnd;
-                    if (!mfocus.contains(target_window)) // Toggle focus.
+                    auto group_view = mfocus.copy_group((ui32)master.hWnd, focus_group_copy);
+                    auto contains = std::ranges::find_if(focus_group_copy, [&](auto target){ return target == target_window; }) != focus_group_copy.end();
+                    if (!contains) // Toggle focus.
                     {
                         if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::main_focus to hwnd=", utf::to_hex(target_window)));
-                        if (ipc::main_focus == _send_command(target_window, ipc::main_focus, local_window))
+                        if (ipc::main_focus == window_send_message(target_window, ipc::main_focus, group_view))
                         {
                             ok = true;
                             mfocus.insert(target_window);
