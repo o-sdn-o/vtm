@@ -3118,7 +3118,6 @@ namespace netxs::gui
             X(main_focus) /* Advertise OS focus owner.             */ \
             X(solo_focus) /* Set solo focus.                       */ \
             X(sync_state) /* Sync keybd modifiers state with OS.   */ \
-            X(pass_state) /* Pass keybd modifiers state.           */ \
             X(pass_input) /* Pass keybd input.                     */ \
             X(expose_win) /* Order to expose window.               */ \
             X(make_ontop) /* Order to make window topmost.         */ \
@@ -3289,7 +3288,7 @@ namespace netxs::gui
                 {
                     auto lock = s11n::syskeybd.freeze();
                     lock.thing.set(gear);
-                    lock.thing.sendfx([&](auto block)
+                    lock.thing.sendfx([&](auto& block)
                     {
                         proc(block);
                         intio.send(block);
@@ -3718,7 +3717,7 @@ namespace netxs::gui
             gear.payload = temp;
             if constexpr (debugmode) log("Sync kb layout: xlayout=%%", utf::to_hex(xlayout));
         }
-        virtual void keybd_load_vkstat(void* ptr, ui32 len) = 0;
+        virtual void keybd_load_vkstat(view new_vkstat) = 0;
         virtual void keybd_read_vkstat() = 0;
         virtual void keybd_wipe_vkstat() = 0;
         virtual void keybd_print_vkstat(text s) = 0;
@@ -4757,20 +4756,20 @@ namespace netxs::gui
             gear.handled = {};
             gear.touched = {};
             gear.timecod = datetime::now();
-            stream.keybd(gear, [&](view block)
+            stream.keybd(gear, [&](auto& block)
             {
                 if (mfocus.is_multifocused((ui32)master.hWnd, focus_group_copy)) // Send keybd events to the focused group.
                 {
                     auto vkstat_shadow = keybd_view_vkstat();
+                    block += vkstat_shadow;
                     for (auto target : focus_group_copy)
                     {
-                        //todo combine
-                        if (ipc::pass_state != window_send_message(target, ipc::pass_state, vkstat_shadow)
-                         || ipc::pass_input != window_send_message(target, ipc::pass_input, block))
+                        if (ipc::pass_input != window_send_message(target, ipc::pass_input, block))
                         {
                             mfocus.erase_target(target); // Drop failed targets.
                         }
                     }
+                    block.resize(block.size() - vkstat_shadow.size());
                 }
             });
         }
@@ -4965,13 +4964,12 @@ namespace netxs::gui
                     auto target_list = std::span<ui32>{ (ui32*)data.ptr, data.len / sizeof(ui32) };
                     do_main_focus(target_list);
                 }
-                else if (command == ipc::pass_state) // Keybd state.
+                else if (command == ipc::pass_input) // Keybd input and state.
                 {
-                    keybd_load_vkstat(data.ptr, data.len);
-                }
-                else if (command == ipc::pass_input) // Keybd input.
-                {
-                    auto input_data = qiew{ (char*)data.ptr, data.len };
+                    auto vkstat_shadow = keybd_view_vkstat();
+                    auto input_data = qiew{ (char*)data.ptr, data.len - vkstat_shadow.size() }; // Keybd input.
+                    auto state_data = qiew{ (char*)data.ptr + data.len - vkstat_shadow.size(), vkstat_shadow.size() }; // Keybd state.
+                    keybd_load_vkstat(state_data); // Keybd state.
                     auto keybd = input::syskeybd{};
                     if (stream.gears)
                     if (keybd.load(input_data))
@@ -6175,11 +6173,11 @@ namespace netxs::gui
             if (keybd_read_pressed(vkey::rsuper  )) state |= mods::RSuper;
             return state;
         }
-        void keybd_load_vkstat(void* ptr, ui32 len)
+        void keybd_load_vkstat(view new_vkstat)
         {
-            if (len == sizeof(vkstat))
+            if (new_vkstat.size() == sizeof(vkstat))
             {
-                std::memcpy(vkstat.data(), ptr, sizeof(vkstat));
+                std::memcpy(vkstat.data(), new_vkstat.data(), sizeof(vkstat));
             }
         }
         void keybd_print_vkstat(text s)
@@ -7850,11 +7848,11 @@ namespace netxs::gui
         si32 keybd_conv_keyid2media(si32 /*keyid*/) { return 0; }
         si32 keybd_conv_media2keyid(si32 /*mediakey*/) { return input::key::undef; }
         bool keybd_read_media(si16 /*cmd*/, ui16 /*uDevice*/, ui16 /*dwKeys*/) { return 0; }
-        void keybd_load_vkstat(void* ptr, ui32 len)
+        void keybd_load_vkstat(view new_vkstat)
         {
-            if (len == sizeof(vkstat))
+            if (new_vkstat.size() == sizeof(vkstat))
             {
-                std::memcpy(vkstat.data(), ptr, sizeof(vkstat));
+                std::memcpy(vkstat.data(), new_vkstat.data(), sizeof(vkstat));
             }
         }
         void keybd_print_vkstat(text s)
@@ -9545,7 +9543,7 @@ namespace netxs::gui
         si32 keybd_conv_keyid2media(si32 /*keyid*/) { return 0; }
         si32 keybd_conv_media2keyid(si32 /*mediakey*/) { return input::key::undef; }
         bool keybd_read_media(si16 /*cmd*/, ui16 /*uDevice*/, ui16 /*dwKeys*/) { return 0; }
-        void keybd_load_vkstat(void* /*ptr*/, ui32 /*len*/) {}
+        void keybd_load_vkstat(view /*new_vkstat*/) {}
         void keybd_wipe_vkstat() {}
         void keybd_read_vkstat() {}
         si32 keybd_read_state() { return 0; }
