@@ -3170,8 +3170,18 @@ namespace netxs::gui
             bool wheel{}; // foci: Window is a leader of the multi-focus group.
 
             void  insert(ui32 target) { auto lock = std::lock_guard{ mutex }; group.insert(target); }
-            void   erase(ui32 target) { auto lock = std::lock_guard{ mutex }; group.erase(target); }
             bool focused()            { auto lock = std::lock_guard{ mutex }; return !group.empty(); }
+            void erase_target(ui32 target)
+            {
+                auto lock = std::lock_guard{ mutex };
+                group.erase(target);
+            }
+            void erase_and_copy(ui32 target, ui32 local_target, std::vector<ui32>& group_copy)
+            {
+                auto lock = std::lock_guard{ mutex };
+                group.erase(target);
+                _copy_peers(local_target, group_copy);
+            }
             bool clear()
             {
                 auto lock = std::lock_guard{ mutex };
@@ -3191,13 +3201,18 @@ namespace netxs::gui
                     }
                 }
             }
-            auto copy_group(ui32 local_target, std::vector<ui32>& group_copy)
+            auto copy_group(ui32 local_target, ui32 joining_target, std::vector<ui32>& group_copy)
             {
                 auto lock = std::lock_guard{ mutex };
                 _copy_peers(local_target, group_copy);
-                group_copy.push_back(local_target);
+                auto contains = std::ranges::find_if(group_copy, [&](auto t){ return t == joining_target; }) != group_copy.end();
+                if (!contains)
+                {
+                    group_copy.push_back(joining_target);
+                }
+                group_copy.push_back(local_target); // Keep local_target the focus owner.
                 auto copy_view = view{ (char*)group_copy.data(), group_copy.size() * sizeof(group_copy[0]) };
-                return copy_view;
+                return std::pair{ copy_view, contains };
             }
             auto is_multifocused(ui32 local_target, std::vector<ui32>& group_copy)
             {
@@ -3727,7 +3742,7 @@ namespace netxs::gui
         virtual void window_sync_taskbar(si32 new_state) = 0;
         virtual rect window_get_fs_area(rect window_area) = 0;
         virtual si32 window_send_message(arch target_id, si32 command, view block = {}) = 0;
-        virtual void window_send_command_impl(arch target, si32 command, arch lParam = {}) = 0;
+        virtual ui32 window_send_command_impl(arch target, si32 command, arch lParam = {}) = 0;
         virtual void window_post_command(arch target, si32 command, arch lParam = {}) = 0;
         virtual cont window_recv_command(arch lParam) = 0;
         virtual void window_message_pump() = 0;
@@ -3745,16 +3760,11 @@ namespace netxs::gui
         virtual void clipboard_get(input::clipdata& /*clipdata*/) {}
         virtual void sync_os_settings() = 0;
 
-        void window_send_command(arch target, si32 command, arch lParam = {})
+        auto window_send_command(arch target, si32 command, arch lParam = {})
         {
-            if (target == master.hWnd)
-            {
-                run_command(command, lParam);
-            }
-            else
-            {
-                window_send_command_impl(target, command, lParam);
-            }
+            auto result = target == master.hWnd ? run_command(command, lParam)
+                                                : window_send_command_impl(target, command, lParam);
+            return result;
         }
         void window_make_focused()
         {
@@ -4754,10 +4764,11 @@ namespace netxs::gui
                     auto vkstat_shadow = keybd_view_vkstat();
                     for (auto target : focus_group_copy)
                     {
+                        //todo combine
                         if (ipc::pass_state != window_send_message(target, ipc::pass_state, vkstat_shadow)
                          || ipc::pass_input != window_send_message(target, ipc::pass_input, block))
                         {
-                            mfocus.erase(target); // Drop failed targets.
+                            mfocus.erase_target(target); // Drop failed targets.
                         }
                     }
                 }
@@ -4885,7 +4896,7 @@ namespace netxs::gui
         void ZOrder(many const& args)
         {
             auto state = args.size() ? netxs::any_get_or(args.front(), zpos::plain) : zpos::plain;
-            window_send_command(master.hWnd, state ? ipc::make_ontop : ipc::set_normal);
+            run_command(state ? ipc::make_ontop : ipc::set_normal);
         }
 
         void do_main_focus(std::span<ui32> target_list)
@@ -4923,28 +4934,28 @@ namespace netxs::gui
                 window_focus_updated();
             }
         }
-        void send_main_focus(std::span<ui32> target_list)
+        void send_main_focus(std::span<ui32> target_list, bool inform_owner = true)
         {
             auto local_target = (ui32)master.hWnd;
+            auto group_view = view{ (char*)target_list.data(), target_list.size() * sizeof(target_list[0]) };
             for (auto target : target_list)
             {
-                if (target == local_target)
+                if (target == local_target && inform_owner)
                 {
                     do_main_focus(target_list);
                 }
                 else
                 {
-                    auto group_view = view{ (char*)target_list.data(), target_list.size() * sizeof(target_list[0]) };
                     window_send_message(target, ipc::main_focus, group_view);
                 }
             }
         }
-        arch run_command(arch command, arch lParam)
+        ui32 run_command(arch command, arch lParam = {})
         {
             if constexpr (debug_foci) log("command: ", ipc::str(command));
             if (command == ipc::cmd_w_data)
             {
-                if (!lParam) return 0;
+                if (!lParam) return 0u;
                 auto data = window_recv_command(lParam);
                 command = data.cmd;
                 if constexpr (debug_foci) log("\tsubcommand: ", ipc::str(command));
@@ -4978,7 +4989,10 @@ namespace netxs::gui
                         stream.keybd(gear);
                     }
                 }
-                else command = 0;
+                else
+                {
+                    command = 0;
+                }
             }
             else if (command == ipc::drop_focus)
             {
@@ -5017,8 +5031,11 @@ namespace netxs::gui
             {
                 command = master.hWnd; // Reply with wm-window id.
             }
-            else command = 0;
-            return command;
+            else
+            {
+                command = 0;
+            }
+            return (ui32)command;
         }
         void focus_event(bool new_focus_state)
         {
@@ -6471,16 +6488,17 @@ namespace netxs::gui
                            //&& (keybd_read_pressed(vkey::lbutton) || keybd_read_pressed(vkey::rbutton) || keybd_read_pressed(vkey::mbutton));
             if (ctrl_click) // Try to make group focus offer before we lose os focus.
             {
-                auto main_target = (arch)::WindowFromPoint(winmsg.pt);
-                mfocus.copy_group((ui32)master.hWnd, focus_group_copy);
-                focus_group_copy.push_back((ui32)main_target);
-                std::swap(focus_group_copy.back(), focus_group_copy[focus_group_copy.size() - 2]); // Make master.hWnd the focus owner.
-                auto group_view = view{ (char*)focus_group_copy.data(), focus_group_copy.size() * sizeof(focus_group_copy[0]) };
-                ok = ipc::make_offer == window_send_message(main_target, ipc::main_focus, group_view);
-                if constexpr (debug_foci)
+                if constexpr (debug_foci) log("Ctrl+Click outside detected");
+                if (auto window_under_pointer = (arch)::WindowFromPoint(winmsg.pt))
+                if (auto target_window = window_send_command(window_under_pointer, ipc::request_id))
                 {
-                    if (ok) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(main_target)));
-                    else    log(ansi::err("Failed to offer group focus to hwnd=", utf::to_hex(main_target)));
+                    auto [group_view, contains] = mfocus.copy_group((ui32)master.hWnd, target_window, focus_group_copy);
+                    ok = ipc::make_offer == window_send_message(target_window, ipc::main_focus, group_view);
+                    if constexpr (debug_foci)
+                    {
+                        if (ok) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(target_window)));
+                        else    log(ansi::err("Failed to offer group focus to hwnd=", utf::to_hex(target_window)));
+                    }
                 }
             }
             mouse_release();
@@ -6551,9 +6569,9 @@ namespace netxs::gui
             auto state_data = COPYDATASTRUCT{ .dwData = (ui32)command, .cbData = (DWORD)block.size(), .lpData = (void*)block.data() };
             return (si32)::SendMessageW((HWND)target_id, WM_COPYDATA, (WPARAM)local_hwnd, (LPARAM)&state_data);
         }
-        void window_send_command_impl(arch target, si32 command, arch lParam = {})
+        ui32 window_send_command_impl(arch target, si32 command, arch lParam = {})
         {
-            ::SendMessageW((HWND)target, WM_USER, command, lParam);
+            return (ui32)::SendMessageW((HWND)target, WM_USER, command, lParam);
         }
         void window_post_command(arch target, si32 command, arch lParam = {})
         {
@@ -8259,9 +8277,9 @@ namespace netxs::gui
         {
             return (si32)_send_message(target_id, command, block);
         }
-        void window_send_command_impl(arch target_id, si32 command, arch lParam = {})
+        ui32 window_send_command_impl(arch target_id, si32 command, arch lParam = {})
         {
-            _send_command(target_id, command, lParam);
+            return _send_command(target_id, command, lParam);
         }
         void window_post_command(arch target_id, si32 command, arch lParam = {})
         {
@@ -8570,7 +8588,7 @@ namespace netxs::gui
                         if (peer.received_bytes == data_length) // Done.
                         {
                             auto result = run_command(ipc::cmd_w_data, originator_id);
-                            _reply_command(originator_id, peer.serial, (ui32)result);
+                            _reply_command(originator_id, peer.serial, result);
                             peer.received_bytes = 0;
                             peer.received_data.clear();
                         }
@@ -8600,13 +8618,13 @@ namespace netxs::gui
                                 {
                                     peer.received_data.shrink_to_fit();
                                 }
-                                _reply_command(originator_id, msg.serial, (ui32)result);
+                                _reply_command(originator_id, msg.serial, result);
                             }
                         }
                         else if (command != ipc::send_reply)
                         {
                             auto result = run_command(command, lParam);
-                            _reply_command(originator_id, msg.serial, (ui32)result);
+                            _reply_command(originator_id, msg.serial, result);
                         }
                     }
                     else if (msg.message_type == session.atom_wm_protocols
@@ -9121,16 +9139,16 @@ namespace netxs::gui
             {
                 if constexpr (debug_foci) log("Ctrl+Click outside detected");
                 if (auto window_under_pointer = session.sync_query_pointer())
-                if (auto target_window = _send_command(window_under_pointer, ipc::request_id))
+                if (auto target_window = window_send_command(window_under_pointer, ipc::request_id))
                 {
-                    auto group_view = mfocus.copy_group((ui32)master.hWnd, focus_group_copy);
-                    auto contains = std::ranges::find_if(focus_group_copy, [&](auto target){ return target == target_window; }) != focus_group_copy.end();
+                    ok = true;
+                    auto [group_view, contains] = mfocus.copy_group((ui32)master.hWnd, target_window, focus_group_copy);
                     if (!contains) // Toggle focus.
                     {
                         if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::main_focus to hwnd=", utf::to_hex(target_window)));
+                        //todo send_main_focus(focus_group_copy, faux); // Update neighbors.
                         if (ipc::main_focus == window_send_message(target_window, ipc::main_focus, group_view))
                         {
-                            ok = true;
                             mfocus.insert(target_window);
                             //todo ?inform neighbors
                         }
@@ -9138,11 +9156,10 @@ namespace netxs::gui
                     else
                     {
                         if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::drop_focus to hwnd=", utf::to_hex(target_window)));
-                        if (ipc::drop_focus == _send_command(target_window, ipc::drop_focus))
+                        if (ipc::drop_focus == window_send_command(target_window, ipc::drop_focus))
                         {
-                            ok = true;
-                            mfocus.erase(target_window);
-                            //todo ?inform neighbors
+                            mfocus.erase_and_copy(target_window, (ui32)master.hWnd, focus_group_copy);
+                            //todo send_main_focus(focus_group_copy, faux); // Update neighbors.
                         }
                     }
                     if constexpr (debug_foci)
@@ -9547,7 +9564,7 @@ namespace netxs::gui
         void window_sync_taskbar(si32 /*new_state*/) {}
         rect window_get_fs_area(rect window_area) { return window_area; }
         si32 window_send_message(arch /*target_id*/, si32 /*command*/, view /*block*/ = {}) { return 0u; }
-        void window_send_command_impl(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
+        ui32 window_send_command_impl(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         void window_post_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         cont window_recv_command(arch /*lParam*/) { return cont{}; }
         void window_make_foreground() {}
