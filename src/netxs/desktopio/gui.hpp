@@ -3212,11 +3212,14 @@ namespace netxs::gui
             auto if_focus_on_hover(ui32 local_target, std::vector<ui32>& group_copy)
             {
                 auto lock = std::lock_guard{ mutex };
-                group_copy.clear();
                 if (!wheel && group.size())
                 {
                     _copy_peers(local_target, group_copy);
                     group_copy.push_back(local_target);
+                }
+                else
+                {
+                    group_copy.clear();
                 }
                 return !group_copy.empty();
             }
@@ -3228,21 +3231,7 @@ namespace netxs::gui
                 group = { local_target };
                 return copy;
             }
-            void handoff(ui32 target)
-            {
-                auto lock = std::lock_guard{ mutex };
-                wheel = faux;
-                group.insert(target);
-            }
-            bool accept_foreign_offer(auto target_list, ui32 local_target)
-            {
-                auto lock = std::lock_guard{ mutex };
-                auto changed = group.empty();
-                group = { target_list.begin(), target_list.end() };
-                group.insert(local_target);
-                return changed;
-            }
-            auto set_owner(ui32 local_target, std::span<ui32> target_list)
+            auto update_group(ui32 local_target, std::span<ui32> target_list)
             {
                 auto lock = std::lock_guard{ mutex };
                 auto changed = group.empty();
@@ -4903,7 +4892,7 @@ namespace netxs::gui
         {
             if (target_list.empty()) return;
             auto local_target = (ui32)master.hWnd;
-            auto changed = mfocus.set_owner(local_target, target_list);
+            auto changed = mfocus.update_group(local_target, target_list);
             if (changed)
             {
                 if constexpr (debug_foci) log("  send focus::set::on");
@@ -4960,25 +4949,7 @@ namespace netxs::gui
                 command = data.cmd;
                 if constexpr (debug_foci) log("\tsubcommand: ", ipc::str(command));
 
-                if (command == ipc::make_offer) // Group focus offer.
-                {
-                    auto local_target = (ui32)master.hWnd;
-                    auto target_list = std::span<ui32>{ (ui32*)data.ptr, data.len / sizeof(ui32) };
-                    if (mfocus.accept_foreign_offer(target_list, local_target))
-                    {
-                        if constexpr (debug_foci) log("\tGot group focus offer");
-                        send_main_focus(target_list);
-                    }
-                    else
-                    {
-                        if constexpr (debug_foci)
-                        {
-                            log(ansi::err("Unexpected focus offer:"));
-                            for (auto target : target_list) log(ansi::err("\thwnd=", utf::to_hex(target)));
-                        }
-                    }
-                }
-                else if (command == ipc::main_focus)
+                if (command == ipc::main_focus)
                 {
                     auto target_list = std::span<ui32>{ (ui32*)data.ptr, data.len / sizeof(ui32) };
                     do_main_focus(target_list);
@@ -6500,17 +6471,16 @@ namespace netxs::gui
                            //&& (keybd_read_pressed(vkey::lbutton) || keybd_read_pressed(vkey::rbutton) || keybd_read_pressed(vkey::mbutton));
             if (ctrl_click) // Try to make group focus offer before we lose os focus.
             {
-                auto target = (arch)::WindowFromPoint(winmsg.pt);
-                auto group_view = mfocus.copy_group((ui32)master.hWnd, focus_group_copy);
-                if (ipc::make_offer == window_send_message(target, ipc::make_offer, group_view))
-                {
-                    ok = true;
-                    mfocus.handoff((ui32)(arch)target);
-                }
+                auto main_target = (arch)::WindowFromPoint(winmsg.pt);
+                mfocus.copy_group((ui32)master.hWnd, focus_group_copy);
+                focus_group_copy.push_back((ui32)main_target);
+                std::swap(focus_group_copy.back(), focus_group_copy[focus_group_copy.size() - 2]); // Make master.hWnd the focus owner.
+                auto group_view = view{ (char*)focus_group_copy.data(), focus_group_copy.size() * sizeof(focus_group_copy[0]) };
+                ok = ipc::make_offer == window_send_message(main_target, ipc::main_focus, group_view);
                 if constexpr (debug_foci)
                 {
-                    if (ok) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(target)));
-                    else    log(ansi::err("Failed to offer group focus to hwnd=", utf::to_hex(target)));
+                    if (ok) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(main_target)));
+                    else    log(ansi::err("Failed to offer group focus to hwnd=", utf::to_hex(main_target)));
                 }
             }
             mouse_release();
