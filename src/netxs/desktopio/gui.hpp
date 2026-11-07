@@ -3213,7 +3213,7 @@ namespace netxs::gui
                 auto copy_view = view{ (char*)group_copy.data(), group_copy.size() * sizeof(group_copy[0]) };
                 if (reset_wheel)
                 {
-                    assert(wheel == true);
+                    //assert(wheel == true);
                     wheel = faux; // Reset the wheel to prevent the focus loss when refocusing by os (win32).
                 }
                 return std::pair{ copy_view, contains };
@@ -3500,7 +3500,7 @@ namespace netxs::gui
                     {
                         owner.window_post_command(ipc::take_focus);
                     }
-                    if (f.focus_type == solo::on) // Set solo focus.
+                    if (f.focus_type == solo::on && !owner.ctrl_pressed()) // Set solo focus.
                     {
                         owner.window_post_command(ipc::solo_focus); // Request to drop all parallel foci.
                     }
@@ -3808,7 +3808,7 @@ namespace netxs::gui
             return mfocus.focused()? keymod
                                    : keybd_read_state();
         }
-        auto ctrl_pressed()
+        bool ctrl_pressed()
         {
             auto mod_state = get_mods_state();
             return (mod_state & mods::anyCtrl) != 0;
@@ -5061,6 +5061,10 @@ namespace netxs::gui
                         window_post_command(target, ipc::drop_focus);
                     }
                 }
+            }
+            if (new_focus_state && keybd_test_pressed(vkey::ctrl)) // Case where the mouse hovers over the next group focused window.
+            {
+                mouse_capture(by::keybd); // ReCapture mouse if Ctrl modifier is pressed (to catch Ctrl+AnyClick outside the window).
             }
         }
         void timer_event(arch eventid)
