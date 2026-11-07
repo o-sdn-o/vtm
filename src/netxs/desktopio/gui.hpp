@@ -3200,7 +3200,7 @@ namespace netxs::gui
                     }
                 }
             }
-            auto copy_group(ui32 joining_target, std::vector<ui32>& group_copy)
+            auto copy_group(ui32 joining_target, std::vector<ui32>& group_copy, bool reset_wheel)
             {
                 auto lock = std::lock_guard{ mutex };
                 _copy_peers(group_copy);
@@ -3211,6 +3211,11 @@ namespace netxs::gui
                 }
                 group_copy.push_back(owner); // Keep our window the focus owner.
                 auto copy_view = view{ (char*)group_copy.data(), group_copy.size() * sizeof(group_copy[0]) };
+                if (reset_wheel)
+                {
+                    assert(wheel == true);
+                    wheel = faux; // Reset the wheel to prevent the focus loss when refocusing by os (win32).
+                }
                 return std::pair{ copy_view, contains };
             }
             auto is_multifocused(std::vector<ui32>& group_copy)
@@ -6493,7 +6498,7 @@ namespace netxs::gui
                     {
                         ok = true;
                         if constexpr (debug_foci) log(ansi::clr(greenlt, "The group focus command is accepted by hwnd=", utf::to_hex(target_window)));
-                        auto [group_view, contains] = mfocus.copy_group(target_window, focus_group_copy);
+                        auto [group_view, contains] = mfocus.copy_group(target_window, focus_group_copy, true);
                         window_send_message(target_window, ipc::main_focus, group_view); // The target window will itself notify the group when the os forcibly shifts focus to it following the mouse click.
                     }
                     else if constexpr (debug_foci)
@@ -9145,7 +9150,7 @@ namespace netxs::gui
                     {
                         ok = true;
                         if constexpr (debug_foci) log(ansi::clr(greenlt, "The group focus command is accepted by hwnd=", utf::to_hex(target_window)));
-                        auto [group_view, contains] = mfocus.copy_group(target_window, focus_group_copy);
+                        auto [group_view, contains] = mfocus.copy_group(target_window, focus_group_copy, faux);
                         if (!contains) // Toggle focus.
                         {
                             if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::main_focus to hwnd=", utf::to_hex(target_window)));

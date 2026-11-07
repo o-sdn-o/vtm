@@ -322,6 +322,10 @@ namespace netxs::ansi
             {
                 block.push_back(data);
             }
+            else if constexpr (std::is_same_v<D, bool>)
+            {
+                block.push_back('0' + data);
+            }
             else if constexpr (std::is_integral_v<D>)
             {
                 itos(data);
