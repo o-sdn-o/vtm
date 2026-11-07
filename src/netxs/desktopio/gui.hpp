@@ -5035,6 +5035,7 @@ namespace netxs::gui
         }
         void focus_event(bool new_focus_state)
         {
+            if constexpr (debug_foci) log(ansi::clr(yellowlt, utf::fprint("focus_event: state=%%", new_focus_state)));
             is_focused_window = new_focus_state;
             auto [switched, was_unfocused] = mfocus.changed_os_focus(new_focus_state, focus_group_copy);
             if (switched)
@@ -5043,11 +5044,12 @@ namespace netxs::gui
                 {
                     keybd_read_vkstat(); // It must be called in current thread.
                     activated_by_ctrl_click = was_unfocused && keybd_test_pressed(vkey::ctrl); // Track if the focus is activated by the ctrl+click (don't use ctrl_pressed() because keymod is not updated yet).
-                    if constexpr (debug_foci) log("focus_event: read_lbutton=%% test_lbutton=%% read_ctrl_pressed=%% test_ctrl_pressed=%% ctrl_pressed()=%%", keybd_read_pressed(vkey::lbutton), keybd_test_pressed(vkey::lbutton), keybd_read_pressed(vkey::ctrl), keybd_test_pressed(vkey::ctrl), ctrl_pressed());
+                    if constexpr (debug_foci) log("  set focus: read_lbutton=%% test_lbutton=%% read_ctrl_pressed=%% test_ctrl_pressed=%% ctrl_pressed()=%%", keybd_read_pressed(vkey::lbutton), keybd_test_pressed(vkey::lbutton), keybd_read_pressed(vkey::ctrl), keybd_test_pressed(vkey::ctrl), ctrl_pressed());
                     send_main_focus(focus_group_copy);
                 }
                 else
                 {
+                    if constexpr (debug_foci) log("  lost focus");
                     keybd_reset_deadkey(); // Force reset deadkey state if it is. Windows doesn't reset deadkey state when refocusing but all other platforms do.
                     for (auto target : focus_group_copy) // Send to all that the focus is going to lost.
                     {
@@ -6484,16 +6486,19 @@ namespace netxs::gui
                            //&& (keybd_read_pressed(vkey::lbutton) || keybd_read_pressed(vkey::rbutton) || keybd_read_pressed(vkey::mbutton));
             if (ctrl_click) // Try to make group focus offer before we lose os focus.
             {
-                if constexpr (debug_foci) log("Ctrl+Click outside detected");
+                if constexpr (debug_foci) log("Ctrl+Click outside the window");
                 if (auto window_under_pointer = (arch)::WindowFromPoint(winmsg.pt))
-                if (auto target_window = window_send_command(window_under_pointer, ipc::request_id))
                 {
-                    auto [group_view, contains] = mfocus.copy_group(target_window, focus_group_copy);
-                    ok = ipc::main_focus == window_send_message(target_window, ipc::main_focus, group_view); // The target window will itself notify the group when the os forcibly shifts focus to it following the mouse click.
-                    if constexpr (debug_foci)
+                    if (auto target_window = window_send_command(window_under_pointer, ipc::request_id))
                     {
-                        if (ok) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(target_window)));
-                        else    log(ansi::err("Failed to offer group focus to hwnd=", utf::to_hex(target_window)));
+                        ok = true;
+                        if constexpr (debug_foci) log(ansi::clr(greenlt, "The group focus command is accepted by hwnd=", utf::to_hex(target_window)));
+                        auto [group_view, contains] = mfocus.copy_group(target_window, focus_group_copy);
+                        window_send_message(target_window, ipc::main_focus, group_view); // The target window will itself notify the group when the os forcibly shifts focus to it following the mouse click.
+                    }
+                    else if constexpr (debug_foci)
+                    {
+                        log(ansi::err("Failed to send the group focus command to hwnd=", utf::to_hex(window_under_pointer)));
                     }
                 }
             }
@@ -9133,35 +9138,37 @@ namespace netxs::gui
                            && ctrl_pressed();                                 //
             if (ctrl_click) // Try to join (or drop if focused) other window to our group focus.
             {
-                if constexpr (debug_foci) log("Ctrl+Click outside detected");
+                if constexpr (debug_foci) log("Ctrl+Click outside the window");
                 if (auto window_under_pointer = session.sync_query_pointer())
-                if (auto target_window = window_send_command(window_under_pointer, ipc::request_id))
                 {
-                    ok = true;
-                    auto [group_view, contains] = mfocus.copy_group(target_window, focus_group_copy);
-                    if (!contains) // Toggle focus.
+                    if (auto target_window = window_send_command(window_under_pointer, ipc::request_id))
                     {
-                        if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::main_focus to hwnd=", utf::to_hex(target_window)));
-                        //todo send_main_focus(focus_group_copy, faux); // Update neighbors.
-                        if (ipc::main_focus == window_send_message(target_window, ipc::main_focus, group_view))
+                        ok = true;
+                        if constexpr (debug_foci) log(ansi::clr(greenlt, "The group focus command is accepted by hwnd=", utf::to_hex(target_window)));
+                        auto [group_view, contains] = mfocus.copy_group(target_window, focus_group_copy);
+                        if (!contains) // Toggle focus.
                         {
-                            mfocus.insert(target_window);
-                            //todo ?inform neighbors
-                        }
-                    }
-                    else
-                    {
-                        if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::drop_focus to hwnd=", utf::to_hex(target_window)));
-                        if (ipc::drop_focus == window_send_command(target_window, ipc::drop_focus))
-                        {
-                            mfocus.erase_and_copy(target_window, focus_group_copy);
+                            if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::main_focus to hwnd=", utf::to_hex(target_window)));
                             //todo send_main_focus(focus_group_copy, faux); // Update neighbors.
+                            if (ipc::main_focus == window_send_message(target_window, ipc::main_focus, group_view))
+                            {
+                                mfocus.insert(target_window);
+                                //todo ?inform neighbors
+                            }
+                        }
+                        else
+                        {
+                            if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::drop_focus to hwnd=", utf::to_hex(target_window)));
+                            if (ipc::drop_focus == window_send_command(target_window, ipc::drop_focus))
+                            {
+                                mfocus.erase_and_copy(target_window, focus_group_copy);
+                                //todo send_main_focus(focus_group_copy, faux); // Update neighbors.
+                            }
                         }
                     }
-                    if constexpr (debug_foci)
+                    else if constexpr (debug_foci)
                     {
-                        if (ok) log(ansi::clr(greenlt, "Group focus command is accepted by hwnd=", utf::to_hex(target_window)));
-                        else    log(ansi::err("Failed to send group focus command to hwnd=", utf::to_hex(target_window)));
+                        log(ansi::err("Failed to send the group focus command to hwnd=", utf::to_hex(window_under_pointer)));
                     }
                 }
             }
