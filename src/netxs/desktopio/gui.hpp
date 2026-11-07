@@ -3112,7 +3112,6 @@ namespace netxs::gui
         struct ipc
         {
             #define ipc_t \
-            X(make_offer) /* Make group focus offer on Ctrl+Click. */ \
             X(drop_focus) /* Order to drop any focus.              */ \
             X(take_focus) /* Order to take OS focus.               */ \
             X(main_focus) /* Advertise OS focus owner.             */ \
@@ -6491,7 +6490,7 @@ namespace netxs::gui
                 if (auto target_window = window_send_command(window_under_pointer, ipc::request_id))
                 {
                     auto [group_view, contains] = mfocus.copy_group((ui32)master.hWnd, target_window, focus_group_copy);
-                    ok = ipc::make_offer == window_send_message(target_window, ipc::main_focus, group_view);
+                    ok = ipc::main_focus == window_send_message(target_window, ipc::main_focus, group_view); // The target window will itself notify the group when the os forcibly shifts focus to it following the mouse click.
                     if constexpr (debug_foci)
                     {
                         if (ok) log(ansi::clr(greenlt, "Group focus offer accepted by hwnd=", utf::to_hex(target_window)));
