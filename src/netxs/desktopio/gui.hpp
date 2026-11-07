@@ -3166,6 +3166,7 @@ namespace netxs::gui
             sync mutex{}; // foci: Mutex.
             uset group{}; // foci: Members including leader.
             bool wheel{}; // foci: Window is a leader of the multi-focus group.
+            flag alive{}; // foci: Window has gear focus (to prevent focus on hover an inactive member window).
             ui32 owner{}; // foci: Our master window id.
 
             void  insert(ui32 target) { auto lock = std::lock_guard{ mutex }; group.insert(target); }
@@ -3231,7 +3232,7 @@ namespace netxs::gui
             auto if_focus_on_hover(std::vector<ui32>& group_copy)
             {
                 auto lock = std::lock_guard{ mutex };
-                if (!wheel && group.size())
+                if (!wheel && alive && group.size())
                 {
                     _copy_peers(group_copy);
                     group_copy.push_back(owner);
@@ -3509,6 +3510,8 @@ namespace netxs::gui
                 {
                     owner.base::signal(tier::request, input::events::focus::rem, { .gear_id = f.gear_id });
                 }
+                owner.mfocus.alive = f.state;
+                if constexpr (debug_foci) log("owner.mfocus.alive=", !!owner.mfocus.alive);
             }
             void handle(s11n::xs::syskeybd         lock)
             {
