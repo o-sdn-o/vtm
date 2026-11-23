@@ -3169,8 +3169,16 @@ namespace netxs::gui
             bool has_gear_focus{}; // foci: Window has gear focus (to prevent focus on hover an inactive member window).
             ui32 owner{}; // foci: Our master window id.
 
-            void  insert(ui32 target) { auto lock = std::lock_guard{ mutex }; group.insert(target); }
-            bool focused()            { auto lock = std::lock_guard{ mutex }; return !group.empty(); }
+            void insert(ui32 target)
+            {
+                auto lock = std::lock_guard{ mutex };
+                group.insert(target);
+            }
+            bool focused()
+            {
+                auto lock = std::lock_guard{ mutex };
+                return !group.empty();
+            }
             void set_gear_focus(bool new_state)
             {
                 auto lock = std::lock_guard{ mutex };
@@ -3187,6 +3195,14 @@ namespace netxs::gui
                 auto lock = std::lock_guard{ mutex };
                 group.erase(target);
                 _copy_peers(group_copy);
+            }
+            bool full_erase_and_copy(ui32 target, std::vector<ui32>& group_copy)
+            {
+                auto lock = std::lock_guard{ mutex };
+                group.erase(target);
+                _copy_peers(group_copy);
+                group.clear();
+                return std::exchange(wheel, faux);
             }
             bool clear()
             {
@@ -3554,7 +3570,7 @@ namespace netxs::gui
             }
             void handle(s11n::xs::sysclose       /*lock*/)
             {
-                //todo revise
+                if constexpr (debug_foci) log("s11n::xs::sysclose");
                 owner.window_shutdown();
                 //owner.active.exchange(faux);
                 //owner.stop(true);
@@ -3761,7 +3777,7 @@ namespace netxs::gui
         virtual void window_initialize() = 0;
         virtual void window_shutdown() = 0;
         virtual void window_cleanup() = 0;
-        virtual void window_make_foreground() = 0;
+        virtual void window_make_foreground(ui32 target_id) = 0;
         virtual void window_make_focused_impl() = 0;
         virtual void window_make_exposed() = 0;
         virtual void window_make_topmost(bool) = 0;
@@ -3782,6 +3798,23 @@ namespace netxs::gui
         {
             restore_if_minimized();
             window_make_focused_impl();
+        }
+        void window_on_close()
+        {
+            if constexpr (debug_foci) log("window_on_close()");
+            auto is_wheel = mfocus.full_erase_and_copy((ui32)master.hWnd, focus_group_copy);
+            if (focus_group_copy.size())
+            {
+                if constexpr (debug_foci) log("  focus_group_copy.size()=", focus_group_copy.size());
+                send_main_focus(focus_group_copy, faux); // Update neighbors.
+                if (is_wheel) // Handoff OS focus to the new focus owner.
+                {
+                    auto new_focus_owner = focus_group_copy.back();
+                    if constexpr (debug_foci) log("  Handoff OS focus to the new focus owner ", utf::to_hex_0x(new_focus_owner));
+                    //todo window_pass_focus(new_focus_owner); for x11
+                    window_make_foreground(new_focus_owner);
+                }
+            }
         }
         bool mouse_captured()
         {
@@ -4819,6 +4852,7 @@ namespace netxs::gui
             //keybd_print_vkstat("keybd_send_state");
             if (changed)
             {
+                // Nothing to build -- no args for keybd_send_state().
                 //chords.build(gear, [&](auto ext_vk, auto keyid){ return !keybd_test_pressed_ex(ext_vk, keyid); });
                 stream_keybd(gear);
             }
@@ -6485,15 +6519,29 @@ namespace netxs::gui
             if (mfocus.if_focus_on_hover(focus_group_copy))
             {
                 send_main_focus(focus_group_copy);
-                window_make_foreground();
+                window_make_foreground((ui32)master.hWnd);
             }
         }
         void window_make_focused_impl()  { ::SetFocus((HWND)master.hWnd); } // Calls WM_KILLFOCOS(prev) + WM_ACTIVATEAPP(next) + WM_SETFOCUS(next).
         void window_make_exposed()       { ::SetWindowPos((HWND)master.hWnd, HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOSENDCHANGING | SWP_NOACTIVATE); }
         void window_make_topmost(bool s) { ontop_state = s; ::SetWindowPos((HWND)master.hWnd, s ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE); }
-        void window_make_foreground()    { ::SetForegroundWindow((HWND)master.hWnd); } //::AllowSetForegroundWindow(ASFW_ANY); } // Neither ::SetFocus() nor ::SetActiveWindow() can switch focus immediately.
-        void window_shutdown()           { if (!shutdown_called.exchange(true)) ::PostMessageW((HWND)master.hWnd, WM_CLOSE, NULL, NULL); } // Deadlock when SendMessageW synchronously calls focus() which locks UI mutex.
-        void window_cleanup()            { ::RemoveClipboardFormatListener((HWND)master.hWnd); ::PostQuitMessage(0); }
+        void window_make_foreground(ui32 target_id) //::AllowSetForegroundWindow(ASFW_ANY); } // Neither ::SetFocus() nor ::SetActiveWindow() can switch focus immediately.
+        {
+            ::SetForegroundWindow((HWND)(arch)target_id);
+        }
+        void window_shutdown() // Deadlock when SendMessageW synchronously calls focus() which locks UI mutex.
+        {
+            if (!shutdown_called.exchange(true))
+            {
+                window_on_close();
+                ::PostMessageW((HWND)master.hWnd, WM_CLOSE, NULL, NULL);
+            }
+        }
+        void window_cleanup()
+        {
+            ::RemoveClipboardFormatListener((HWND)master.hWnd);
+            ::PostQuitMessage(0);
+        }
         fp2d mouse_get_pos()             { return fp2d{ winmsg.pt.x, winmsg.pt.y }; }
         void mouse_capture_impl()        { ::SetCapture((HWND)master.hWnd); }
         void mouse_release_impl()        { ::ReleaseCapture(); }
@@ -8327,13 +8375,13 @@ namespace netxs::gui
                 }
             });
         }
-        void window_make_foreground()
+        void window_make_foreground(ui32 target_id)
         {
-            //_set_focus((ui32)master.wm_hWnd);
+            //_set_focus(target_id);
         }
         void window_make_focused_impl()
         {
-            //window_make_foreground();
+            //window_make_foreground((ui32)master.hWnd);
             //_set_focus((ui32)master.wm_hWnd);
             //todo
             //if constexpr (debugmode)
@@ -9105,6 +9153,7 @@ namespace netxs::gui
         }
         void window_shutdown()
         {
+            window_on_close();
             _close_command((ui32)master.hWnd);
         }
         void window_cleanup() { /*do nothing on X11*/ }
@@ -9590,7 +9639,7 @@ namespace netxs::gui
         ui32 window_send_command_impl(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         void window_post_command(arch /*target*/, si32 /*command*/, arch /*lParam*/ = {}) {}
         cont window_recv_command(arch /*lParam*/) { return cont{}; }
-        void window_make_foreground() {}
+        void window_make_foreground(ui32 /*target_id*/) {}
         void window_make_focused_impl() {}
         void window_make_exposed() {}
         void window_make_topmost(bool) {}

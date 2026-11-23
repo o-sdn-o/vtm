@@ -501,7 +501,7 @@ struct impl : consrv
         {
             status = nt::status::invalid_handle;
             nt::ioctl(nt::console::op::complete_io, condrv_handle, *this);
-            if constexpr (debugmode) log("\tPending operation aborted");
+            if constexpr (debugmode) log("%%Pending operation aborted", prompt::cin);
         }
     };
 
