@@ -3166,11 +3166,17 @@ namespace netxs::gui
             sync mutex{}; // foci: Mutex.
             uset group{}; // foci: Members including leader.
             bool wheel{}; // foci: Window is a leader of the multi-focus group.
-            flag alive{}; // foci: Window has gear focus (to prevent focus on hover an inactive member window).
+            bool has_gear_focus{}; // foci: Window has gear focus (to prevent focus on hover an inactive member window).
             ui32 owner{}; // foci: Our master window id.
 
             void  insert(ui32 target) { auto lock = std::lock_guard{ mutex }; group.insert(target); }
             bool focused()            { auto lock = std::lock_guard{ mutex }; return !group.empty(); }
+            void set_gear_focus(bool new_state)
+            {
+                auto lock = std::lock_guard{ mutex };
+                has_gear_focus = new_state;
+                if constexpr (debug_foci) log(ansi::clr(magentalt, "has_gear_focus=", new_state));
+            }
             void erase_target(ui32 target)
             {
                 auto lock = std::lock_guard{ mutex };
@@ -3232,7 +3238,7 @@ namespace netxs::gui
             auto if_focus_on_hover(std::vector<ui32>& group_copy)
             {
                 auto lock = std::lock_guard{ mutex };
-                if (!wheel && alive && group.size())
+                if (!wheel && has_gear_focus && group.size())
                 {
                     _copy_peers(group_copy);
                     group_copy.push_back(owner);
@@ -3510,8 +3516,7 @@ namespace netxs::gui
                 {
                     owner.base::signal(tier::request, input::events::focus::rem, { .gear_id = f.gear_id });
                 }
-                owner.mfocus.alive = f.state;
-                if constexpr (debug_foci) log("owner.mfocus.alive=", !!owner.mfocus.alive);
+                owner.mfocus.set_gear_focus(f.state);
             }
             void handle(s11n::xs::syskeybd         lock)
             {
@@ -4912,6 +4917,7 @@ namespace netxs::gui
             auto changed = mfocus.update_group(target_list);
             if (changed)
             {
+                mfocus.set_gear_focus(true);
                 if constexpr (debug_foci) log("  send focus::set::on");
                 // Focus event must be sent sync (without queueing). Key press events can precede focus events because they are sent synchronously.
                 base::signal(tier::release, input::events::focus::set::on, { .gear_id = stream.gears->id, .focus_type = solo::on });
@@ -4936,6 +4942,8 @@ namespace netxs::gui
             keybd_send_state();
             if (changed)
             {
+                mfocus.set_gear_focus(faux);
+                if constexpr (debug_foci) log("  send focus::set::off");
                 base::signal(tier::release, input::events::focus::set::off, { .gear_id = stream.gears->id });
                 window_focus_updated();
             }
