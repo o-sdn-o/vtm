@@ -5729,18 +5729,19 @@ namespace netxs::gui
         }
         void layers_move()
         {
-            auto lock = ::BeginDeferWindowPos((si32)layers.size());
+            auto window_coor = POINT{};
+            auto update_info = UPDATELAYEREDWINDOWINFO{ .cbSize = sizeof(UPDATELAYEREDWINDOWINFO),
+                                                        .pptDst = &window_coor };
             for (auto& l : layers)
             {
                 auto& s = l.get();
                 auto target_coor = s.live ? s.allocated_area.coor : s.hidden;
                 if (s.presented_area.coor(target_coor))
                 {
-                    lock = ::DeferWindowPos(lock, (HWND)s.hWnd, 0, target_coor.x, target_coor.y, 0, 0, SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-                    if (!lock) { log("%%DeferWindowPos returns unexpected result: %ec%", prompt::gui, ::GetLastError()); }
+                    window_coor = { s.presented_area.coor.x, s.presented_area.coor.y };
+                    ::UpdateLayeredWindowIndirect((HWND)s.hWnd, &update_info); // ::UpdateLayeredWindowIndirect doesn't send any window messages (::DeferWindowPos causes a deadlock if windproc is busy).
                 }
             }
-            ::EndDeferWindowPos(lock);
         }
         //todo static
         void keybd_reset_deadkey(arch hkl = {})
@@ -5802,18 +5803,20 @@ namespace netxs::gui
                 return;
             }
             auto windowmoved = s.presented_area.coor(s.live ? s.allocated_area.coor : s.hidden);
+            auto window_coor = POINT{ s.presented_area.coor.x, s.presented_area.coor.y };
             if (s.sync.empty())
             {
                 if (windowmoved) // Hide window. Windows Server Core doesn't hide windows by ShowWindow(). Details: https://devblogs.microsoft.com/oldnewthing/20041028-00/?p=37453.
                 {
-                    ::SetWindowPos((HWND)s.hWnd, 0, s.presented_area.coor.x, s.presented_area.coor.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOSENDCHANGING | SWP_NOACTIVATE);
+                    auto update_info = UPDATELAYEREDWINDOWINFO{ .cbSize = sizeof(UPDATELAYEREDWINDOWINFO),
+                                                                .pptDst = &window_coor };
+                    ::UpdateLayeredWindowIndirect((HWND)s.hWnd, &update_info); // ::UpdateLayeredWindowIndirect doesn't send any window messages (::SetWindowPos causes a deadlock if windproc is busy).
                 }
                 return;
             }
             s.presented_area.size = s.allocated_area.size;
             auto blend_props = BLENDFUNCTION{ .BlendOp = AC_SRC_OVER, .SourceConstantAlpha = 255, .AlphaFormat = AC_SRC_ALPHA };
             auto bitmap_coor = POINT{};
-            auto window_coor = POINT{ s.presented_area.coor.x, s.presented_area.coor.y };
             auto bitmap_size =  SIZE{ s.presented_area.size.x, s.presented_area.size.y };
             auto update_area = RECT{};
             auto update_info = UPDATELAYEREDWINDOWINFO{ .cbSize   = sizeof(UPDATELAYEREDWINDOWINFO),
@@ -6523,8 +6526,8 @@ namespace netxs::gui
             }
         }
         void window_make_focused_impl()  { ::SetFocus((HWND)master.hWnd); } // Calls WM_KILLFOCOS(prev) + WM_ACTIVATEAPP(next) + WM_SETFOCUS(next).
-        void window_make_exposed()       { ::SetWindowPos((HWND)master.hWnd, HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOSENDCHANGING | SWP_NOACTIVATE); }
-        void window_make_topmost(bool s) { ontop_state = s; ::SetWindowPos((HWND)master.hWnd, s ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE); }
+        void window_make_exposed()       { ::SetWindowPos((HWND)master.hWnd, HWND_TOP, 0, 0, 0, 0, SWP_NOSENDCHANGING | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_ASYNCWINDOWPOS); }     // SWP_ASYNCWINDOWPOS to avoid a deadlock if windproc is busy.
+        void window_make_topmost(bool s) { ontop_state = s; ::SetWindowPos((HWND)master.hWnd, s ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_ASYNCWINDOWPOS); } //
         void window_make_foreground(ui32 target_id) //::AllowSetForegroundWindow(ASFW_ANY); } // Neither ::SetFocus() nor ::SetActiveWindow() can switch focus immediately.
         {
             ::SetForegroundWindow((HWND)(arch)target_id);
