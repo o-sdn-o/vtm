@@ -3216,17 +3216,13 @@ namespace netxs::gui
             void _copy_peers(std::vector<ui32>& group_copy)
             {
                 group_copy.clear();
-                for (auto target : group)
-                {
-                    if (target != owner)
-                    {
-                        group_copy.push_back(target);
-                    }
-                }
+                group_copy.reserve(group.size());
+                std::for_each(group.begin(), group.end(), [&](auto t){ if (t != owner) group_copy.push_back(t); });
             }
-            auto copy_group(ui32 joining_target, std::vector<ui32>& group_copy, bool reset_wheel)
+            auto copy_group(ui32 joining_target, bool reset_wheel)
             {
                 auto lock = std::lock_guard{ mutex };
+                auto group_copy = std::vector<ui32>{};
                 _copy_peers(group_copy);
                 auto contains = std::ranges::find_if(group_copy, [&](auto t){ return t == joining_target; }) != group_copy.end();
                 if (!contains)
@@ -3240,7 +3236,7 @@ namespace netxs::gui
                     //assert(wheel == true);
                     wheel = faux; // Reset the wheel to prevent the focus loss when refocusing by os (win32).
                 }
-                return std::pair{ copy_view, contains };
+                return std::tuple{ copy_view, group_copy, contains };
             }
             auto is_multifocused(std::vector<ui32>& group_copy)
             {
@@ -3269,8 +3265,8 @@ namespace netxs::gui
             auto set_solo()
             {
                 auto lock = std::lock_guard{ mutex };
-                auto copy = std::vector<ui32>(group.size());
-                std::copy_if(group.begin(), group.end(), copy.begin(), [&](auto t){ return t != owner; });
+                auto copy = std::vector<ui32>{};
+                _copy_peers(copy);
                 group = { owner };
                 return copy;
             }
@@ -3815,7 +3811,6 @@ namespace netxs::gui
                     {
                         auto new_focus_owner = focus_group.back();
                         if constexpr (debug_foci) log("  Handoff OS focus to the new focus owner ", utf::to_hex_0x(new_focus_owner));
-                        //todo window_pass_focus(new_focus_owner); for x11
                         window_make_foreground(new_focus_owner);
                     }
                 });
@@ -4642,7 +4637,7 @@ namespace netxs::gui
             {
                 moving = faux;
             }
-            window_check_focus_on_hover(); // Seize OS focus if group focus is active but window is idle.
+            window_check_focus_on_hover(); // win32 only: Seize OS focus if group focus is active but window is idle.
             if ((!seized && ingrip) || szgrip.seized)
             {
                 if (mbttns == bttn::right && fsmode == winstate::normal) // Move window.
@@ -4994,9 +4989,12 @@ namespace netxs::gui
             auto group_view = view{ (char*)target_list.data(), target_list.size() * sizeof(target_list[0]) };
             for (auto target : target_list)
             {
-                if (target == local_target && inform_owner)
+                if (target == local_target)
                 {
-                    do_main_focus(target_list);
+                    if (inform_owner)
+                    {
+                        do_main_focus(target_list);
+                    }
                 }
                 else
                 {
@@ -6570,7 +6568,7 @@ namespace netxs::gui
                     {
                         ok = true;
                         if constexpr (debug_foci) log(ansi::clr(greenlt, "The group focus command is accepted by hwnd=", utf::to_hex(target_window)));
-                        auto [group_view, contains] = mfocus.copy_group(target_window, focus_group_copy, true);
+                        auto [group_view, group_copy, contains] = mfocus.copy_group(target_window, true);
                         window_send_message(target_window, ipc::main_focus, group_view); // The target window will itself notify the group when the os forcibly shifts focus to it following the mouse click.
                     }
                     else if constexpr (debug_foci)
@@ -8386,7 +8384,8 @@ namespace netxs::gui
         }
         void window_make_foreground(ui32 target_id)
         {
-            //_set_focus(target_id);
+            _set_focus(target_id);
+            window_post_command(target_id, ipc::expose_win);
         }
         void window_make_focused_impl()
         {
@@ -9223,15 +9222,17 @@ namespace netxs::gui
                     {
                         ok = true;
                         if constexpr (debug_foci) log(ansi::clr(greenlt, "The group focus command is accepted by hwnd=", utf::to_hex(target_window)));
-                        auto [group_view, contains] = mfocus.copy_group(target_window, focus_group_copy, faux);
+                        auto [group_view, group_copy, contains] = mfocus.copy_group(target_window, faux);
                         if (!contains) // Toggle focus.
                         {
                             if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::main_focus to hwnd=", utf::to_hex(target_window)));
-                            //todo send_main_focus(focus_group_copy, faux); // Update neighbors.
                             if (ipc::main_focus == window_send_message(target_window, ipc::main_focus, group_view))
                             {
                                 mfocus.insert(target_window);
-                                //todo ?inform neighbors
+                                base::enqueue<faux>([&, group_copy](auto& /*boss*/)
+                                {
+                                    send_main_focus(group_copy, faux); // Update neighbors.
+                                });
                             }
                         }
                         else
@@ -9239,8 +9240,12 @@ namespace netxs::gui
                             if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::drop_focus to hwnd=", utf::to_hex(target_window)));
                             if (ipc::drop_focus == window_send_command(target_window, ipc::drop_focus))
                             {
-                                mfocus.erase_and_copy(target_window, focus_group_copy);
-                                //todo send_main_focus(focus_group_copy, faux); // Update neighbors.
+                                if constexpr (debug_foci) log(ansi::clr(greenlt, "  ipc::drop_focus sent to hwnd=", utf::to_hex(target_window)));
+                                //mfocus.erase_and_copy(target_window, group_copy);
+                                //base::enqueue<faux>([&, group_copy](auto& /*boss*/)
+                                //{
+                                //    send_main_focus(group_copy, faux); // Update neighbors.
+                                //});
                             }
                         }
                     }
