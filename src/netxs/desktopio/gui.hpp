@@ -3196,13 +3196,14 @@ namespace netxs::gui
                 group.erase(target);
                 _copy_peers(group_copy);
             }
-            bool full_erase_and_copy(ui32 target, std::vector<ui32>& group_copy)
+            auto full_erase_and_copy(ui32 target)
             {
                 auto lock = std::lock_guard{ mutex };
                 group.erase(target);
-                _copy_peers(group_copy);
+                auto local_group_copy = std::vector<ui32>{};
+                _copy_peers(local_group_copy);
                 group.clear();
-                return std::exchange(wheel, faux);
+                return std::pair{ std::exchange(wheel, faux), local_group_copy };
             }
             bool clear()
             {
@@ -3273,7 +3274,7 @@ namespace netxs::gui
                 group = { owner };
                 return copy;
             }
-            auto update_group(std::span<ui32> target_list)
+            auto update_group(std::span<ui32 const> target_list)
             {
                 auto lock = std::lock_guard{ mutex };
                 auto changed = group.empty();
@@ -3530,6 +3531,7 @@ namespace netxs::gui
                 }
                 else
                 {
+                    owner.window_drop_focus(); // Notify neighbors.
                     owner.base::signal(tier::request, input::events::focus::rem, { .gear_id = f.gear_id });
                 }
                 owner.mfocus.set_gear_focus(f.state);
@@ -3799,21 +3801,24 @@ namespace netxs::gui
             restore_if_minimized();
             window_make_focused_impl();
         }
-        void window_on_close()
+        void window_drop_focus()
         {
-            if constexpr (debug_foci) log("window_on_close()");
-            auto is_wheel = mfocus.full_erase_and_copy((ui32)master.hWnd, focus_group_copy);
-            if (focus_group_copy.size())
+            if constexpr (debug_foci) log("window_drop_focus()");
+            auto [is_wheel, focus_group] = mfocus.full_erase_and_copy((ui32)master.hWnd);
+            if (focus_group.size())
             {
-                if constexpr (debug_foci) log("  focus_group_copy.size()=", focus_group_copy.size());
-                send_main_focus(focus_group_copy, faux); // Update neighbors.
-                if (is_wheel) // Handoff OS focus to the new focus owner.
+                base::enqueue<faux>([&, is_wheel, focus_group](auto& /*boss*/) // send_main_focus leads to a deadlock when two processes are closed simultaneously.
                 {
-                    auto new_focus_owner = focus_group_copy.back();
-                    if constexpr (debug_foci) log("  Handoff OS focus to the new focus owner ", utf::to_hex_0x(new_focus_owner));
-                    //todo window_pass_focus(new_focus_owner); for x11
-                    window_make_foreground(new_focus_owner);
-                }
+                    if constexpr (debug_foci) log("  focus_group.size()=", focus_group.size());
+                    send_main_focus(focus_group, faux); // Update neighbors.
+                    if (is_wheel) // Handoff OS focus to the new focus owner.
+                    {
+                        auto new_focus_owner = focus_group.back();
+                        if constexpr (debug_foci) log("  Handoff OS focus to the new focus owner ", utf::to_hex_0x(new_focus_owner));
+                        //todo window_pass_focus(new_focus_owner); for x11
+                        window_make_foreground(new_focus_owner);
+                    }
+                });
             }
         }
         bool mouse_captured()
@@ -4006,6 +4011,7 @@ namespace netxs::gui
             }
             else if (fsmode == winstate::minimized)
             {
+                window_drop_focus();
                 for (auto& l : layers)
                 {
                     auto& s = l.get();
@@ -4945,7 +4951,7 @@ namespace netxs::gui
             run_command(state ? ipc::make_ontop : ipc::set_normal);
         }
 
-        void do_main_focus(std::span<ui32> target_list)
+        void do_main_focus(std::span<ui32 const> target_list)
         {
             if (target_list.empty()) return;
             auto changed = mfocus.update_group(target_list);
@@ -4982,7 +4988,7 @@ namespace netxs::gui
                 window_focus_updated();
             }
         }
-        void send_main_focus(std::span<ui32> target_list, bool inform_owner = true)
+        void send_main_focus(std::span<ui32 const> target_list, bool inform_owner = true)
         {
             auto local_target = (ui32)master.hWnd;
             auto group_view = view{ (char*)target_list.data(), target_list.size() * sizeof(target_list[0]) };
@@ -5817,7 +5823,7 @@ namespace netxs::gui
             s.presented_area.size = s.allocated_area.size;
             auto blend_props = BLENDFUNCTION{ .BlendOp = AC_SRC_OVER, .SourceConstantAlpha = 255, .AlphaFormat = AC_SRC_ALPHA };
             auto bitmap_coor = POINT{};
-            auto bitmap_size =  SIZE{ s.presented_area.size.x, s.presented_area.size.y };
+            auto bitmap_size = SIZE{ s.presented_area.size.x, s.presented_area.size.y };
             auto update_area = RECT{};
             auto update_info = UPDATELAYEREDWINDOWINFO{ .cbSize   = sizeof(UPDATELAYEREDWINDOWINFO),
                                                         .pptDst   = windowmoved ? &window_coor : nullptr,
@@ -6536,7 +6542,7 @@ namespace netxs::gui
         {
             if (!shutdown_called.exchange(true))
             {
-                window_on_close();
+                window_drop_focus();
                 ::PostMessageW((HWND)master.hWnd, WM_CLOSE, NULL, NULL);
             }
         }
@@ -9156,7 +9162,7 @@ namespace netxs::gui
         }
         void window_shutdown()
         {
-            window_on_close();
+            window_drop_focus();
             _close_command((ui32)master.hWnd);
         }
         void window_cleanup() { /*do nothing on X11*/ }
