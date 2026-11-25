@@ -3203,7 +3203,7 @@ namespace netxs::gui
                 auto local_group_copy = std::vector<ui32>{};
                 _copy_peers(local_group_copy);
                 group.clear();
-                return std::pair{ std::exchange(wheel, faux), local_group_copy };
+                return std::pair{ std::exchange(wheel, faux), std::move(local_group_copy) };
             }
             bool clear()
             {
@@ -3230,13 +3230,12 @@ namespace netxs::gui
                     group_copy.push_back(joining_target);
                 }
                 group_copy.push_back(owner); // Keep our window the focus owner.
-                auto copy_view = view{ (char*)group_copy.data(), group_copy.size() * sizeof(group_copy[0]) };
                 if (reset_wheel)
                 {
                     //assert(wheel == true);
                     wheel = faux; // Reset the wheel to prevent the focus loss when refocusing by os (win32).
                 }
-                return std::tuple{ copy_view, group_copy, contains };
+                return std::pair{ std::move(group_copy), contains };
             }
             auto is_multifocused(std::vector<ui32>& group_copy)
             {
@@ -3780,7 +3779,7 @@ namespace netxs::gui
         virtual void window_make_exposed() = 0;
         virtual void window_make_topmost(bool) = 0;
         virtual void window_focus_updated() {}
-        virtual void window_check_focus_on_hover() {}
+        virtual void window_check_focus_on_hover() = 0;
 
         virtual void clipboard_set(input::clipdata& clipdata) = 0;
         virtual void clipboard_get(input::clipdata& /*clipdata*/) {}
@@ -6568,7 +6567,8 @@ namespace netxs::gui
                     {
                         ok = true;
                         if constexpr (debug_foci) log(ansi::clr(greenlt, "The group focus command is accepted by hwnd=", utf::to_hex(target_window)));
-                        auto [group_view, group_copy, contains] = mfocus.copy_group(target_window, true);
+                        auto [group_copy, contains] = mfocus.copy_group(target_window, true);
+                        auto group_view = view{ (char*)group_copy.data(), group_copy.size() * sizeof(group_copy[0]) };
                         window_send_message(target_window, ipc::main_focus, group_view); // The target window will itself notify the group when the os forcibly shifts focus to it following the mouse click.
                     }
                     else if constexpr (debug_foci)
@@ -8387,6 +8387,19 @@ namespace netxs::gui
             _set_focus(target_id);
             window_post_command(target_id, ipc::expose_win);
         }
+        void window_check_focus_on_hover()
+        {
+            //if (mfocus.if_focus_on_hover(focus_group_copy))
+            //{
+            //    window_post_command((ui32)master.hWnd, ipc::expose_win);
+            //    //base::enqueue<faux>([&, focus_group = focus_group_copy](auto& /*boss*/)
+            //    //{
+            //        //send_main_focus(focus_group);
+            //        //send_main_focus(focus_group, faux);
+            //        //window_make_foreground((ui32)master.hWnd);
+            //    //});
+            //}
+        }
         void window_make_focused_impl()
         {
             //window_make_foreground((ui32)master.hWnd);
@@ -9222,7 +9235,8 @@ namespace netxs::gui
                     {
                         ok = true;
                         if constexpr (debug_foci) log(ansi::clr(greenlt, "The group focus command is accepted by hwnd=", utf::to_hex(target_window)));
-                        auto [group_view, group_copy, contains] = mfocus.copy_group(target_window, faux);
+                        auto [group_copy, contains] = mfocus.copy_group(target_window, faux);
+                        auto group_view = view{ (char*)group_copy.data(), group_copy.size() * sizeof(group_copy[0]) };
                         if (!contains) // Toggle focus.
                         {
                             if constexpr (debug_foci) log(ansi::clr(greenlt, " sending ipc::main_focus to hwnd=", utf::to_hex(target_window)));
